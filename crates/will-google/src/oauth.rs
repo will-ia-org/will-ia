@@ -73,9 +73,9 @@ pub struct CallbackResult {
     pub code: String,
 }
 
-/// Abre um listener em 127.0.0.1 com porta aleatória.
-pub async fn bind_loopback() -> Result<(TcpListener, u16), GoogleError> {
-    let listener = TcpListener::bind(("127.0.0.1", 0)).await?;
+/// Abre um listener em 127.0.0.1 na porta pedida (ou aleatória com `None`).
+pub async fn bind_loopback(port: Option<u16>) -> Result<(TcpListener, u16), GoogleError> {
+    let listener = TcpListener::bind(("127.0.0.1", port.unwrap_or(0))).await?;
     let port = listener.local_addr()?.port();
     Ok((listener, port))
 }
@@ -284,7 +284,7 @@ mod tests {
 
     #[tokio::test]
     async fn loopback_rejects_bad_state_and_accepts_good_code() {
-        let (listener, port) = bind_loopback().await.unwrap();
+        let (listener, port) = bind_loopback(None).await.unwrap();
         let cancel = CancellationToken::new();
         let task = tokio::spawn(wait_callback(
             listener,

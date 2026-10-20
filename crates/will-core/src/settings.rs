@@ -405,6 +405,10 @@ impl Default for WhatsAppSettings {
 pub struct GoogleSettings {
     pub client_id: Option<String>,
     pub client_secret_ref: Option<String>,
+    /// Porta fixa do callback de loopback. `None` = aleatória (cliente "App para
+    /// computador" aceita qualquer porta). Com cliente "Aplicativo da Web" é preciso
+    /// fixar e cadastrar `http://127.0.0.1:<porta>/oauth/google/callback` no Google.
+    pub redirect_port: Option<u16>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

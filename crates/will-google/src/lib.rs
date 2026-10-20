@@ -238,7 +238,11 @@ impl GoogleModule {
             .oauth_client()
             .await
             .map_err(|e| e.to_string())?;
-        let (listener, port) = oauth::bind_loopback().await.map_err(|e| e.to_string())?;
+        let fixed_port = self.config().google.redirect_port;
+        let (listener, port) = oauth::bind_loopback(fixed_port).await.map_err(|e| match fixed_port {
+            Some(p) => format!("não consegui abrir a porta fixa {p} do callback ({e}); feche o que a ocupa ou troque a porta em Configurações › Google"),
+            None => e.to_string(),
+        })?;
         let redirect = RedirectUrl::new(format!("http://127.0.0.1:{port}{}", oauth::CALLBACK_PATH))
             .map_err(|e| e.to_string())?;
         let client = client.set_redirect_uri(redirect);

@@ -25,7 +25,7 @@ ui-session.token
 api-port
 screenshot.png
 data/
-portable
+/portable
 will-ia.db*
 whatsapp/
 

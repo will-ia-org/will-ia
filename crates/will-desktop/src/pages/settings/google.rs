@@ -227,16 +227,30 @@ impl GooglePage {
             .is_some_and(|c| !c.trim().is_empty());
 
         ui::section(ui, "Conta Google (OAuth do próprio usuário)", |ui| {
-            ui.label(
-                egui::RichText::new(
-                    "O will-ia não embute credenciais do Google. Em console.cloud.google.com:",
-                )
-                .weak()
-                .small(),
-            );
-            ui.label(egui::RichText::new("1. Crie um projeto e, em APIs e serviços › Biblioteca, ative Google Calendar API e Gmail API.").weak().small());
-            ui.label(egui::RichText::new("2. Em Credenciais, crie um ID do cliente OAuth do tipo \"App para computador\" e cole o client_id e o client_secret abaixo.").weak().small());
-            ui.label(egui::RichText::new("3. Em Tela de consentimento, clique em Publicar app: em modo Teste o refresh token expira em 7 dias e você teria de reautorizar toda semana.").weak().small());
+            ui.label(egui::RichText::new("O will-ia não embute credenciais do Google: você cria um cliente OAuth no seu próprio projeto. Passo a passo (console.cloud.google.com):").weak());
+            ui.add_space(4.0);
+            egui::CollapsingHeader::new("Passo a passo para criar o cliente OAuth").default_open(!client_id_saved).show(ui, |ui| {
+                let step = |ui: &mut egui::Ui, n: &str, title: &str, body: &str| {
+                    ui.horizontal_top(|ui| {
+                        ui.label(egui::RichText::new(n).strong().color(Tone::Info.color(true)));
+                        ui.vertical(|ui| {
+                            ui.label(egui::RichText::new(title).strong());
+                            ui.add(egui::Label::new(egui::RichText::new(body).weak().small()).wrap());
+                        });
+                    });
+                    ui.add_space(4.0);
+                };
+                step(ui, "1", "Projeto", "No topo do console, selecione ou crie um projeto (ex.: \"will-ia\").");
+                step(ui, "2", "Ativar as APIs", "Menu › APIs e serviços › Biblioteca. Procure e ative \"Google Calendar API\" e \"Gmail API\".");
+                step(ui, "3", "Tela de consentimento OAuth", "APIs e serviços › Tela de permissão OAuth (ou \"Google Auth Platform › Branding\"). Tipo de usuário: Externo. Preencha nome do app e e-mails de suporte. Em \"Público-alvo\" (Test users) adicione o seu próprio e-mail do Google.");
+                step(ui, "4", "Publicar o app", "Ainda na tela de consentimento, clique em \"Publicar aplicativo\". Em modo Teste o Google expira o refresh token em 7 dias e você teria de reautorizar toda semana. Não é preciso enviar para verificação: use normalmente com o aviso de \"app não verificado\" (clique em Avançado › Acessar).");
+                step(ui, "5", "Criar o cliente", "APIs e serviços › Credenciais › Criar credenciais › ID do cliente OAuth. Tipo de aplicativo: **App para computador** (Desktop app). Dê um nome e clique em Criar.");
+                step(ui, "6", "Copiar e colar aqui", "Na janela que abre, copie o \"ID do cliente\" (termina em .apps.googleusercontent.com) e a \"Chave secreta do cliente\" (começa com GOCSPX-). Cole nos campos abaixo e salve.");
+                step(ui, "7", "Conectar", "Clique em \"Conectar conta\" mais abaixo, escolha os escopos e autorize no navegador. A conta aparece na lista ao concluir.");
+                ui.add_space(4.0);
+                ui.label(egui::RichText::new("Erro \"redirect_uri_mismatch\" ao autorizar?").strong());
+                ui.add(egui::Label::new(egui::RichText::new("Significa que o cliente foi criado como \"Aplicativo da Web\" em vez de \"App para computador\". Só o tipo computador aceita o redirecionamento http://127.0.0.1 com porta aleatória sem cadastro. Resolva de um dos dois jeitos: crie um cliente novo do tipo App para computador (recomendado), ou fixe uma porta abaixo e cadastre exatamente a URI mostrada em \"URIs de redirecionamento autorizados\" do cliente Web.").weak().small()).wrap());
+            });
             ui.add_space(6.0);
 
             ui::field(
@@ -265,6 +279,28 @@ impl GooglePage {
                 SecretAction::Delete => st.delete_secret(cx.svc, &secret_key),
                 SecretAction::None => {}
             }
+            ui::field(
+                ui,
+                "Porta do callback",
+                Some("Vazio = aleatória (cliente App para computador). Fixe só se usar um cliente Web e cadastre a URI ao lado no Google."),
+                |ui| {
+                    ui.horizontal(|ui| {
+                        let g = &mut st.draft.google;
+                        let mut text = g.redirect_port.map(|p| p.to_string()).unwrap_or_default();
+                        if ui.add(egui::TextEdit::singleline(&mut text).hint_text("aleatória").desired_width(100.0)).changed() {
+                            g.redirect_port = text.trim().parse().ok();
+                        }
+                        if let Some(p) = g.redirect_port {
+                            let uri = format!("http://127.0.0.1:{p}/oauth/google/callback");
+                            ui::mono(ui, &uri);
+                            if ui.button("Copiar URI").clicked() {
+                                ui.ctx().copy_text(uri);
+                                cx.toasts.success("URI de redirecionamento copiada.");
+                            }
+                        }
+                    });
+                },
+            );
             st.save_bar(ui, cx.svc, "google");
 
             ui.add_space(10.0);

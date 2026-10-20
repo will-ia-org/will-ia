@@ -56,3 +56,18 @@ REST direto com `reqwest` + `serde` (Calendar v3 e Gmail v1 são APIs JSON simpl
 
 - Fluxo OAuth contra servidor mock (`wiremock`): troca de código, refresh, `invalid_grant`, revogação.
 - Listener de loopback: porta aleatória, timeout de 5 min, estado anti-CSRF (`state`).
+
+
+## Passo a passo no Google Cloud (como aparece na UI)
+
+1. **Projeto**: selecione ou crie um projeto.
+2. **APIs**: APIs e serviços › Biblioteca › ativar *Google Calendar API* e *Gmail API*.
+3. **Tela de consentimento**: tipo Externo; adicione o próprio e-mail em usuários de teste.
+4. **Publicar o app**: evita a expiração do refresh token em 7 dias do modo Teste. Não exige verificação para uso pessoal (aviso "app não verificado" → Avançado › Acessar).
+5. **Credenciais › Criar credenciais › ID do cliente OAuth**, tipo **App para computador**.
+6. Copiar `client_id` e `client_secret` para Configurações › Google e salvar.
+7. **Conectar conta**, escolher escopos, autorizar no navegador.
+
+### `redirect_uri_mismatch`
+
+O will-ia usa loopback `http://127.0.0.1:<porta aleatória>/oauth/google/callback`. O Google só aceita porta aleatória sem cadastro para clientes **App para computador**. Com um cliente **Aplicativo da Web** o erro é garantido. Saídas: criar um cliente do tipo computador (recomendado) ou fixar a porta em Configurações › Google › "Porta do callback" (`google.redirect_port`) e cadastrar exatamente `http://127.0.0.1:<porta>/oauth/google/callback` em "URIs de redirecionamento autorizados".

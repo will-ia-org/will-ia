@@ -77,6 +77,7 @@ async fn setup(
     let settings = GoogleSettings {
         client_id: Some("abc.apps.googleusercontent.com".into()),
         client_secret_ref: None,
+        redirect_port: None,
     };
     let client = GoogleClient::new(storage, secrets, EventBus::default(), settings).with_endpoints(
         Endpoints {
