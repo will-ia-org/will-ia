@@ -1,0 +1,9 @@
+[Desktop Entry]
+Type=Application
+Name=will-ia
+Comment=Assistente pessoal: Claude Code + voz + Telegram + MCP
+Exec=will-ia --show
+Icon=will-ia
+Terminal=false
+Categories=Utility;Office;
+StartupWMClass=will-ia

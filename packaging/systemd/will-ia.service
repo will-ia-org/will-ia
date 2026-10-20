@@ -1,0 +1,20 @@
+# Unidade de usuário do systemd para o will-ia (Linux).
+# Instalar:  mkdir -p ~/.config/systemd/user && cp will-ia.service ~/.config/systemd/user/
+#            systemctl --user daemon-reload && systemctl --user enable --now will-ia
+# Roda dentro da sessão gráfica do usuário (bandeja, áudio e keyring disponíveis).
+# Ajuste ExecStart para o caminho do binário.
+
+[Unit]
+Description=will-ia — assistente pessoal (Claude Code + voz + Telegram + MCP)
+After=graphical-session.target
+PartOf=graphical-session.target
+
+[Service]
+Type=simple
+ExecStart=%h/.local/bin/will-ia --hidden
+Restart=on-failure
+RestartSec=3
+Environment=RUST_LOG=info
+
+[Install]
+WantedBy=graphical-session.target

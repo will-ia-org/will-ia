@@ -1,0 +1,53 @@
+[package]
+name = "will-server"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[features]
+default = ["telegram", "google", "whatsapp", "whatsapp-real"]
+telegram = ["dep:will-telegram"]
+google = ["dep:will-google"]
+whatsapp = ["dep:will-whatsapp"]
+# backend real do WhatsApp (whatsapp-rust); ver crates/will-whatsapp/README.md
+whatsapp-real = ["whatsapp", "will-whatsapp/real"]
+
+[dependencies]
+will-core.workspace = true
+will-storage.workspace = true
+will-engine.workspace = true
+will-mcp.workspace = true
+will-realtime.workspace = true
+will-platform.workspace = true
+will-telegram = { workspace = true, optional = true }
+will-google = { workspace = true, optional = true }
+will-whatsapp = { workspace = true, optional = true }
+tokio.workspace = true
+tokio-util.workspace = true
+tokio-stream.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+anyhow.workspace = true
+tracing.workspace = true
+tracing-subscriber.workspace = true
+tracing-appender.workspace = true
+uuid.workspace = true
+chrono.workspace = true
+secrecy.workspace = true
+async-trait.workspace = true
+axum.workspace = true
+tower.workspace = true
+tower-http.workspace = true
+futures.workspace = true
+rand.workspace = true
+base64.workspace = true
+parking_lot.workspace = true
+directories.workspace = true
+regex.workspace = true
+sha2.workspace = true
+bytes.workspace = true
+rustls.workspace = true
+
+[lints]
+workspace = true

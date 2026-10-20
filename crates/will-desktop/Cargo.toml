@@ -1,0 +1,51 @@
+[package]
+name = "will-desktop"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "will-ia — app desktop (egui): serviço em processo, bandeja, voz e configurações"
+
+[[bin]]
+name = "will-ia"
+path = "src/main.rs"
+
+[features]
+default = ["telegram", "google", "whatsapp", "whatsapp-real"]
+telegram = ["will-server/telegram"]
+google = ["will-server/google"]
+whatsapp = ["will-server/whatsapp"]
+whatsapp-real = ["will-server/whatsapp-real"]
+
+[dependencies]
+will-core.workspace = true
+will-server.workspace = true
+will-platform.workspace = true
+will-realtime.workspace = true
+tokio.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+anyhow.workspace = true
+tracing.workspace = true
+chrono.workspace = true
+bytes.workspace = true
+parking_lot.workspace = true
+axum.workspace = true
+clap.workspace = true
+eframe.workspace = true
+egui.workspace = true
+egui_extras.workspace = true
+cpal.workspace = true
+rfd.workspace = true
+global-hotkey.workspace = true
+auto-launch = "0.5"
+qrcode.workspace = true
+image = { version = "0.25", default-features = false, features = ["png"] }
+
+[target.'cfg(target_os = "linux")'.dependencies]
+ksni.workspace = true
+
+[target.'cfg(not(target_os = "linux"))'.dependencies]
+tray-icon.workspace = true
+
+[lints]
+workspace = true

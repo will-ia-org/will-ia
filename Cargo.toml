@@ -1,0 +1,118 @@
+[workspace]
+resolver = "2"
+members = [
+  "crates/will-core",
+  "crates/will-storage",
+  "crates/will-engine",
+  "crates/will-mcp",
+  "crates/will-telegram",
+  "crates/will-google",
+  "crates/will-whatsapp",
+  "crates/will-realtime",
+  "crates/will-platform",
+  "crates/will-server",
+  "tools/fake-claude",
+  "crates/will-desktop",
+]
+default-members = [
+  "crates/will-core",
+  "crates/will-storage",
+  "crates/will-engine",
+  "crates/will-mcp",
+  "crates/will-telegram",
+  "crates/will-google",
+  "crates/will-whatsapp",
+  "crates/will-realtime",
+  "crates/will-platform",
+  "crates/will-server",
+  "tools/fake-claude",
+  "crates/will-desktop",
+]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+repository = "https://github.com/will-ia-org/will-ia"
+rust-version = "1.85"
+
+[workspace.dependencies]
+will-core = { path = "crates/will-core" }
+will-storage = { path = "crates/will-storage" }
+will-engine = { path = "crates/will-engine" }
+will-mcp = { path = "crates/will-mcp" }
+will-telegram = { path = "crates/will-telegram" }
+will-google = { path = "crates/will-google" }
+will-whatsapp = { path = "crates/will-whatsapp" }
+will-realtime = { path = "crates/will-realtime" }
+will-platform = { path = "crates/will-platform" }
+will-server = { path = "crates/will-server", default-features = false }
+will-desktop = { path = "crates/will-desktop" }
+
+tokio = { version = "1.54", features = ["full"] }
+tokio-util = { version = "0.7", features = ["rt"] }
+tokio-stream = "0.1"
+futures = "0.3"
+async-trait = "0.1"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+thiserror = "2"
+anyhow = "1"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter", "json", "fmt"] }
+tracing-appender = "0.2"
+uuid = { version = "1", features = ["v4", "v7", "serde"] }
+chrono = { version = "0.4", features = ["serde"] }
+secrecy = { version = "0.10", features = ["serde"] }
+directories = "6"
+keyring = "4"
+sqlx = { version = "0.9", default-features = false, features = ["runtime-tokio", "sqlite", "macros", "migrate", "chrono", "uuid", "json"] }
+axum = { version = "0.8", features = ["ws", "macros"] }
+tower-http = { version = "0.7", features = ["cors", "trace"] }
+tower = "0.5"
+reqwest = { version = "0.13", default-features = false, features = ["json", "rustls", "stream", "multipart"] }
+tokio-tungstenite = { version = "0.30", features = ["rustls-tls-webpki-roots"] }
+rmcp = { version = "3", default-features = false, features = ["server", "client", "transport-streamable-http-server", "transport-streamable-http-client-reqwest", "transport-child-process", "reqwest", "schemars", "base64"] }
+http = "1"
+rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12"] }
+schemars = "1"
+teloxide = { version = "0.17", default-features = false, features = ["rustls", "macros"] }
+oauth2 = { version = "5", default-features = false, features = ["reqwest", "rustls-tls"] }
+rand = "0.10"
+base64 = "0.23"
+sha2 = "0.11"
+subtle = "2"
+url = "2"
+bytes = "1"
+regex = "1"
+html2text = "0.17"
+mail-builder = "1"
+qrcode = "0.14"
+open = "5"
+notify-rust = "4"
+humantime = "2"
+parking_lot = "0.12"
+dashmap = "6"
+wiremock = "0.6"
+tempfile = "3"
+# GUI nativa (ADR-0016)
+mime_guess = "2"
+eframe = { version = "0.37", default-features = false, features = ["glow", "x11", "wayland", "default_fonts", "persistence", "clipboard", "links", "accesskit"] }
+egui = "0.37"
+egui_extras = { version = "0.37", features = ["image", "svg"] }
+cpal = { version = "0.18", features = ["pulseaudio"] }
+rfd = { version = "0.17", default-features = false, features = ["xdg-portal"] }
+global-hotkey = "0.9"
+tray-icon = "0.26"
+ksni = { version = "0.3", default-features = false, features = ["tokio"] }
+clap = { version = "4", features = ["derive"] }
+
+[workspace.lints.rust]
+unsafe_code = "forbid"
+[workspace.lints.clippy]
+all = "warn"
+
+[profile.release]
+lto = "thin"
+codegen-units = 1
+strip = true

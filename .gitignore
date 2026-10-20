@@ -1,0 +1,41 @@
+# Projeto de referência (contém segredos) e quaisquer dumps
+telegram-bot.zip
+*.zip
+tokens*.json
+allowlist.txt
+.env
+.env.*
+
+# Rust
+/target
+/target-*
+**/target
+Cargo.lock.bak
+*.bak
+*.bak-*
+
+# Dados e logs locais (nunca versionar: segredos, banco, sessões)
+*.db
+*.db-wal
+*.db-shm
+logs/
+*.log
+secrets.json
+ui-session.token
+api-port
+screenshot.png
+data/
+portable
+will-ia.db*
+whatsapp/
+
+# Pacotes gerados
+/dist
+/packaging/**/bin/
+
+# SO / editores
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/*
+!.vscode/extensions.json
