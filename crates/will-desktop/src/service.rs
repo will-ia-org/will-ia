@@ -137,6 +137,8 @@ impl Service {
         self.repaint();
     }
 
+    /// Usado pela bandeja `ksni` (Linux); nos outros SOs a bandeja chama `send_cmd`.
+    #[cfg_attr(not(target_os = "linux"), allow(dead_code))]
     pub fn cmd_sender(&self) -> Sender<UiCommand> {
         self.cmd_tx.clone()
     }
@@ -145,6 +147,7 @@ impl Service {
         self.rt.handle()
     }
 
+    #[cfg_attr(not(target_os = "linux"), allow(dead_code))]
     pub fn spawn<F>(&self, fut: F)
     where
         F: Future<Output = ()> + Send + 'static,

@@ -693,6 +693,8 @@ pub async fn kill_tree(child: &mut Child, pid: Option<u32>, grace: Duration) {
     }
     #[cfg(windows)]
     {
+        // No Windows o taskkill /T /F já é imediato; não há período de graça.
+        let _ = grace;
         if let Some(pid) = pid {
             let _ = Command::new("taskkill")
                 .args(["/PID", &pid.to_string(), "/T", "/F"])
