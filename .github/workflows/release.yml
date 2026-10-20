@@ -1,0 +1,178 @@
+name: Release
+
+# Dispara em tags `v*` (ex.: v0.1.0) ou manualmente. Gera, em paralelo, os binários
+# de Linux x86_64, Windows x86_64, macOS x86_64 e macOS aarch64, mais o pacote
+# portátil (pendrive) com todos eles, e publica tudo numa GitHub Release.
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Versão (ex.: 0.1.0). Vazio = usa a versão do Cargo.toml"
+        required: false
+        default: ""
+
+permissions:
+  contents: write
+
+env:
+  CARGO_TERM_COLOR: always
+  BIN: will-ia
+
+jobs:
+  version:
+    name: versão
+    runs-on: ubuntu-22.04
+    outputs:
+      version: ${{ steps.v.outputs.version }}
+    steps:
+      - uses: actions/checkout@v4
+      - id: v
+        shell: bash
+        run: |
+          if [[ "${GITHUB_REF_TYPE}" == "tag" ]]; then
+            v="${GITHUB_REF_NAME#v}"
+          elif [[ -n "${{ github.event.inputs.version }}" ]]; then
+            v="${{ github.event.inputs.version }}"
+          else
+            v=$(grep -m1 '^version' Cargo.toml | sed -E 's/.*"([^"]+)".*/\1/')
+          fi
+          echo "version=$v" >> "$GITHUB_OUTPUT"
+          echo "versão: $v"
+
+  build:
+    name: build (${{ matrix.name }})
+    needs: version
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: linux-x86_64
+            os: ubuntu-22.04          # glibc mais antiga = binário roda em mais distros
+            target: x86_64-unknown-linux-gnu
+            ext: ""
+          - name: windows-x86_64
+            os: windows-latest
+            target: x86_64-pc-windows-msvc
+            ext: ".exe"
+          - name: macos-x86_64
+            os: macos-13               # runner Intel
+            target: x86_64-apple-darwin
+            ext: ""
+          - name: macos-aarch64
+            os: macos-latest           # runner Apple Silicon
+            target: aarch64-apple-darwin
+            ext: ""
+    runs-on: ${{ matrix.os }}
+    env:
+      VERSION: ${{ needs.version.outputs.version }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: ${{ matrix.target }}
+
+      - name: Dependências de sistema (Linux)
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends libasound2-dev pkg-config
+
+      - name: Compilar
+        run: cargo build --release -p will-desktop --target ${{ matrix.target }}
+
+      - name: Empacotar (tar.gz / zip)
+        shell: bash
+        run: |
+          set -euo pipefail
+          out=dist; mkdir -p "$out"
+          bin="target/${{ matrix.target }}/release/${BIN}${{ matrix.ext }}"
+          stage="$out/stage"; mkdir -p "$stage"
+          cp "$bin" "$stage/"
+          cp README.md LICENSE "$stage/"
+          cp -r docs "$stage/docs"
+          if [[ "${{ runner.os }}" == "Linux" ]]; then
+            mkdir -p "$stage/packaging"
+            cp -r packaging/linux packaging/systemd "$stage/packaging/"
+          fi
+          name="${BIN}-${VERSION}-${{ matrix.name }}"
+          if [[ "${{ runner.os }}" == "Windows" ]]; then
+            (cd "$stage" && 7z a -tzip "../${name}.zip" . >/dev/null)
+          else
+            tar -czf "$out/${name}.tar.gz" -C "$stage" .
+          fi
+          # binário solto com nome por plataforma, para o pacote portátil
+          cp "$bin" "$out/${BIN}-${{ matrix.name }}${{ matrix.ext }}"
+          rm -rf "$stage"
+          ls -la "$out"
+
+      - name: .deb (Linux)
+        if: runner.os == 'Linux'
+        run: |
+          cargo install cargo-deb --locked
+          cargo deb -p will-desktop --no-build --target ${{ matrix.target }} -o dist/
+          ls -la dist/*.deb
+
+      - name: .app (macOS)
+        if: runner.os == 'macOS'
+        shell: bash
+        run: |
+          set -euo pipefail
+          app="dist/${BIN}.app"; mkdir -p "$app/Contents/MacOS" "$app/Contents/Resources"
+          cp "target/${{ matrix.target }}/release/${BIN}" "$app/Contents/MacOS/${BIN}"
+          sed "s/__VERSION__/${VERSION}/g" packaging/macos/Info.plist > "$app/Contents/Info.plist"
+          # não assinado: o usuário abre com botão direito → Abrir na primeira vez
+          (cd dist && zip -qr "${BIN}-${VERSION}-${{ matrix.name }}.app.zip" "${BIN}.app" && rm -rf "${BIN}.app")
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.name }}
+          path: dist/*
+          if-no-files-found: error
+
+  portable:
+    name: pacote portátil + release
+    needs: [version, build]
+    runs-on: ubuntu-22.04
+    env:
+      VERSION: ${{ needs.version.outputs.version }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+      - name: Montar pacote portátil (pendrive)
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p release
+          # coleta todos os artefatos num diretório plano
+          find artifacts -type f -exec cp {} release/ \;
+          # pacote portátil: bin/ com um binário por SO + lançadores + marcador
+          p="portable/will-ia"; mkdir -p "$p/bin"
+          for f in release/${BIN}-linux-x86_64 release/${BIN}-macos-x86_64 release/${BIN}-macos-aarch64; do
+            [[ -f "$f" ]] && cp "$f" "$p/bin/" && chmod +x "$p/bin/$(basename "$f")"
+          done
+          [[ -f release/${BIN}-windows-x86_64.exe ]] && cp release/${BIN}-windows-x86_64.exe "$p/bin/"
+          cp packaging/portable/will-ia.sh packaging/portable/will-ia.cmd packaging/portable/README.md "$p/"
+          chmod +x "$p/will-ia.sh"
+          : > "$p/portable"
+          (cd portable && zip -qr "../release/${BIN}-${VERSION}-portable.zip" will-ia)
+          # os binários soltos ficam só dentro do portátil
+          rm -f release/${BIN}-linux-x86_64 release/${BIN}-macos-x86_64 release/${BIN}-macos-aarch64 release/${BIN}-windows-x86_64.exe
+          (cd release && sha256sum * > SHA256SUMS.txt)
+          ls -la release
+      - uses: actions/upload-artifact@v4
+        with:
+          name: release-files
+          path: release/*
+      - name: Publicar GitHub Release
+        if: github.ref_type == 'tag'
+        uses: softprops/action-gh-release@v2
+        with:
+          name: will-ia v${{ env.VERSION }}
+          generate_release_notes: true
+          files: release/*

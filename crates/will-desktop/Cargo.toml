@@ -47,5 +47,19 @@ ksni.workspace = true
 [target.'cfg(not(target_os = "linux"))'.dependencies]
 tray-icon.workspace = true
 
+[package.metadata.deb]
+name = "will-ia"
+maintainer = "will-ia-org <noreply@github.com>"
+extended-description = "Assistente pessoal: Claude Code (cérebro) + voz OpenAI Realtime + Telegram + servidor MCP, com UI desktop nativa."
+section = "utils"
+priority = "optional"
+depends = "$auto"
+assets = [
+  ["target/release/will-ia", "usr/bin/", "755"],
+  ["../../packaging/linux/will-ia.desktop", "usr/share/applications/", "644"],
+  ["../../packaging/systemd/will-ia.service", "usr/lib/systemd/user/", "644"],
+  ["../../README.md", "usr/share/doc/will-ia/", "644"],
+]
+
 [lints]
 workspace = true

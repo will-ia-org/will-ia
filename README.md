@@ -89,7 +89,9 @@ Executar `will-ia` com o serviço já no ar apenas mostra a janela da instância
 
 Coloque os binários em `bin/`, os lançadores `packaging/portable/will-ia.sh`/`.cmd` e um arquivo `portable` numa pasta do pendrive: o `will-ia.db` e a pasta `data/` (segredos em arquivo, sessões do WhatsApp, logs) ficam ao lado, e a base de conhecimento pode ser relativa (`workspace/`). Detalhes em [`docs/13`](docs/13-plataformas-e-distribuicao.md) e [`packaging/portable/README.md`](packaging/portable/README.md).
 
-## Distribuição (planejada)
+## Distribuição
+
+Binários prontos em [Releases](https://github.com/will-ia-org/will-ia/releases): Linux x86_64 (`.tar.gz` e `.deb`), Windows x86_64 (`.zip`), macOS Intel e Apple Silicon (`.tar.gz` e `.app`), e o pacote portátil `will-ia-<versão>-portable.zip` para pendrive. Gerados pelo workflow `release.yml` a cada tag `v*`.
 
 Binários por SO gerados no GitHub Actions em matriz paralela: Linux x86_64 (`.tar.gz`, `.deb`, AppImage opcional, com `.desktop` e *user unit* do systemd: `systemctl --user enable --now will-ia`), Windows x86_64 (`.zip` + instalador, autostart via chave `Run`), macOS x86_64 e aarch64 (`.app` em `.dmg`, uma build por arquitetura, Login Item, notarização quando houver certificado). Os workflows e a pasta `packaging/` ainda não existem; detalhes em [`docs/13`](docs/13-plataformas-e-distribuicao.md).
 

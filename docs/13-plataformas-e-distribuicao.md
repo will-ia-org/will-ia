@@ -51,9 +51,9 @@ Sem `sudo` para instalar `libasound2-dev`, é possível apontar `PKG_CONFIG_PATH
 ## Estado da implementação (2026-10-20)
 
 - `crates/will-desktop` (egui/eframe) implementado conforme a ADR-0016 (validado só no Linux, sem teste interativo ainda); a UI React e a casca Tauri foram removidas. O núcleo (`will-server`) roda em qualquer SO sem libs de GUI.
-- `packaging/` já tem `linux/will-ia.desktop`, `systemd/will-ia.service` (user unit) e `portable/` (lançadores `will-ia.sh`/`will-ia.cmd` + README). Bundles por SO e os workflows do GitHub Actions **ainda não existem**: estão documentados como planejados e marcados **a fazer**.
+- `packaging/` tem `linux/will-ia.desktop`, `systemd/will-ia.service` (user unit), `macos/Info.plist` e `portable/` (lançadores + README). Os workflows `ci.yml` e `release.yml` geram os pacotes por SO e o portátil (seção CI/CD).
 
-## Empacotamento por SO (a fazer)
+## Empacotamento por SO
 
 | SO | Artefatos | Ferramenta |
 |---|---|---|
@@ -87,19 +87,21 @@ Arquivos planejados em `packaging/`:
 
 Ícones: `assets/icon.png` como fonte; `.ico`/`.icns` gerados por script. Versão única em `Cargo.toml` do workspace.
 
-## CI/CD (GitHub Actions, a fazer)
+## CI/CD (GitHub Actions)
 
-Opção A: `cargo-dist` (gera `release.yml`, archives e instaladores por target). Opção B: workflow manual. Em ambos os casos, matriz **em paralelo** com os quatro targets:
+- `.github/workflows/ci.yml`: a cada push/PR em `main`: `cargo fmt --check`, `clippy -D warnings`, `cargo test --workspace` e o smoke headless (`scripts/smoke.sh`) no Linux; build de release no Windows e no macOS (arm64).
+- `.github/workflows/release.yml`: em tag `v*` (ou manual), matriz em paralelo:
 
-| Job | Runner | Target |
-|---|---|---|
-| linux-x86_64 | `ubuntu-22.04` (glibc mais antiga = mais portátil) | `x86_64-unknown-linux-gnu` |
-| windows-x86_64 | `windows-latest` | `x86_64-pc-windows-msvc` |
-| macos-x86_64 | `macos-13` (Intel) ou `macos-latest` com `--target` | `x86_64-apple-darwin` |
-| macos-aarch64 | `macos-latest` (Apple Silicon) | `aarch64-apple-darwin` |
+| Job | Runner | Target | Artefatos |
+|---|---|---|---|
+| linux-x86_64 | `ubuntu-22.04` | `x86_64-unknown-linux-gnu` | `will-ia-<v>-linux-x86_64.tar.gz`, `.deb` (cargo-deb: binário, `.desktop`, user unit do systemd) |
+| windows-x86_64 | `windows-latest` | `x86_64-pc-windows-msvc` | `will-ia-<v>-windows-x86_64.zip` |
+| macos-x86_64 | `macos-13` (Intel) | `x86_64-apple-darwin` | `.tar.gz` e `will-ia.app` zipado (não assinado) |
+| macos-aarch64 | `macos-latest` (Apple Silicon) | `aarch64-apple-darwin` | idem |
 
-- `ci.yml` (push/PR): na matriz acima, `cargo fmt --check`, `cargo clippy --workspace --all-targets -- -D warnings`, `cargo test --workspace`, `cargo deny check`; no Linux, `sudo apt-get install -y libasound2-dev pkg-config` antes do build.
-- `release.yml` (tag `v*`): mesma matriz → `cargo build --release -p will-desktop` → empacota conforme a tabela acima → assina quando há segredos (certificado Authenticode; Apple ID + certificado Developer ID para notarização) → publica a Release com `SHA256SUMS`.
+  O job final monta `will-ia-<v>-portable.zip` (pasta `will-ia/` com `bin/` contendo os quatro binários, `will-ia.sh`, `will-ia.cmd`, `README.md` e o marcador `portable`), gera `SHA256SUMS.txt` e publica tudo numa GitHub Release com notas automáticas.
+- Publicar uma versão: `git tag v0.1.0 && git push origin v0.1.0`.
+- Assinatura/notarização (macOS) e instalador Windows ficam para depois; hoje o `.app` abre com botão direito → Abrir na primeira vez.
 
 ## Dependências em tempo de execução
 

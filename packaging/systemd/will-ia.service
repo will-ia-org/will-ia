@@ -2,7 +2,7 @@
 # Instalar:  mkdir -p ~/.config/systemd/user && cp will-ia.service ~/.config/systemd/user/
 #            systemctl --user daemon-reload && systemctl --user enable --now will-ia
 # Roda dentro da sessão gráfica do usuário (bandeja, áudio e keyring disponíveis).
-# Ajuste ExecStart para o caminho do binário.
+# Instalado pelo .deb o binário fica em /usr/bin; instalação manual: ajuste ExecStart.
 
 [Unit]
 Description=will-ia — assistente pessoal (Claude Code + voz + Telegram + MCP)
@@ -11,7 +11,7 @@ PartOf=graphical-session.target
 
 [Service]
 Type=simple
-ExecStart=%h/.local/bin/will-ia --hidden
+ExecStart=/usr/bin/will-ia --hidden
 Restart=on-failure
 RestartSec=3
 Environment=RUST_LOG=info
