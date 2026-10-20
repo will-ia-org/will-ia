@@ -58,7 +58,7 @@ jobs:
             target: x86_64-pc-windows-msvc
             ext: ".exe"
           - name: macos-x86_64
-            os: macos-13               # runner Intel
+            os: macos-latest           # compilação cruzada para Intel no runner Apple Silicon
             target: x86_64-apple-darwin
             ext: ""
           - name: macos-aarch64

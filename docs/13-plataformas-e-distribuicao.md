@@ -96,7 +96,7 @@ Arquivos planejados em `packaging/`:
 |---|---|---|---|
 | linux-x86_64 | `ubuntu-22.04` | `x86_64-unknown-linux-gnu` | `will-ia-<v>-linux-x86_64.tar.gz`, `.deb` (cargo-deb: binário, `.desktop`, user unit do systemd) |
 | windows-x86_64 | `windows-latest` | `x86_64-pc-windows-msvc` | `will-ia-<v>-windows-x86_64.zip` |
-| macos-x86_64 | `macos-13` (Intel) | `x86_64-apple-darwin` | `.tar.gz` e `will-ia.app` zipado (não assinado) |
+| macos-x86_64 | `macos-latest` (compilação cruzada para Intel) | `x86_64-apple-darwin` | `.tar.gz` e `will-ia.app` zipado (não assinado) |
 | macos-aarch64 | `macos-latest` (Apple Silicon) | `aarch64-apple-darwin` | idem |
 
   O job final monta `will-ia-<v>-portable.zip` (pasta `will-ia/` com `bin/` contendo os quatro binários, `will-ia.sh`, `will-ia.cmd`, `README.md` e o marcador `portable`), gera `SHA256SUMS.txt` e publica tudo numa GitHub Release com notas automáticas.
