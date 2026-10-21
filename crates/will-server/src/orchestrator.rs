@@ -520,8 +520,10 @@ async fn handle_engine_event(state: &Arc<AppState>, ev: EngineEvent) {
         } => {
             let _ = storage.finish_turn(turn_id, &result, None).await;
             for m in &merged {
+                // Turno mesclado: o texto guarda só o id do turno que o
+                // absorveu (a UI agrupa os balões; `error_kind = "merged"`).
                 let merged_res = TurnResult {
-                    text: format!("(incorporada ao turno {turn_id})"),
+                    text: turn_id.to_string(),
                     is_error: false,
                     cost_usd: None,
                     duration_ms: None,

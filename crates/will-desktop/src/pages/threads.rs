@@ -658,14 +658,36 @@ impl ThreadsPage {
                 if let Some(e) = &turns_err {
                     ui::error_text(ui, e);
                 }
-                for turn in &turns {
+                for g in group_turns(&turns) {
+                    let turn = g.main;
                     // Escopo de id por turno: respostas com o mesmo Markdown
                     // (tabelas, blocos de código) não colidem entre si.
                     ui.push_id(ui::s(turn, "id"), |ui| {
-                        let prompt = ui::s(turn, "prompt");
-                        let started = turn_dt(turn, "started_at");
-                        if !prompt.is_empty() {
-                            user_bubble(ui, pal, toasts, &prompt, started.as_ref());
+                        // Balões do usuário do mesmo turno (a mensagem inicial
+                        // e as enviadas no meio dele) ficam agrupados.
+                        let prompts: Vec<&Value> = std::iter::once(turn)
+                            .chain(g.extra.iter().copied())
+                            .filter(|t| !ui::s(t, "prompt").is_empty())
+                            .collect();
+                        let n = prompts.len();
+                        for (i, t) in prompts.iter().enumerate() {
+                            let pos = match (n, i) {
+                                (1, _) => GroupPos::Single,
+                                (_, 0) => GroupPos::First,
+                                (_, i) if i + 1 == n => GroupPos::Last,
+                                _ => GroupPos::Middle,
+                            };
+                            let started = turn_dt(t, "started_at");
+                            ui.push_id(ui::s(t, "id"), |ui| {
+                                user_bubble(
+                                    ui,
+                                    pal,
+                                    toasts,
+                                    &ui::s(t, "prompt"),
+                                    started.as_ref(),
+                                    pos,
+                                );
+                            });
                         }
                         let text = ui::s(turn, "text");
                         let is_err = ui::b(turn, "is_error");
@@ -775,17 +797,80 @@ fn md(ui: &mut egui::Ui, cache: &mut egui_commonmark::CommonMarkCache, text: &st
     egui_commonmark::CommonMarkViewer::new().show(ui, cache, &text);
 }
 
+/// Um turno "principal" e os turnos que ele absorveu: mensagens enviadas
+/// enquanto ele rodava (`merged_into`) ou, ao vivo, ainda sem `result`.
+struct TurnGroup<'a> {
+    main: &'a Value,
+    extra: Vec<&'a Value>,
+}
+
+/// Agrupa a lista (em ordem cronológica) de turnos da API. Um turno com
+/// `merged_into` entra no grupo do pai; um turno ainda aberto logo depois de
+/// outro também aberto é steering ao vivo e entra no grupo anterior.
+fn group_turns(turns: &[Value]) -> Vec<TurnGroup<'_>> {
+    let mut groups: Vec<TurnGroup<'_>> = Vec::new();
+    for t in turns {
+        let merged_into = ui::s(t, "merged_into");
+        if !merged_into.is_empty() {
+            if let Some(g) = groups
+                .iter_mut()
+                .find(|g| ui::s(g.main, "id") == merged_into)
+            {
+                g.extra.push(t);
+                continue;
+            }
+        }
+        let open = t.get("finished_at").map(|f| f.is_null()).unwrap_or(true);
+        if open && ui::s(t, "text").is_empty() {
+            if let Some(g) = groups.last_mut() {
+                let prev_open = g
+                    .main
+                    .get("finished_at")
+                    .map(|f| f.is_null())
+                    .unwrap_or(true);
+                if prev_open && ui::s(g.main, "text").is_empty() {
+                    g.extra.push(t);
+                    continue;
+                }
+            }
+        }
+        groups.push(TurnGroup {
+            main: t,
+            extra: Vec::new(),
+        });
+    }
+    groups
+}
+
+/// Posição do balão dentro de um grupo de mensagens do usuário.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum GroupPos {
+    Single,
+    First,
+    Middle,
+    Last,
+}
+
 fn user_bubble(
     ui: &mut egui::Ui,
     pal: &ui::Palette,
     toasts: &mut ui::Toasts,
     text: &str,
     started: Option<&chrono::DateTime<chrono::Utc>>,
+    pos: GroupPos,
 ) {
     let raw = text;
     let shown = ui::clean_emoji(text);
     let dark = ui.visuals().dark_mode;
     let fill = pal.accent.linear_multiply(if dark { 0.28 } else { 0.14 });
+    // Cantos: num grupo, o lado direito fica "colado" entre os balões.
+    let (ne, se) = match pos {
+        GroupPos::Single => (12, 3),
+        GroupPos::First => (12, 4),
+        GroupPos::Middle => (4, 4),
+        GroupPos::Last => (4, 3),
+    };
+    let last = matches!(pos, GroupPos::Single | GroupPos::Last);
     ui.with_layout(egui::Layout::right_to_left(egui::Align::Min), |ui| {
         ui.add_space(4.0);
         egui::Frame::new()
@@ -793,9 +878,9 @@ fn user_bubble(
             .stroke(egui::Stroke::new(1.0, pal.accent.linear_multiply(0.45)))
             .corner_radius(egui::CornerRadius {
                 nw: 12,
-                ne: 12,
+                ne,
                 sw: 12,
-                se: 3,
+                se,
             })
             .inner_margin(egui::Margin::symmetric(12, 8))
             .show(ui, |ui| {
@@ -807,19 +892,29 @@ fn user_bubble(
                             .selectable(true),
                     );
                     ui.add_space(2.0);
-                    // rodapé: uma linha, discreto (copiar + tempo relativo)
+                    // rodapé: uma linha, discreto (copiar + tempo relativo).
+                    // Num grupo, só o último balão mostra a hora; os outros
+                    // mostram a hora exata no hover do "copiar".
                     ui.horizontal(|ui| {
                         ui.spacing_mut().item_spacing.x = 6.0;
-                        if copy_button(ui, pal, tr("copiar a mensagem enviada")) {
+                        let hover = match started {
+                            Some(dt) if !last => {
+                                format!("{} · {}", tr("copiar a mensagem enviada"), fmt_exact(dt))
+                            }
+                            _ => tr("copiar a mensagem enviada").to_string(),
+                        };
+                        if copy_button(ui, pal, &hover) {
                             ui.ctx().copy_text(raw.to_string());
                             toasts.success(tr("Mensagem copiada."));
                         }
-                        when_label(ui, pal, started);
+                        if last {
+                            when_label(ui, pal, started);
+                        }
                     });
                 });
             });
     });
-    ui.add_space(6.0);
+    ui.add_space(if last { 6.0 } else { 2.0 });
 }
 
 fn assistant_card(

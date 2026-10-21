@@ -58,15 +58,30 @@ pub async fn turns(
     let out: Vec<Value> = rows
         .into_iter()
         .map(|r| {
+            // Turno absorvido por outro (mensagem enviada no meio do turno):
+            // não tem resposta própria; `merged_into` aponta o turno pai.
+            let merged = r.error_kind.as_deref() == Some("merged");
+            let merged_into = merged
+                .then(|| r.result_text.as_deref().and_then(merged_parent))
+                .flatten();
+            let text = if merged { None } else { r.result_text.clone() };
             json!({
                 "id": r.id, "thread_id": r.thread_id, "prompt": r.prompt, "started_at": r.started_at, "finished_at": r.finished_at,
-                "result": r.result_text.as_ref().map(|t| json!({"text": t, "is_error": r.is_error, "cost_usd": r.cost_usd, "duration_ms": r.duration_ms, "model": r.model})),
-                "text": r.result_text, "is_error": r.is_error, "error_kind": r.error_kind, "cost_usd": r.cost_usd, "duration_ms": r.duration_ms, "model": r.model,
-                "error": if r.is_error { r.result_text.clone() } else { None },
+                "result": text.as_ref().map(|t| json!({"text": t, "is_error": r.is_error, "cost_usd": r.cost_usd, "duration_ms": r.duration_ms, "model": r.model})),
+                "text": text, "is_error": r.is_error, "error_kind": r.error_kind, "merged_into": merged_into, "cost_usd": r.cost_usd, "duration_ms": r.duration_ms, "model": r.model,
+                "error": if r.is_error { text.clone() } else { None },
             })
         })
         .collect();
     Ok(Json(json!(out)))
+}
+
+/// Extrai o id do turno pai gravado num turno mesclado. Aceita o formato atual
+/// (só o uuid) e o antigo ("(incorporada ao turno <uuid>)").
+fn merged_parent(text: &str) -> Option<TurnId> {
+    text.split(|c: char| !(c.is_ascii_alphanumeric() || c == '-'))
+        .filter(|t| !t.is_empty())
+        .find_map(|t| TurnId::parse(t).ok())
 }
 
 pub async fn turn_events(State(state): State<App>, Path(id): Path<String>) -> ApiResult<Value> {
