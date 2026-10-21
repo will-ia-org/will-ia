@@ -164,11 +164,8 @@ fn visuals(dark: bool) -> egui::Visuals {
     };
     v.panel_fill = p.panel;
     v.window_fill = p.card;
-    v.extreme_bg_color = if dark {
-        Color32::from_rgb(12, 15, 20)
-    } else {
-        Color32::WHITE
-    };
+    // Fundo de campos de texto: o tom mais escuro da paleta (`window`).
+    v.extreme_bg_color = if dark { p.window } else { Color32::WHITE };
     v.faint_bg_color = p.card_alt;
     v.code_bg_color = if dark {
         Color32::from_rgb(12, 15, 20)
