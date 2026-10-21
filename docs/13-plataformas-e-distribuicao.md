@@ -101,7 +101,11 @@ Arquivos planejados em `packaging/`:
 
   O job final monta `will-ia-<v>-portable.zip` (pasta `will-ia/` com `bin/` contendo os quatro binários, `will-ia.sh`, `will-ia.cmd`, `README.md` e o marcador `portable`), gera `SHA256SUMS.txt` e publica tudo numa GitHub Release com notas automáticas.
 - Publicar uma versão: `git tag v0.1.0 && git push origin v0.1.0`.
-- Assinatura/notarização (macOS) e instalador Windows ficam para depois; hoje o `.app` abre com botão direito → Abrir na primeira vez.
+- Assinatura/notarização (macOS) e instalador Windows ficam para depois. Sem notarização, o Gatekeeper mostra "Apple could not verify … is free of malware" (macOS 15 não aceita mais o botão direito → Abrir). Para liberar:
+  - binário solto: `xattr -d com.apple.quarantine ./will-ia-macos-aarch64 && chmod +x ./will-ia-macos-aarch64`;
+  - `.app`: `xattr -dr com.apple.quarantine will-ia.app`;
+  - ou, depois da primeira tentativa, Ajustes do Sistema › Privacidade e Segurança › "Abrir Mesmo Assim".
+  O `packaging/portable/README.md` repete essa instrução. Com um certificado Developer ID, o `release.yml` passa a assinar (`codesign --options runtime`) e notarizar (`notarytool`), e o aviso some.
 
 ## Dependências em tempo de execução
 

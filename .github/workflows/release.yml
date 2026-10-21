@@ -124,7 +124,8 @@ jobs:
           app="dist/${BIN}.app"; mkdir -p "$app/Contents/MacOS" "$app/Contents/Resources"
           cp "target/${{ matrix.target }}/release/${BIN}" "$app/Contents/MacOS/${BIN}"
           sed "s/__VERSION__/${VERSION}/g" packaging/macos/Info.plist > "$app/Contents/Info.plist"
-          # não assinado: o usuário abre com botão direito → Abrir na primeira vez
+          # não assinado/notarizado: o usuário remove a quarentena (xattr -d com.apple.quarantine)
+          # ou libera em Privacidade e Segurança › "Abrir Mesmo Assim" (ver docs/13)
           (cd dist && zip -qr "${BIN}-${VERSION}-${{ matrix.name }}.app.zip" "${BIN}.app" && rm -rf "${BIN}.app")
 
       - uses: actions/upload-artifact@v4

@@ -33,3 +33,14 @@ O que precisa existir na máquina hospedeira: o Claude Code CLI (`claude`) no PA
 Montar o pacote: copie os binários de cada plataforma para `bin/` com os nomes acima
 (`cargo build --release -p will-desktop` gera `target/release/will-ia`), os dois
 lançadores e crie o arquivo `portable` vazio. Nenhum outro arquivo é necessário.
+
+## macOS: "Apple could not verify … is free of malware"
+
+Os binários ainda não são notarizados. Na primeira execução, libere o arquivo da quarentena:
+
+```bash
+xattr -d com.apple.quarantine bin/will-ia-macos-aarch64   # ou bin/will-ia-macos-x86_64
+chmod +x bin/will-ia-macos-aarch64
+```
+
+Ou, depois da primeira tentativa, vá em Ajustes do Sistema › Privacidade e Segurança e clique em "Abrir Mesmo Assim".
