@@ -161,17 +161,18 @@ impl Attachment {
     }
 }
 
-const ATTACHMENT_NOTE_PREFIX: &str = "[O usuário enviou um arquivo pelo Telegram: \"";
+const ATTACHMENT_NOTE_PREFIX: &str = "[O usuário enviou um arquivo ";
 
-/// Nota que o canal acrescenta ao prompt para o cérebro saber onde está o arquivo.
-pub fn attachment_note(a: &Attachment) -> String {
+/// Nota que o canal acrescenta ao prompt para o cérebro saber onde está o
+/// arquivo. `via` é o canal, como "pelo Telegram" ou "pelo app".
+pub fn attachment_note(a: &Attachment, via: &str) -> String {
     let mime = if a.mime.is_empty() {
         "tipo desconhecido"
     } else {
         a.mime.as_str()
     };
     format!(
-        "{ATTACHMENT_NOTE_PREFIX}{}\" ({mime}), salvo em: {}. Leia/analise conforme o pedido acima; se não houver pedido específico, descreva o conteúdo de forma útil.]",
+        "{ATTACHMENT_NOTE_PREFIX}{via}: \"{}\" ({mime}), salvo em: {}. Leia/analise conforme o pedido acima; se não houver pedido específico, descreva o conteúdo de forma útil.]",
         a.name, a.path
     )
 }
@@ -190,7 +191,11 @@ pub fn split_attachment_notes(prompt: &str) -> (String, Vec<Attachment>) {
         let note = &rest[start + ATTACHMENT_NOTE_PREFIX.len()..start + end_rel];
         text.push_str(&rest[..start]);
         rest = &rest[start + end_rel + 1..];
-        let Some((name, after)) = note.split_once("\" (") else {
+        // `pelo Telegram: "nome" (mime), salvo em: caminho. Leia/analise…`
+        let Some((_via, after)) = note.split_once(": \"") else {
+            continue;
+        };
+        let Some((name, after)) = after.split_once("\" (") else {
             continue;
         };
         let Some((mime, after)) = after.split_once("), salvo em: ") else {
@@ -305,7 +310,7 @@ mod attachment_tests {
             path: "/kb/inbox/telegram/-100-1-foto-1.jpg".into(),
             size: 0,
         };
-        let prompt = format!("o que é isso ?\n\n{}", attachment_note(&a));
+        let prompt = format!("o que é isso ?\n\n{}", attachment_note(&a, "pelo Telegram"));
         let (text, atts) = split_attachment_notes(&prompt);
         assert_eq!(text, "o que é isso ?");
         assert_eq!(atts, vec![a]);
@@ -320,7 +325,7 @@ mod attachment_tests {
             path: "/p/arq".into(),
             size: 0,
         };
-        let (_, atts) = split_attachment_notes(&attachment_note(&b));
+        let (_, atts) = split_attachment_notes(&attachment_note(&b, "pelo app"));
         assert_eq!(atts[0].mime, "");
         assert_eq!(atts[0].path, "/p/arq");
     }

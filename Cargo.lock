@@ -8622,6 +8622,7 @@ dependencies = [
  "chrono",
  "directories",
  "futures",
+ "mime_guess",
  "parking_lot",
  "rand 0.10.3",
  "regex",

@@ -483,7 +483,7 @@ impl TelegramModule {
             prompt.push_str(&caption);
             prompt.push_str("\n\n");
         }
-        prompt.push_str(&will_core::attachment_note(&att));
+        prompt.push_str(&will_core::attachment_note(&att, "pelo Telegram"));
         self.dispatch_with(&inc, &prompt, &[att]).await;
     }
 }

@@ -96,6 +96,77 @@ pub async fn turn_events(State(state): State<App>, Path(id): Path<String>) -> Ap
 #[derive(serde::Deserialize)]
 pub struct SendBody {
     pub text: String,
+    /// Caminhos locais de arquivos para anexar. Cada um é copiado para
+    /// `<kb>/inbox/ui/` e entra no prompt como nota de anexo (igual ao Telegram).
+    #[serde(default)]
+    pub attachments: Vec<String>,
+}
+
+/// Nome de arquivo seguro para a pasta de anexos (mesma regra do Telegram).
+fn sanitize_filename(name: &str) -> String {
+    let s: String = name
+        .chars()
+        .map(|c| {
+            if c.is_alphanumeric() || matches!(c, '_' | '.' | '-') {
+                c
+            } else {
+                '_'
+            }
+        })
+        .collect();
+    let s = s.trim_matches('.').to_string();
+    let count = s.chars().count();
+    if count > 80 {
+        s.chars().skip(count - 80).collect()
+    } else {
+        s
+    }
+}
+
+/// Copia um arquivo escolhido na UI para `<kb>/inbox/ui/` e descreve o anexo.
+async fn stage_attachment(
+    kb: &std::path::Path,
+    src: &str,
+) -> Result<will_core::Attachment, String> {
+    let src_path = std::path::Path::new(src);
+    let meta = tokio::fs::metadata(src_path)
+        .await
+        .map_err(|e| format!("{src}: {e}"))?;
+    if !meta.is_file() {
+        return Err(format!("{src}: não é um arquivo"));
+    }
+    let name = src_path
+        .file_name()
+        .and_then(|n| n.to_str())
+        .unwrap_or("arquivo")
+        .to_string();
+    let dir = kb.join("inbox").join("ui");
+    tokio::fs::create_dir_all(&dir)
+        .await
+        .map_err(|e| format!("criar pasta de anexos: {e}"))?;
+    let mut safe = sanitize_filename(&name);
+    if safe.is_empty() {
+        safe = "arquivo".into();
+    }
+    let stamp = chrono::Local::now().format("%Y%m%d-%H%M%S");
+    let mut dest = dir.join(format!("{stamp}-{safe}"));
+    let mut n = 1;
+    while dest.exists() {
+        n += 1;
+        dest = dir.join(format!("{stamp}-{n}-{safe}"));
+    }
+    tokio::fs::copy(src_path, &dest)
+        .await
+        .map_err(|e| format!("copiar {name}: {e}"))?;
+    Ok(will_core::Attachment {
+        mime: mime_guess::from_path(&name)
+            .first_raw()
+            .unwrap_or_default()
+            .to_string(),
+        name,
+        path: dest.display().to_string(),
+        size: meta.len(),
+    })
 }
 
 pub async fn send(
@@ -104,12 +175,32 @@ pub async fn send(
     Json(body): Json<SendBody>,
 ) -> ApiResult<Value> {
     let text = body.text.trim();
-    if text.is_empty() {
+    if text.is_empty() && body.attachments.is_empty() {
         return Err(bad("mensagem vazia"));
     }
     let t = tid(&id)?;
+    let mut atts = Vec::new();
+    if !body.attachments.is_empty() {
+        let kb = state.kb_path().filter(|p| p.is_dir()).ok_or_else(|| {
+            bad("Configure a pasta da base de conhecimento antes de anexar arquivos.")
+        })?;
+        for src in &body.attachments {
+            atts.push(stage_attachment(&kb, src).await.map_err(bad)?);
+        }
+    }
+    let mut prompt = text.to_string();
+    for a in &atts {
+        if !prompt.is_empty() {
+            prompt.push_str("\n\n");
+        }
+        prompt.push_str(&will_core::attachment_note(a, "pelo app"));
+    }
     let mid_turn = state.engine.pending(t) > 0;
-    let turn = state.host().send_message(t, text).await.map_err(bad)?;
+    let turn = state
+        .host()
+        .send_message_with(t, &prompt, &atts)
+        .await
+        .map_err(bad)?;
     Ok(Json(json!({ "turn_id": turn, "mid_turn": mid_turn })))
 }
 

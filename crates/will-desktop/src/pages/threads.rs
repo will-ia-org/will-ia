@@ -31,6 +31,8 @@ pub struct ThreadsPage {
     live: HashMap<ThreadId, LiveTurn>,
     notes: HashMap<ThreadId, Vec<String>>,
     input: String,
+    /// Arquivos escolhidos (botão Anexar ou arrastar-e-soltar) ainda não enviados.
+    pending_files: Vec<std::path::PathBuf>,
     send_task: Option<Task<Value>>,
     action_task: Option<(&'static str, Task<Value>)>,
     create_task: Option<Task<Value>>,
@@ -353,13 +355,23 @@ impl ThreadsPage {
     fn send(&mut self, cx: &Cx) {
         let Some(id) = self.selected else { return };
         let text = self.input.trim().to_string();
-        if text.is_empty() || self.send_task.is_some() {
+        if (text.is_empty() && self.pending_files.is_empty()) || self.send_task.is_some() {
             return;
         }
         self.input.clear();
+        let attachments: Vec<String> = self
+            .pending_files
+            .drain(..)
+            .map(|p| p.display().to_string())
+            .collect();
         let sid = id.to_string();
         self.send_task = Some(cx.svc.call(move |s| async move {
-            j(api::send(State(s), Path(sid), Json(api::SendBody { text })).await)
+            j(api::send(
+                State(s),
+                Path(sid),
+                Json(api::SendBody { text, attachments }),
+            )
+            .await)
         }));
         self.focus_input = true;
     }
@@ -720,7 +732,24 @@ impl ThreadsPage {
                 ui.add_space(8.0);
             });
 
-        // entrada: caixa de texto com o botão Enviar na mesma linha
+        // arrastar-e-soltar: arquivos soltos na janela viram anexos pendentes
+        let (dropped, hovering) = ui.ctx().input(|i| {
+            (
+                i.raw
+                    .dropped_files
+                    .iter()
+                    .map(|f| f.path().to_path_buf())
+                    .collect::<Vec<_>>(),
+                !i.raw.hovered_files.is_empty(),
+            )
+        });
+        for p in dropped {
+            if p.is_file() && !self.pending_files.contains(&p) {
+                self.pending_files.push(p);
+            }
+        }
+
+        // entrada: anexos pendentes + caixa de texto + Anexar/Enviar
         let mut send_now = false;
         let busy = self.send_task.is_some();
         let pal2 = ui::palette(ui.visuals().dark_mode);
@@ -728,25 +757,81 @@ impl ThreadsPage {
             ui.add_space(6.0);
             egui::Frame::new()
                 .fill(pal2.card)
-                .stroke(egui::Stroke::new(1.0, pal2.border))
+                .stroke(egui::Stroke::new(
+                    1.0,
+                    if hovering { pal2.accent } else { pal2.border },
+                ))
                 .corner_radius(10.0)
                 .inner_margin(egui::Margin::symmetric(8, 6))
                 .show(ui, |ui| {
                     ui.set_width(ui.available_width());
+                    if !self.pending_files.is_empty() {
+                        let mut remove: Option<usize> = None;
+                        ui.horizontal_wrapped(|ui| {
+                            ui.spacing_mut().item_spacing = egui::vec2(6.0, 4.0);
+                            for (i, p) in self.pending_files.iter().enumerate() {
+                                let name =
+                                    p.file_name().and_then(|n| n.to_str()).unwrap_or("arquivo");
+                                egui::Frame::new()
+                                    .fill(pal2.accent.linear_multiply(0.18))
+                                    .stroke(egui::Stroke::new(
+                                        1.0,
+                                        pal2.accent.linear_multiply(0.5),
+                                    ))
+                                    .corner_radius(8.0)
+                                    .inner_margin(egui::Margin::symmetric(8, 3))
+                                    .show(ui, |ui| {
+                                        ui.spacing_mut().item_spacing.x = 4.0;
+                                        ui.add(
+                                            egui::Label::new(
+                                                egui::RichText::new(name)
+                                                    .size(12.0)
+                                                    .color(pal2.text),
+                                            )
+                                            .truncate(),
+                                        )
+                                        .on_hover_text(p.display().to_string());
+                                        if ui
+                                            .add(
+                                                egui::Button::new(
+                                                    egui::RichText::new("×")
+                                                        .size(13.0)
+                                                        .color(pal2.text_weak),
+                                                )
+                                                .frame(false),
+                                            )
+                                            .on_hover_text(tr("remover anexo"))
+                                            .clicked()
+                                        {
+                                            remove = Some(i);
+                                        }
+                                    });
+                            }
+                        });
+                        if let Some(i) = remove {
+                            self.pending_files.remove(i);
+                        }
+                        ui.add_space(4.0);
+                    }
                     ui.horizontal(|ui| {
-                        let btn_w = 92.0;
+                        let btn_w = 92.0 + 76.0;
                         let text_w = (ui.available_width() - btn_w - 12.0).max(120.0);
+                        let hint = if hovering {
+                            tr("Solte os arquivos para anexar.")
+                        } else if !self.pending_files.is_empty() {
+                            tr("Comentário opcional sobre os anexos. Ctrl+Enter envia.")
+                        } else if t.pending > 0 {
+                            tr("Turno em andamento: a mensagem entra no meio. Ctrl+Enter envia.")
+                        } else {
+                            tr("Mensagem para o Claude. Ctrl+Enter envia.")
+                        };
                         let r = ui.add_sized(
-                        [text_w, 54.0],
-                        egui::TextEdit::multiline(&mut self.input)
-                            .frame(egui::Frame::NONE)
-                            .desired_rows(2)
-                            .hint_text(if t.pending > 0 {
-                                tr("Turno em andamento: a mensagem entra no meio. Ctrl+Enter envia.")
-                            } else {
-                                tr("Mensagem para o Claude. Ctrl+Enter envia.")
-                            }),
-                    );
+                            [text_w, 54.0],
+                            egui::TextEdit::multiline(&mut self.input)
+                                .frame(egui::Frame::NONE)
+                                .desired_rows(2)
+                                .hint_text(hint),
+                        );
                         if self.focus_input {
                             r.request_focus();
                             self.focus_input = false;
@@ -757,7 +842,9 @@ impl ThreadsPage {
                             send_now = true;
                         }
                         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                            let can = !busy && !self.input.trim().is_empty();
+                            let can = !busy
+                                && (!self.input.trim().is_empty()
+                                    || !self.pending_files.is_empty());
                             let b = egui::Button::new(
                                 egui::RichText::new(if busy { "…" } else { tr("Enviar") })
                                     .color(egui::Color32::WHITE),
@@ -767,9 +854,30 @@ impl ThreadsPage {
                             } else {
                                 pal2.accent.linear_multiply(0.45)
                             })
-                            .min_size(egui::vec2(btn_w - 8.0, 34.0));
+                            .min_size(egui::vec2(84.0, 34.0));
                             if ui.add_enabled(can, b).clicked() {
                                 send_now = true;
+                            }
+                            // Anexar: diálogo nativo de arquivos (vários de uma vez)
+                            let a = egui::Button::new(
+                                egui::RichText::new(tr("Anexar")).color(pal2.text),
+                            )
+                            .min_size(egui::vec2(68.0, 34.0));
+                            if ui
+                                .add_enabled(!busy, a)
+                                .on_hover_text(tr("Anexar arquivos (ou arraste para a janela)"))
+                                .clicked()
+                            {
+                                if let Some(files) = rfd::FileDialog::new()
+                                    .set_title(tr("Anexar arquivos"))
+                                    .pick_files()
+                                {
+                                    for p in files {
+                                        if !self.pending_files.contains(&p) {
+                                            self.pending_files.push(p);
+                                        }
+                                    }
+                                }
                             }
                         });
                     });

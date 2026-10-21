@@ -39,7 +39,7 @@ Token local gerado na primeira execução, gravado em `<data_dir>/ui-session.tok
 | GET | `/api/threads/{id}` | detalhe |
 | GET | `/api/threads/{id}/turns?limit` | turnos (`prompt` cru, `prompt_display` sem notas de anexo, `attachments[]` = `{name, mime, path, size}`, `merged_into` em turnos absorvidos) |
 | GET | `/api/turns/{id}/events` | eventos do turno |
-| POST | `/api/threads/{id}/messages` | `{ text }` → `{ turn_id, mid_turn }` (imediato) |
+| POST | `/api/threads/{id}/messages` | `{ text, attachments?: [caminho local] }` → `{ turn_id, mid_turn }` (imediato). Cada anexo é copiado para `<kb>/inbox/ui/<data-hora>-<nome>` e entra no prompt como nota de anexo; `text` pode ser vazio se houver anexos |
 | POST | `/api/threads/{id}/restart` | mantém sessão |
 | POST | `/api/threads/{id}/reset` | esquece sessão |
 | POST | `/api/threads/{id}/interrupt` | |
