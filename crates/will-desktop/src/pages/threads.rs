@@ -255,18 +255,18 @@ impl ThreadsPage {
             ui.set_min_height(avail_h);
             // ----- lista -----
             ui.vertical(|ui| {
-                ui.set_width(300.0);
+                ui.set_width(228.0);
                 ui.set_min_height(avail_h);
                 ui.horizontal(|ui| {
-                    ui.heading("Threads");
-                    if ui.add_enabled(self.create_task.is_none(), egui::Button::new("+ Nova")).clicked() {
+                    ui.label(egui::RichText::new("Threads").font(ui::semibold(16.0)));
+                    if ui.add_enabled(self.create_task.is_none(), egui::Button::new("+ Nova").small()).clicked() {
                         self.create_task = Some(cx.svc.call(|s| async move { j(api::create(State(s), None).await) }));
                     }
-                    if ui.button("Atualizar").clicked() {
+                    if ui.add(egui::Button::new("↺").small()).on_hover_text("Atualizar").clicked() {
                         self.list.loaded_at = None;
                     }
                 });
-                ui.checkbox(&mut self.show_archived, "mostrar arquivadas");
+                ui.checkbox(&mut self.show_archived, egui::RichText::new("arquivadas").small());
                 if let Some(e) = &self.list.error {
                     ui::error_text(ui, e);
                 }
@@ -280,24 +280,25 @@ impl ThreadsPage {
                     for t in sorted {
                         let selected = self.selected == Some(t.id);
                         let fill = if selected { ui.visuals().selection.bg_fill.linear_multiply(0.35) } else { egui::Color32::TRANSPARENT };
-                        let r = egui::Frame::new().fill(fill).corner_radius(6.0).inner_margin(6.0).show(ui, |ui| {
+                        let r = egui::Frame::new().fill(fill).corner_radius(6.0).inner_margin(egui::Margin::symmetric(8, 5)).show(ui, |ui| {
                             ui.set_width(ui.available_width());
+                            ui.spacing_mut().item_spacing = egui::vec2(6.0, 2.0);
                             ui.horizontal(|ui| {
                                 ui::dot(ui, status_tone(t));
-                                ui.add(egui::Label::new(egui::RichText::new(title_of(t)).strong()).truncate());
+                                ui.add(egui::Label::new(egui::RichText::new(title_of(t)).font(ui::medium(13.0))).truncate());
                             });
                             ui.horizontal(|ui| {
-                                ui.label(egui::RichText::new(origin_label(t)).small().weak());
-                                ui.label(egui::RichText::new(ui::fmt_relative(&t.last_activity_at)).small().weak());
+                                ui.add_space(16.0);
+                                let mut meta = format!("{} · {}", origin_label(t), ui::fmt_relative(&t.last_activity_at));
                                 if t.pending > 0 {
-                                    ui::badge(ui, &format!("{} pendente(s)", t.pending), Tone::Info);
-                                }
-                                if t.alive {
-                                    ui::badge(ui, "vivo", Tone::Success);
+                                    meta.push_str(&format!(" · {} pendente(s)", t.pending));
+                                } else if t.alive {
+                                    meta.push_str(" · vivo");
                                 }
                                 if t.session_expired {
-                                    ui::badge(ui, "sessão expirada", Tone::Warning);
+                                    meta.push_str(" · sessão expirada");
                                 }
+                                ui.add(egui::Label::new(egui::RichText::new(meta).size(11.5).weak()).truncate());
                             });
                         });
                         if r.response.interact(egui::Sense::click()).clicked() {
@@ -456,8 +457,8 @@ impl ThreadsPage {
         ui.separator();
 
         // histórico + ao vivo
-        let input_h = 110.0;
-        let hist_h = (avail_h - input_h - 90.0).max(120.0);
+        let input_h = 78.0;
+        let hist_h = (avail_h - input_h - 96.0).max(120.0);
         let loading = self.turns.loading() && self.turns.data.is_none();
         let turns_err = self.turns.error.clone();
         let turns = self
@@ -537,40 +538,59 @@ impl ThreadsPage {
                 ui.add_space(8.0);
             });
 
-        // entrada
-        ui.separator();
+        // entrada: caixa de texto com o botão Enviar na mesma linha
+        ui.add_space(6.0);
         let mut send_now = false;
-        let r = ui.add(egui::TextEdit::multiline(&mut self.input).desired_rows(3).desired_width(f32::INFINITY).hint_text("Mensagem para o Claude (Ctrl+Enter envia). Pode mandar mesmo com um turno em andamento."));
-        if self.focus_input {
-            r.request_focus();
-            self.focus_input = false;
-        }
-        if r.has_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter) && i.modifiers.command) {
-            send_now = true;
-        }
-        ui.horizontal(|ui| {
-            let busy = self.send_task.is_some();
-            if ui
-                .add_enabled(
-                    !busy && !self.input.trim().is_empty(),
-                    egui::Button::new(egui::RichText::new("Enviar").color(egui::Color32::WHITE))
-                        .fill(Tone::Info.color(true)),
-                )
-                .clicked()
-            {
-                send_now = true;
-            }
-            if busy {
-                ui.spinner();
-            }
-            if t.pending > 0 {
-                ui.label(
-                    egui::RichText::new("turno em andamento: a mensagem entra no meio (steering)")
-                        .small()
-                        .weak(),
-                );
-            }
-        });
+        let busy = self.send_task.is_some();
+        let pal2 = ui::palette(ui.visuals().dark_mode);
+        egui::Frame::new()
+            .fill(pal2.card)
+            .stroke(egui::Stroke::new(1.0, pal2.border))
+            .corner_radius(10.0)
+            .inner_margin(egui::Margin::symmetric(8, 6))
+            .show(ui, |ui| {
+                ui.set_width(ui.available_width());
+                ui.horizontal(|ui| {
+                    let btn_w = 92.0;
+                    let text_w = (ui.available_width() - btn_w - 12.0).max(120.0);
+                    let r = ui.add_sized(
+                        [text_w, 54.0],
+                        egui::TextEdit::multiline(&mut self.input)
+                            .frame(egui::Frame::NONE)
+                            .desired_rows(2)
+                            .hint_text(if t.pending > 0 {
+                                "Turno em andamento: a mensagem entra no meio. Ctrl+Enter envia."
+                            } else {
+                                "Mensagem para o Claude. Ctrl+Enter envia."
+                            }),
+                    );
+                    if self.focus_input {
+                        r.request_focus();
+                        self.focus_input = false;
+                    }
+                    if r.has_focus()
+                        && ui.input(|i| i.key_pressed(egui::Key::Enter) && i.modifiers.command)
+                    {
+                        send_now = true;
+                    }
+                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                        let can = !busy && !self.input.trim().is_empty();
+                        let b = egui::Button::new(
+                            egui::RichText::new(if busy { "…" } else { "Enviar" })
+                                .color(egui::Color32::WHITE),
+                        )
+                        .fill(if can {
+                            pal2.accent
+                        } else {
+                            pal2.accent.linear_multiply(0.45)
+                        })
+                        .min_size(egui::vec2(btn_w - 8.0, 34.0));
+                        if ui.add_enabled(can, b).clicked() {
+                            send_now = true;
+                        }
+                    });
+                });
+            });
         if send_now {
             self.send(cx);
         }
