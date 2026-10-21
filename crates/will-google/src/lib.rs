@@ -117,6 +117,8 @@ impl GoogleModule {
         &self.client
     }
 
+    /// Estado da conta Google: `Disabled` sem `client_id`; `Degraded` sem conta
+    /// ou com conta precisando reautorizar; `Running` = pelo menos uma conta ok.
     pub fn status(&self) -> ModuleStatus {
         if self.client.client_id().is_none() {
             return ModuleStatus::Disabled;
@@ -126,12 +128,68 @@ impl GoogleModule {
             return ModuleStatus::Degraded("nenhuma conta Google conectada".into());
         }
         if let Some(a) = accounts.iter().find(|a| a.status == STATUS_REAUTHORIZE) {
-            return ModuleStatus::Degraded(format!("conta {} precisa reautorizar", a.email));
+            return ModuleStatus::Degraded(format!(
+                "token da conta {} expirado; reautorize",
+                a.email
+            ));
         }
         if let Some(a) = accounts.iter().find(|a| a.status != STATUS_OK) {
             return ModuleStatus::Degraded(format!("conta {}: {}", a.email, a.status));
         }
         ModuleStatus::Running
+    }
+
+    /// Estado da Agenda: `Disabled` se desligada; senão `Running` quando há
+    /// conta ok com escopo de agenda, ou `Degraded` com o motivo.
+    pub fn calendar_status(&self) -> ModuleStatus {
+        if !self.config().calendar.enabled {
+            return ModuleStatus::Disabled;
+        }
+        self.feature_status(self.client.cached_accounts(), "/auth/calendar", "Agenda")
+    }
+
+    /// Estado do Gmail: `Disabled` se desligado; senão `Running` quando há conta
+    /// ok (entre as permitidas em `gmail.accounts`) com escopo do Gmail.
+    pub fn gmail_status(&self) -> ModuleStatus {
+        if !self.config().gmail.enabled {
+            return ModuleStatus::Disabled;
+        }
+        self.feature_status(self.gmail_accounts(), "/auth/gmail", "Gmail")
+    }
+
+    fn feature_status(
+        &self,
+        accounts: Vec<GoogleAccount>,
+        scope_fragment: &str,
+        feature: &str,
+    ) -> ModuleStatus {
+        if self.client.client_id().is_none() {
+            return ModuleStatus::Degraded("credenciais OAuth do Google não configuradas".into());
+        }
+        if accounts.is_empty() {
+            return ModuleStatus::Degraded("nenhuma conta Google conectada".into());
+        }
+        let with_scope: Vec<&GoogleAccount> = accounts
+            .iter()
+            .filter(|a| a.scopes.iter().any(|s| s.contains(scope_fragment)))
+            .collect();
+        if with_scope.is_empty() {
+            return ModuleStatus::Degraded(format!(
+                "nenhuma conta autorizou o {feature}; reautorize incluindo esse acesso"
+            ));
+        }
+        if with_scope.iter().any(|a| a.status == STATUS_OK) {
+            return ModuleStatus::Running;
+        }
+        match with_scope.iter().find(|a| a.status == STATUS_REAUTHORIZE) {
+            Some(a) => {
+                ModuleStatus::Degraded(format!("token da conta {} expirado; reautorize", a.email))
+            }
+            None => ModuleStatus::Degraded(format!(
+                "conta {}: {}",
+                with_scope[0].email, with_scope[0].status
+            )),
+        }
     }
 
     pub(crate) fn emit_status(&self) {

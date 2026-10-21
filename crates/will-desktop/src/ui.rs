@@ -1,6 +1,7 @@
 //! Widgets e helpers compartilhados pelas páginas (formulários, badges, toasts,
 //! campo de segredo, modal de confirmação, formatação).
 
+use crate::i18n::{tr, trf};
 use egui::{Color32, RichText, Ui};
 use std::time::{Duration, Instant};
 
@@ -315,6 +316,10 @@ impl Tone {
     }
 }
 
+/// Cor da bolinha de um módulo (semântica em `will_core::ModuleStatus`):
+/// verde = pronto (mesmo ocioso), azul = iniciando, amarelo = habilitado mas
+/// falta/falha algo (com motivo), vermelho = erro (com motivo), cinza = desligado
+/// nas configurações ou parado explicitamente.
 pub fn tone_for_module(state: &will_core::ModuleStatus) -> Tone {
     use will_core::ModuleStatus as S;
     match state {
@@ -326,29 +331,32 @@ pub fn tone_for_module(state: &will_core::ModuleStatus) -> Tone {
     }
 }
 
+/// Rótulo curto do estado (traduzido), sempre com o motivo em `Degraded`/`Error`.
+/// `Running` vira "pronto"; a página Início acrescenta detalhes por módulo
+/// (processos vivos, "em sessão", número de contas).
 pub fn module_label(state: &will_core::ModuleStatus) -> String {
     use will_core::ModuleStatus as S;
     match state {
-        S::Running => "ativo".into(),
-        S::Starting => "iniciando".into(),
-        S::Degraded(d) => format!("degradado · {d}"),
-        S::Error(d) => format!("erro · {d}"),
-        S::Disabled => "desligado".into(),
-        S::Stopped => "parado".into(),
+        S::Running => tr("pronto").into(),
+        S::Starting => tr("iniciando").into(),
+        S::Degraded(d) => trf("atenção · {}", &[d]),
+        S::Error(d) => trf("erro · {}", &[d]),
+        S::Disabled => tr("desligado").into(),
+        S::Stopped => tr("parado").into(),
     }
 }
 
 pub fn module_name(m: will_core::Module) -> &'static str {
     use will_core::Module as M;
     match m {
-        M::Engine => "Motor Claude",
-        M::Telegram => "Telegram",
-        M::Realtime => "Voz",
-        M::Mcp => "Servidor MCP",
-        M::WhatsApp => "WhatsApp",
-        M::Google => "Conta Google",
-        M::Calendar => "Agenda",
-        M::Gmail => "Gmail",
+        M::Engine => tr("Motor Claude"),
+        M::Telegram => tr("Telegram"),
+        M::Realtime => tr("Voz"),
+        M::Mcp => tr("Servidor MCP"),
+        M::WhatsApp => tr("WhatsApp"),
+        M::Google => tr("Conta Google"),
+        M::Calendar => tr("Agenda"),
+        M::Gmail => tr("Gmail"),
     }
 }
 
@@ -437,17 +445,17 @@ pub fn text_context_menu(resp: &egui::Response) {
     let id = resp.id;
     resp.context_menu(|ui| {
         let ctx = ui.ctx().clone();
-        if ui.button("Colar").clicked() {
+        if ui.button(tr("Colar")).clicked() {
             ctx.memory_mut(|m| m.request_focus(id));
             ctx.send_viewport_cmd(egui::ViewportCommand::RequestPaste);
             ui.close();
         }
-        if ui.button("Copiar").clicked() {
+        if ui.button(tr("Copiar")).clicked() {
             ctx.memory_mut(|m| m.request_focus(id));
             ctx.send_viewport_cmd(egui::ViewportCommand::RequestCopy);
             ui.close();
         }
-        if ui.button("Recortar").clicked() {
+        if ui.button(tr("Recortar")).clicked() {
             ctx.memory_mut(|m| m.request_focus(id));
             ctx.send_viewport_cmd(egui::ViewportCommand::RequestCut);
             ui.close();
@@ -610,9 +618,9 @@ impl SecretField {
         let mut action = SecretAction::None;
         ui.horizontal(|ui| {
             if present {
-                badge(ui, "configurado", Tone::Success);
+                badge(ui, tr("configurado"), Tone::Success);
             } else {
-                badge(ui, "não configurado", Tone::Warning);
+                badge(ui, tr("não configurado"), Tone::Warning);
             }
         });
         ui.horizontal(|ui| {
@@ -625,20 +633,24 @@ impl SecretField {
             );
             text_context_menu(&r);
             if ui
-                .button(if self.reveal { "ocultar" } else { "ver" })
+                .button(if self.reveal {
+                    tr("ocultar")
+                } else {
+                    tr("ver")
+                })
                 .clicked()
             {
                 self.reveal = !self.reveal;
             }
             let can_save = !self.input.trim().is_empty();
             if ui
-                .add_enabled(can_save, egui::Button::new("Salvar"))
+                .add_enabled(can_save, egui::Button::new(tr("Salvar")))
                 .clicked()
             {
                 action = SecretAction::Save(self.input.trim().to_string());
                 self.input.clear();
             }
-            if present && ui.button("remover").clicked() {
+            if present && ui.button(tr("remover")).clicked() {
                 action = SecretAction::Delete;
             }
         });
@@ -738,7 +750,7 @@ pub fn confirm_modal(ctx: &egui::Context, c: &Confirm) -> Option<bool> {
         ui.label(&c.body);
         ui.add_space(12.0);
         ui.horizontal(|ui| {
-            if ui.button("Cancelar").clicked() {
+            if ui.button(tr("Cancelar")).clicked() {
                 out = Some(false);
             }
             let r = if c.danger {
@@ -770,12 +782,6 @@ pub fn fmt_dt(v: &serde_json::Value) -> String {
         .unwrap_or_default()
 }
 
-pub fn fmt_dt_chrono(d: &chrono::DateTime<chrono::Utc>) -> String {
-    d.with_timezone(&chrono::Local)
-        .format("%d/%m %H:%M")
-        .to_string()
-}
-
 pub fn fmt_usd(v: f64) -> String {
     format!("US$ {v:.4}")
 }
@@ -791,13 +797,13 @@ pub fn fmt_ms(ms: u64) -> String {
 pub fn fmt_relative(d: &chrono::DateTime<chrono::Utc>) -> String {
     let secs = (chrono::Utc::now() - *d).num_seconds().max(0);
     if secs < 60 {
-        "agora".into()
+        tr("agora").into()
     } else if secs < 3600 {
-        format!("{} min", secs / 60)
+        trf("{} min", &[&(secs / 60)])
     } else if secs < 86400 {
-        format!("{} h", secs / 3600)
+        trf("{} h", &[&(secs / 3600)])
     } else {
-        format!("{} d", secs / 86400)
+        trf("{} d", &[&(secs / 86400)])
     }
 }
 
@@ -886,7 +892,7 @@ pub fn help_icon(ui: &mut Ui, help: &Help) {
                 .min_size(egui::vec2(20.0, 20.0))
                 .stroke(egui::Stroke::new(1.0, p.accent)),
         )
-        .on_hover_text("Ajuda e passo a passo");
+        .on_hover_text(tr("Ajuda e passo a passo"));
     if r.clicked() {
         open = true;
     }
@@ -907,9 +913,9 @@ fn help_modal(ctx: &egui::Context, help: &Help) -> bool {
         let dark = ui.visuals().dark_mode;
         let accent = Tone::Info.color(dark);
         ui.horizontal(|ui| {
-            ui.label(RichText::new(help.title).font(semibold(18.0)));
+            ui.label(RichText::new(tr(help.title)).font(semibold(18.0)));
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                if ui.small_button("✕").on_hover_text("Fechar").clicked() {
+                if ui.small_button("✕").on_hover_text(tr("Fechar")).clicked() {
                     close = true;
                 }
             });
@@ -922,7 +928,7 @@ fn help_modal(ctx: &egui::Context, help: &Help) -> bool {
             .show(ui, |ui| {
                 ui.set_width(ui.available_width() - 8.0);
                 if !help.intro.is_empty() {
-                    ui.add(egui::Label::new(RichText::new(help.intro).size(13.5)).wrap());
+                    ui.add(egui::Label::new(RichText::new(tr(help.intro)).size(13.5)).wrap());
                     ui.add_space(8.0);
                 }
                 for (i, (title, body)) in help.steps.iter().enumerate() {
@@ -940,16 +946,16 @@ fn help_modal(ctx: &egui::Context, help: &Help) -> bool {
                         ui.add_space(4.0);
                         ui.vertical(|ui| {
                             ui.set_width(ui.available_width());
-                            ui.label(RichText::new(*title).font(semibold(14.0)));
-                            ui.add(egui::Label::new(RichText::new(*body).weak()).wrap());
+                            ui.label(RichText::new(tr(title)).font(semibold(14.0)));
+                            ui.add(egui::Label::new(RichText::new(tr(body)).weak()).wrap());
                         });
                     });
                     ui.add_space(8.0);
                 }
                 if !help.code.is_empty() {
                     ui.horizontal(|ui| {
-                        ui.label(RichText::new("No terminal").font(semibold(13.0)));
-                        if ui.small_button("Copiar").clicked() {
+                        ui.label(RichText::new(tr("No terminal")).font(semibold(13.0)));
+                        if ui.small_button(tr("Copiar")).clicked() {
                             ui.ctx().copy_text(help.code.to_string());
                         }
                     });
@@ -962,19 +968,19 @@ fn help_modal(ctx: &egui::Context, help: &Help) -> bool {
                         ui.add_space(4.0);
                     }
                     for (title, body) in help.notes {
-                        ui.label(RichText::new(*title).font(semibold(13.5)));
-                        ui.add(egui::Label::new(RichText::new(*body).weak()).wrap());
+                        ui.label(RichText::new(tr(title)).font(semibold(13.5)));
+                        ui.add(egui::Label::new(RichText::new(tr(body)).weak()).wrap());
                         ui.add_space(8.0);
                     }
                 }
                 if !help.links.is_empty() {
                     ui.separator();
                     ui.add_space(4.0);
-                    ui.label(RichText::new("Links").font(semibold(13.0)));
+                    ui.label(RichText::new(tr("Links")).font(semibold(13.0)));
                     for (label, url) in help.links {
                         ui.horizontal_wrapped(|ui| {
-                            ui.hyperlink_to(*label, *url).on_hover_text(*url);
-                            if ui.small_button("copiar").clicked() {
+                            ui.hyperlink_to(tr(label), *url).on_hover_text(*url);
+                            if ui.small_button(tr("copiar")).clicked() {
                                 ui.ctx().copy_text(url.to_string());
                             }
                         });
@@ -984,7 +990,7 @@ fn help_modal(ctx: &egui::Context, help: &Help) -> bool {
             });
         ui.add_space(10.0);
         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-            if primary_button(ui, "Fechar").clicked() {
+            if primary_button(ui, tr("Fechar")).clicked() {
                 close = true;
             }
         });

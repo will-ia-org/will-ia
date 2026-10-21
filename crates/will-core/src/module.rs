@@ -46,6 +46,22 @@ impl std::fmt::Display for Module {
     }
 }
 
+/// Estado de um módulo, como mostrado nas bolinhas da UI.
+///
+/// Semântica (ver `will_desktop::ui::module_label`):
+/// - `Running` (verde) = **pronto**: habilitado, configurado e operacional, mesmo
+///   ocioso. Motor: token ativo + KB ok (com ou sem processos vivos). Voz:
+///   habilitada + chave da OpenAI (em sessão ou não). Google: pelo menos uma conta
+///   conectada com token válido. Agenda/Gmail: habilitado + uma conta ok com o
+///   escopo necessário. Telegram: polling no ar. WhatsApp: uma conta conectada.
+///   MCP: servidor ouvindo.
+/// - `Starting` (azul) = iniciando / transição.
+/// - `Degraded(motivo)` (amarelo) = habilitado, mas falta algo ou algo falha;
+///   sempre com motivo legível ("sem token ativo", "nenhuma conta conectada"…).
+/// - `Error(motivo)` (vermelho) = falhou ao subir / erro fatal, com motivo.
+/// - `Disabled` (cinza) = desligado nas configurações.
+/// - `Stopped` (cinza) = parado explicitamente (ex.: Telegram após `stop`).
+///   **Não** usar para "ocioso mas pronto": isso é `Running`.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "state", content = "detail", rename_all = "snake_case")]
 pub enum ModuleStatus {

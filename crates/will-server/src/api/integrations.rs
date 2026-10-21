@@ -78,21 +78,21 @@ fn rt(state: &App) -> Result<std::sync::Arc<will_realtime::RealtimeManager>, sup
 pub async fn voice_start(State(state): State<App>) -> ApiResult<Value> {
     let r = rt(&state)?;
     r.start().await.map_err(bad)?;
-    state.set_module_status(will_core::Module::Realtime, r.module_status());
+    crate::modules::recompute_realtime_status(&state);
     Ok(Json(json!({ "ok": true, "active": true })))
 }
 
 pub async fn voice_stop(State(state): State<App>) -> ApiResult<Value> {
     let r = rt(&state)?;
     r.stop().await;
-    state.set_module_status(will_core::Module::Realtime, r.module_status());
+    crate::modules::recompute_realtime_status(&state);
     Ok(Json(json!({ "ok": true, "active": false })))
 }
 
 pub async fn voice_toggle(State(state): State<App>) -> ApiResult<Value> {
     let r = rt(&state)?;
     let active = r.toggle().await.map_err(bad)?;
-    state.set_module_status(will_core::Module::Realtime, r.module_status());
+    crate::modules::recompute_realtime_status(&state);
     Ok(Json(json!({ "ok": true, "active": active })))
 }
 

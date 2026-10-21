@@ -586,7 +586,9 @@ async fn handle_engine_event(state: &Arc<AppState>, ev: EngineEvent) {
             state.bus.emit(Event::StaleSession { thread_id: thread });
         }
         EngineEvent::ProcessStarted { thread, .. } => {
-            state.set_module_status(will_core::Module::Engine, will_core::ModuleStatus::Running);
+            // Processo subiu: motor está pronto (limpa Degraded transitório de
+            // auth/rate limit). A contagem de vivos vem de `engine.stats()`.
+            crate::modules::recompute_engine_status(state);
             emit_thread_updated(state, thread).await;
         }
         EngineEvent::ProcessExited {

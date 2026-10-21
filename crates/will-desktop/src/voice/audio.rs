@@ -5,6 +5,7 @@
 //! Saída: `AudioOut::Pcm` (PCM16 24 kHz) → fila → reamostragem para a taxa do
 //! dispositivo → todos os canais.
 
+use crate::i18n::{tr, trf};
 use bytes::Bytes;
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 use parking_lot::Mutex;
@@ -254,23 +255,23 @@ impl AudioPipeline {
                     match build {
                         Ok(s) => {
                             if let Err(e) = s.play() {
-                                input_error = Some(format!("microfone: {e}"));
+                                input_error = Some(trf("microfone: {}", &[&e]));
                             }
                             Some(s)
                         }
                         Err(e) => {
-                            input_error = Some(format!("microfone: {e}"));
+                            input_error = Some(trf("microfone: {}", &[&e]));
                             None
                         }
                     }
                 }
                 Err(e) => {
-                    input_error = Some(format!("microfone: {e}"));
+                    input_error = Some(trf("microfone: {}", &[&e]));
                     None
                 }
             },
             None => {
-                input_error = Some("nenhum dispositivo de entrada de áudio".into());
+                input_error = Some(tr("nenhum dispositivo de entrada de áudio").into());
                 None
             }
         };
@@ -355,23 +356,23 @@ impl AudioPipeline {
                     match build {
                         Ok(s) => {
                             if let Err(e) = s.play() {
-                                output_error = Some(format!("alto-falante: {e}"));
+                                output_error = Some(trf("alto-falante: {}", &[&e]));
                             }
                             Some(s)
                         }
                         Err(e) => {
-                            output_error = Some(format!("alto-falante: {e}"));
+                            output_error = Some(trf("alto-falante: {}", &[&e]));
                             None
                         }
                     }
                 }
                 Err(e) => {
-                    output_error = Some(format!("alto-falante: {e}"));
+                    output_error = Some(trf("alto-falante: {}", &[&e]));
                     None
                 }
             },
             None => {
-                output_error = Some("nenhum dispositivo de saída de áudio".into());
+                output_error = Some(tr("nenhum dispositivo de saída de áudio").into());
                 None
             }
         };
@@ -466,7 +467,7 @@ impl InputMonitor {
             return Self {
                 _stream: None,
                 level_bits,
-                error: Some("nenhum dispositivo de entrada".into()),
+                error: Some(tr("nenhum dispositivo de entrada").into()),
                 device_name: String::new(),
             };
         };
@@ -480,7 +481,7 @@ impl InputMonitor {
                 return Self {
                     _stream: None,
                     level_bits,
-                    error: Some(format!("microfone: {e}")),
+                    error: Some(trf("microfone: {}", &[&e])),
                     device_name,
                 }
             }
@@ -505,7 +506,7 @@ impl InputMonitor {
         );
         match stream {
             Ok(s) => {
-                let err = s.play().err().map(|e| format!("microfone: {e}"));
+                let err = s.play().err().map(|e| trf("microfone: {}", &[&e]));
                 Self {
                     _stream: Some(s),
                     level_bits,
@@ -516,7 +517,7 @@ impl InputMonitor {
             Err(e) => Self {
                 _stream: None,
                 level_bits,
-                error: Some(format!("microfone: {e}")),
+                error: Some(trf("microfone: {}", &[&e])),
                 device_name,
             },
         }
@@ -541,14 +542,15 @@ pub fn play_cue(
     volume: f32,
 ) -> Result<String, String> {
     let host = audio_host();
-    let dev = find_device(&host, output_name, false).ok_or("nenhum dispositivo de saída")?;
+    let dev = find_device(&host, output_name, false)
+        .ok_or_else(|| tr("nenhum dispositivo de saída").to_string())?;
     let device_name = dev
         .description()
         .map(|d| d.name().to_string())
         .unwrap_or_default();
     let cfg = dev
         .default_output_config()
-        .map_err(|e| format!("saída: {e}"))?;
+        .map_err(|e| trf("saída: {}", &[&e]))?;
     let rate = cfg.sample_rate() as f32;
     let channels = cfg.channels() as usize;
     let total_ms: u32 = notes.iter().map(|n| n.1).sum();
@@ -599,7 +601,7 @@ pub fn play_cue(
             match stream {
                 Ok(s) => {
                     if let Err(e) = s.play() {
-                        let _ = tx.send(Err(format!("saída: {e}")));
+                        let _ = tx.send(Err(trf("saída: {}", &[&e])));
                         return;
                     }
                     let _ = tx.send(Ok(()));
@@ -607,7 +609,7 @@ pub fn play_cue(
                     drop(s);
                 }
                 Err(e) => {
-                    let _ = tx.send(Err(format!("saída: {e}")));
+                    let _ = tx.send(Err(trf("saída: {}", &[&e])));
                 }
             }
         })
@@ -615,7 +617,7 @@ pub fn play_cue(
     match rx.recv_timeout(std::time::Duration::from_secs(5)) {
         Ok(Ok(())) => Ok(device_name),
         Ok(Err(e)) => Err(e),
-        Err(_) => Err("tempo esgotado ao abrir a saída".into()),
+        Err(_) => Err(tr("tempo esgotado ao abrir a saída").into()),
     }
 }
 

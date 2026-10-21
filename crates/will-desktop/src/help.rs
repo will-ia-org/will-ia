@@ -2,6 +2,11 @@
 //!
 //! Nada daqui ocupa espaço nas páginas: cada seção que precisa de orientação
 //! longa aponta para um `Help` e a UI desenha só o ícone.
+//!
+//! Idioma: os textos ficam em pt-BR (chave de tradução) e a tradução para
+//! inglês de cada título, intro, passo, nota e rótulo de link está em
+//! `crate::i18n::TABLE`; quem renderiza o `Help` passa cada campo por
+//! `i18n::tr` (as `&'static str` daqui são chaves válidas para `tr`).
 
 use crate::ui::Help;
 

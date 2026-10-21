@@ -2,6 +2,7 @@
 //! mostrando o estado da sessão (ouvindo / pensando / falando) e o nível do
 //! microfone. É um viewport "deferred" do egui, redesenhado por conta própria.
 
+use crate::i18n::{tr, trf};
 use parking_lot::Mutex;
 use std::sync::Arc;
 use std::time::Duration;
@@ -23,17 +24,20 @@ pub const SIZE: [f32; 2] = [280.0, 84.0];
 
 pub fn label_for(state: &str) -> (&'static str, egui::Color32) {
     match state {
-        "connecting" => ("conectando…", egui::Color32::from_rgb(150, 150, 160)),
-        "listening" => ("ouvindo", egui::Color32::from_rgb(60, 180, 120)),
-        "user_speaking" => ("você está falando", egui::Color32::from_rgb(60, 200, 140)),
-        "thinking" => ("pensando", egui::Color32::from_rgb(220, 160, 40)),
+        "connecting" => (tr("conectando…"), egui::Color32::from_rgb(150, 150, 160)),
+        "listening" => (tr("ouvindo"), egui::Color32::from_rgb(60, 180, 120)),
+        "user_speaking" => (
+            tr("você está falando"),
+            egui::Color32::from_rgb(60, 200, 140),
+        ),
+        "thinking" => (tr("pensando"), egui::Color32::from_rgb(220, 160, 40)),
         "brain_working" => (
-            "consultando o cérebro",
+            tr("consultando o cérebro"),
             egui::Color32::from_rgb(220, 120, 40),
         ),
-        "speaking" => ("falando", egui::Color32::from_rgb(70, 130, 230)),
-        "error" => ("erro", egui::Color32::from_rgb(220, 70, 70)),
-        _ => ("voz", egui::Color32::from_rgb(150, 150, 160)),
+        "speaking" => (tr("falando"), egui::Color32::from_rgb(70, 130, 230)),
+        "error" => (tr("erro"), egui::Color32::from_rgb(220, 70, 70)),
+        _ => (tr("voz"), egui::Color32::from_rgb(150, 150, 160)),
     }
 }
 
@@ -47,7 +51,7 @@ pub fn show(ctx: &egui::Context, shared: &Shared) {
         (monitor.y - SIZE[1] - 72.0).max(0.0),
     );
     let builder = egui::ViewportBuilder::default()
-        .with_title("will-ia · voz")
+        .with_title(tr("will-ia · voz"))
         .with_inner_size(SIZE)
         .with_min_inner_size(SIZE)
         .with_position(pos)
@@ -101,12 +105,12 @@ pub fn show(ctx: &egui::Context, shared: &Shared) {
                             ui.label(egui::RichText::new(label).strong().size(15.0).color(color));
                             let sub = if s.ptt_mode {
                                 if s.ptt_down {
-                                    "segurando para falar".to_string()
+                                    tr("segurando para falar").to_string()
                                 } else {
-                                    "segure o atalho para falar".to_string()
+                                    tr("segure o atalho para falar").to_string()
                                 }
                             } else if s.pending_brain > 0 {
-                                format!("{} tarefa(s) no cérebro", s.pending_brain)
+                                trf("{} tarefa(s) no cérebro", &[&s.pending_brain])
                             } else {
                                 s.last_transcript
                                     .clone()

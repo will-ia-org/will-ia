@@ -4,6 +4,7 @@
 
 use super::SettingsState;
 use crate::help;
+use crate::i18n::{tr, trf};
 use crate::pages::{Cx, Nav, SettingsSection};
 use crate::service::{j, Loader, Task};
 use crate::ui::{self, Tone};
@@ -232,14 +233,14 @@ impl ExternalPage {
                                 .map(|a| a.len())
                                 .unwrap_or(0);
                             cx.toasts
-                                .success(format!("'{name}' respondeu: {n} ferramenta(s)."));
+                                .success(trf("'{}' respondeu: {} ferramenta(s).", &[&name, &n]));
                         } else {
                             cx.toasts
-                                .error(format!("'{name}' falhou: {}", ui::s(&v, "error")));
+                                .error(trf("'{}' falhou: {}", &[&name, &ui::s(&v, "error")]));
                         }
                         self.reload(cx);
                     }
-                    Err(e) => cx.toasts.error(format!("Teste de '{name}': {e}")),
+                    Err(e) => cx.toasts.error(trf("Teste de '{}': {}", &[&name, &e])),
                 }
             }
         }
@@ -250,11 +251,11 @@ impl ExternalPage {
                 match r {
                     Ok(_) => {
                         cx.toasts
-                            .success(format!("Servidor '{name}' salvo; .mcp.json regravado."));
+                            .success(trf("Servidor '{}' salvo; .mcp.json regravado.", &[&name]));
                         self.editor = None;
                         self.reload(cx);
                     }
-                    Err(e) => cx.toasts.error(format!("Não salvou '{name}': {e}")),
+                    Err(e) => cx.toasts.error(trf("Não salvou '{}': {}", &[&name, &e])),
                 }
             }
         }
@@ -264,7 +265,7 @@ impl ExternalPage {
                 self.toggle_task = None;
                 match r {
                     Ok(_) => self.reload(cx),
-                    Err(e) => cx.toasts.error(format!("Não alterou '{name}': {e}")),
+                    Err(e) => cx.toasts.error(trf("Não alterou '{}': {}", &[&name, &e])),
                 }
             }
         }
@@ -274,13 +275,13 @@ impl ExternalPage {
                 self.delete_task = None;
                 match r {
                     Ok(_) => {
-                        cx.toasts.success(format!("Servidor '{name}' removido."));
+                        cx.toasts.success(trf("Servidor '{}' removido.", &[&name]));
                         if self.editor.as_ref().is_some_and(|e| e.name == name) {
                             self.editor = None;
                         }
                         self.reload(cx);
                     }
-                    Err(e) => cx.toasts.error(format!("Não removeu '{name}': {e}")),
+                    Err(e) => cx.toasts.error(trf("Não removeu '{}': {}", &[&name, &e])),
                 }
             }
         }
@@ -301,8 +302,8 @@ impl ExternalPage {
                             })
                             .unwrap_or_default();
                         let msg = match found {
-                            Some(f) => format!("Importados {count} de {f} servidor(es)."),
-                            None => format!("Importados {count} servidor(es)."),
+                            Some(f) => trf("Importados {} de {} servidor(es).", &[&count, &f]),
+                            None => trf("Importados {} servidor(es).", &[&count]),
                         };
                         if names.is_empty() {
                             cx.toasts.info(msg);
@@ -313,7 +314,7 @@ impl ExternalPage {
                         self.import_json_buf.clear();
                         self.reload(cx);
                     }
-                    Err(e) => cx.toasts.error(format!("Importação: {e}")),
+                    Err(e) => cx.toasts.error(trf("Importação: {}", &[&e])),
                 }
             }
         }
@@ -333,24 +334,24 @@ impl ExternalPage {
 
     pub fn ui(&mut self, ui: &mut egui::Ui, cx: &mut Cx, _st: &mut SettingsState) {
         self.poll(cx);
-        ui::heading_help(ui, "MCPs externos", Some("Servidores MCP de terceiros para os agentes; gravados com o will_ia em <kb>/.mcp.json, segredos só por variável de ambiente."), &help::EXTERNAL_MCP);
+        ui::heading_help(ui, tr("MCPs externos"), Some(tr("Servidores MCP de terceiros para os agentes; gravados com o will_ia em <kb>/.mcp.json, segredos só por variável de ambiente.")), &help::EXTERNAL_MCP);
 
         // ---- barra de ações ----
         ui.horizontal_wrapped(|ui| {
-            if ui::primary_button(ui, "Adicionar").clicked() {
+            if ui::primary_button(ui, tr("Adicionar")).clicked() {
                 self.editor = Some(Editor::new_server());
             }
             let importing = self.import_task.is_some();
-            if ui.add_enabled(!importing, egui::Button::new("Importar do Claude (~/.claude.json)")).on_hover_text("Lê os servidores do escopo de usuário do Claude Code e traz para o catálogo.").clicked() {
+            if ui.add_enabled(!importing, egui::Button::new(tr("Importar do Claude (~/.claude.json)"))).on_hover_text(tr("Lê os servidores do escopo de usuário do Claude Code e traz para o catálogo.")).clicked() {
                 self.import_task = Some(cx.svc.call(|s| async move { j(api::external_import_claude(State(s)).await) }));
             }
-            if ui.add_enabled(!importing, egui::Button::new(if self.show_import_json { "Fechar JSON" } else { "Importar JSON" })).clicked() {
+            if ui.add_enabled(!importing, egui::Button::new(if self.show_import_json { tr("Fechar JSON") } else { tr("Importar JSON") })).clicked() {
                 self.show_import_json = !self.show_import_json;
             }
-            if ui.button("Ver .mcp.json").on_hover_text("Abre a seção Base de conhecimento, onde o arquivo gerado pode ser inspecionado.").clicked() {
+            if ui.button(tr("Ver .mcp.json")).on_hover_text(tr("Abre a seção Base de conhecimento, onde o arquivo gerado pode ser inspecionado.")).clicked() {
                 *cx.go = Some(Nav::Settings(SettingsSection::Kb));
             }
-            if ui.button("Atualizar").clicked() {
+            if ui.button(tr("Atualizar")).clicked() {
                 self.list.loaded_at = None;
             }
             if importing || self.list.loading() {
@@ -359,18 +360,21 @@ impl ExternalPage {
         });
 
         if self.show_import_json {
-            ui::section(ui, "Importar JSON", |ui| {
+            ui::section(ui, tr("Importar JSON"), |ui| {
                 ui.label(
-                    egui::RichText::new(
+                    egui::RichText::new(tr(
                         "Cole o bloco {\"mcpServers\": {...}} publicado no README do servidor.",
-                    )
+                    ))
                     .weak()
                     .small(),
                 );
                 ui::lines_editor(ui, &mut self.import_json_buf, 8);
                 ui.horizontal(|ui| {
                     let ok = !self.import_json_buf.trim().is_empty() && self.import_task.is_none();
-                    if ui.add_enabled(ok, egui::Button::new("Importar")).clicked() {
+                    if ui
+                        .add_enabled(ok, egui::Button::new(tr("Importar")))
+                        .clicked()
+                    {
                         let text = self.import_json_buf.clone();
                         self.import_task = Some(cx.svc.call(move |s| async move {
                             j(api::external_import_json(
@@ -382,7 +386,7 @@ impl ExternalPage {
                             .await)
                         }));
                     }
-                    if ui.button("Cancelar").clicked() {
+                    if ui.button(tr("Cancelar")).clicked() {
                         self.show_import_json = false;
                     }
                 });
@@ -407,7 +411,7 @@ impl ExternalPage {
             .unwrap_or_default();
         if servers.is_empty() && !self.list.loading() {
             ui.add_space(8.0);
-            ui.label(egui::RichText::new("Nenhum MCP externo cadastrado. Adicione um, importe do Claude Code ou cole o JSON de um README.").weak());
+            ui.label(egui::RichText::new(tr("Nenhum MCP externo cadastrado. Adicione um, importe do Claude Code ou cole o JSON de um README.")).weak());
         }
         for srv in &servers {
             self.server_card(ui, cx, srv);
@@ -415,7 +419,16 @@ impl ExternalPage {
 
         // ---- confirmação de remoção ----
         if let Some(name) = self.confirm_delete.clone() {
-            let c = ui::Confirm { title: "Remover servidor".into(), body: format!("Remover '{name}' do catálogo? Ele sai do .mcp.json da base de conhecimento; os segredos associados ficam no cofre."), confirm_label: "Remover".into(), danger: true, tag: "del-ext-mcp".into() };
+            let c = ui::Confirm {
+                title: tr("Remover servidor").into(),
+                body: trf(
+                    "Remover '{}' do catálogo? Ele sai do .mcp.json da base de conhecimento; os segredos associados ficam no cofre.",
+                    &[&name],
+                ),
+                confirm_label: tr("Remover").into(),
+                danger: true,
+                tag: "del-ext-mcp".into(),
+            };
             if let Some(ok) = ui::confirm_modal(ui.ctx(), &c) {
                 self.confirm_delete = None;
                 if ok {
@@ -443,17 +456,17 @@ impl ExternalPage {
                     Tone::Info,
                 );
                 if enabled {
-                    ui::badge(ui, "habilitado", Tone::Success);
+                    ui::badge(ui, tr("habilitado"), Tone::Success);
                 } else {
-                    ui::badge(ui, "desabilitado", Tone::Neutral);
+                    ui::badge(ui, tr("desabilitado"), Tone::Neutral);
                 }
                 if !ui::b(srv, "auto_allow_tools") {
-                    ui::badge(ui, "ferramentas sob aprovação do Claude", Tone::Warning);
+                    ui::badge(ui, tr("ferramentas sob aprovação do Claude"), Tone::Warning);
                 }
                 if let Some(allowed) = srv.get("allowed_tools").and_then(|a| a.as_array()) {
                     ui::badge(
                         ui,
-                        &format!("{} ferramenta(s) permitida(s)", allowed.len()),
+                        &trf("{} ferramenta(s) permitida(s)", &[&allowed.len()]),
                         Tone::Neutral,
                     );
                 }
@@ -496,7 +509,7 @@ impl ExternalPage {
                     .map(|k| format!("${{{}}}", mcp_secret_env_name(&name, k)))
                     .collect();
                 ui.label(
-                    egui::RichText::new(format!("segredos: {}", vars.join(", ")))
+                    egui::RichText::new(trf("segredos: {}", &[&vars.join(", ")]))
                         .weak()
                         .small(),
                 );
@@ -511,13 +524,13 @@ impl ExternalPage {
                             .and_then(|a| a.as_array())
                             .map(|a| a.len())
                             .unwrap_or(0);
-                        ui::badge(ui, &format!("ok · {n} ferramenta(s)"), Tone::Success);
+                        ui::badge(ui, &trf("ok · {} ferramenta(s)", &[&n]), Tone::Success);
                         let sn = ui::s(t, "server_name");
                         if !sn.is_empty() {
                             ui.label(egui::RichText::new(sn).small());
                         }
                     } else {
-                        ui::badge(ui, "erro", Tone::Danger);
+                        ui::badge(ui, tr("erro"), Tone::Danger);
                         let err = ui::s(t, "error");
                         ui.add(
                             egui::Label::new(
@@ -531,7 +544,7 @@ impl ExternalPage {
                     }
                     if !at.is_empty() {
                         ui.label(
-                            egui::RichText::new(format!("testado em {at}"))
+                            egui::RichText::new(trf("testado em {}", &[&at]))
                                 .weak()
                                 .small(),
                         );
@@ -542,11 +555,11 @@ impl ExternalPage {
                         .filter(|a| !a.is_empty())
                     {
                         let names: Vec<&str> = tools.iter().filter_map(|x| x.as_str()).collect();
-                        ui.label(egui::RichText::new("ferramentas").weak().small())
+                        ui.label(egui::RichText::new(tr("ferramentas")).weak().small())
                             .on_hover_text(names.join("\n"));
                     }
                 }
-                None => ui::badge(ui, "não testado", Tone::Neutral),
+                None => ui::badge(ui, tr("não testado"), Tone::Neutral),
             });
             ui.add_space(4.0);
             ui.horizontal(|ui| {
@@ -554,22 +567,22 @@ impl ExternalPage {
                 let toggling = self.toggle_task.as_ref().is_some_and(|(n, _)| n == &name);
                 let deleting = self.delete_task.as_ref().is_some_and(|(n, _)| n == &name);
                 let busy = testing || toggling || deleting;
-                if ui.add_enabled(!busy, egui::Button::new("Testar")).on_hover_text("Sobe o servidor (ou conecta na URL), lista as ferramentas e encerra. Até 45 s.").clicked() {
+                if ui.add_enabled(!busy, egui::Button::new(tr("Testar"))).on_hover_text(tr("Sobe o servidor (ou conecta na URL), lista as ferramentas e encerra. Até 45 s.")).clicked() {
                     let n = name.clone();
                     self.test_task = Some((name.clone(), cx.svc.call(move |s| async move { j(api::external_test(State(s), Path(n)).await) })));
                 }
                 if testing {
                     ui.spinner();
-                    ui.label(egui::RichText::new("testando…").weak().small());
+                    ui.label(egui::RichText::new(tr("testando…")).weak().small());
                 }
-                if ui.add_enabled(!busy, egui::Button::new("Editar")).clicked() {
+                if ui.add_enabled(!busy, egui::Button::new(tr("Editar"))).clicked() {
                     self.editor = Some(Editor::from_value(srv));
                 }
-                if ui.add_enabled(!busy, egui::Button::new("Remover")).clicked() {
+                if ui.add_enabled(!busy, egui::Button::new(tr("Remover"))).clicked() {
                     self.confirm_delete = Some(name.clone());
                 }
                 ui.add_space(12.0);
-                ui.label("Habilitado");
+                ui.label(tr("Habilitado"));
                 let mut on = enabled;
                 ui.add_enabled_ui(!busy, |ui| {
                     if ui::toggle(ui, &mut on).changed() {
@@ -592,34 +605,36 @@ impl ExternalPage {
             return;
         };
         let title = if ed.is_new {
-            "Novo servidor".to_string()
+            tr("Novo servidor").to_string()
         } else {
-            format!("Editar {}", ed.name)
+            trf("Editar {}", &[&ed.name])
         };
         let saving = self.save_task.is_some();
         let mut action: Option<bool> = None; // Some(true) = salvar, Some(false) = cancelar
         ui::section_help(ui, &title, Some(&help::EXTERNAL_EDITOR), |ui| {
-            ui::field(ui, "Nome", Some("Letras, números, _ e -. Vira a chave em mcpServers e o prefixo das variáveis de segredo."), |ui| {
+            ui::field(ui, tr("Nome"), Some(tr("Letras, números, _ e -. Vira a chave em mcpServers e o prefixo das variáveis de segredo.")), |ui| {
                 ui.add_enabled_ui(ed.is_new, |ui| {
-                    ui::text_input(ui, &mut ed.name, "ex.: github");
+                    ui::text_input(ui, &mut ed.name, tr("ex.: github"));
                 });
                 if ed.is_new && !ed.name.is_empty() && !ed.name_valid() {
-                    ui::error_text(ui, "nome inválido (ou reservado)");
+                    ui::error_text(ui, tr("nome inválido (ou reservado)"));
                 }
             });
             ui::field(
                 ui,
-                "Tipo",
-                Some("stdio = processo local; http = Streamable HTTP; sse = legado."),
+                tr("Tipo"),
+                Some(tr(
+                    "stdio = processo local; http = Streamable HTTP; sse = legado.",
+                )),
                 |ui| {
                     ui::select(
                         ui,
                         "ext-kind",
                         &mut ed.kind,
                         &[
-                            ("stdio", "stdio (processo local)"),
-                            ("http", "http (Streamable HTTP)"),
-                            ("sse", "sse (legado)"),
+                            ("stdio", tr("stdio (processo local)")),
+                            ("http", tr("http (Streamable HTTP)")),
+                            ("sse", tr("sse (legado)")),
                         ],
                     );
                 },
@@ -627,48 +642,64 @@ impl ExternalPage {
             if ed.kind == "stdio" {
                 ui::field(
                     ui,
-                    "Comando",
-                    Some("Executável no PATH ou caminho absoluto. Ex.: npx, uvx, node."),
+                    tr("Comando"),
+                    Some(tr(
+                        "Executável no PATH ou caminho absoluto. Ex.: npx, uvx, node.",
+                    )),
                     |ui| {
                         ui::text_input(ui, &mut ed.command, "npx");
                     },
                 );
                 ui::field(
                     ui,
-                    "Argumentos",
-                    Some("Um por linha. Ex.: -y / @modelcontextprotocol/server-github"),
+                    tr("Argumentos"),
+                    Some(tr(
+                        "Um por linha. Ex.: -y / @modelcontextprotocol/server-github",
+                    )),
                     |ui| {
                         ui::lines_editor(ui, &mut ed.args_buf, 3);
                     },
                 );
-                ui::field(ui, "Pasta de trabalho (cwd)", Some("Opcional."), |ui| {
-                    ui::text_input(ui, &mut ed.cwd, "opcional");
-                });
-                ui.label(egui::RichText::new("Variáveis de ambiente").strong());
+                ui::field(
+                    ui,
+                    tr("Pasta de trabalho (cwd)"),
+                    Some(tr("Opcional.")),
+                    |ui| {
+                        ui::text_input(ui, &mut ed.cwd, tr("opcional"));
+                    },
+                );
+                ui.label(egui::RichText::new(tr("Variáveis de ambiente")).strong());
                 kv_editor(ui, "ext-env", &ed.name, &mut ed.env);
             } else {
-                ui::field(ui, "URL", Some("Endpoint do servidor remoto."), |ui| {
-                    ui::text_input(ui, &mut ed.url, "https://mcp.exemplo.com/mcp");
-                });
-                ui.label(egui::RichText::new("Headers HTTP").strong());
+                ui::field(
+                    ui,
+                    tr("URL"),
+                    Some(tr("Endpoint do servidor remoto.")),
+                    |ui| {
+                        ui::text_input(ui, &mut ed.url, "https://mcp.exemplo.com/mcp");
+                    },
+                );
+                ui.label(egui::RichText::new(tr("Headers HTTP")).strong());
                 kv_editor(ui, "ext-headers", &ed.name, &mut ed.headers);
             }
             ui.add_space(6.0);
-            ui::field(ui, "Liberar ferramentas automaticamente", Some("Entra na allowlist do Claude Code (mcp__<nome>__*); desligado, o Claude pede aprovação a cada uso."), |ui| {
+            ui::field(ui, tr("Liberar ferramentas automaticamente"), Some(tr("Entra na allowlist do Claude Code (mcp__<nome>__*); desligado, o Claude pede aprovação a cada uso.")), |ui| {
                 ui::toggle(ui, &mut ed.auto_allow_tools);
             });
             ui::field(
                 ui,
-                "Ferramentas permitidas",
-                Some("Uma por linha; vazio = todas as ferramentas do servidor."),
+                tr("Ferramentas permitidas"),
+                Some(tr(
+                    "Uma por linha; vazio = todas as ferramentas do servidor.",
+                )),
                 |ui| {
                     ui::lines_editor(ui, &mut ed.allowed_buf, 3);
                 },
             );
             ui::field(
                 ui,
-                "Habilitado",
-                Some("Desabilitado não entra no .mcp.json."),
+                tr("Habilitado"),
+                Some(tr("Desabilitado não entra no .mcp.json.")),
                 |ui| {
                     ui::toggle(ui, &mut ed.enabled);
                 },
@@ -678,7 +709,7 @@ impl ExternalPage {
                     .add_enabled(
                         ed.can_save() && !saving,
                         egui::Button::new(
-                            egui::RichText::new("Salvar").color(egui::Color32::WHITE),
+                            egui::RichText::new(tr("Salvar")).color(egui::Color32::WHITE),
                         )
                         .fill(Tone::Info.color(true)),
                     )
@@ -687,7 +718,7 @@ impl ExternalPage {
                     action = Some(true);
                 }
                 if ui
-                    .add_enabled(!saving, egui::Button::new("Cancelar"))
+                    .add_enabled(!saving, egui::Button::new(tr("Cancelar")))
                     .clicked()
                 {
                     action = Some(false);
@@ -717,9 +748,9 @@ fn kv_editor(ui: &mut egui::Ui, id: &str, server: &str, rows: &mut Vec<KvRow>) {
         .spacing([8.0, 4.0])
         .show(ui, |ui| {
             if !rows.is_empty() {
-                ui.label(egui::RichText::new("Chave").weak().small());
-                ui.label(egui::RichText::new("Valor").weak().small());
-                ui.label(egui::RichText::new("Segredo").weak().small());
+                ui.label(egui::RichText::new(tr("Chave")).weak().small());
+                ui.label(egui::RichText::new(tr("Valor")).weak().small());
+                ui.label(egui::RichText::new(tr("Segredo")).weak().small());
                 ui.label("");
                 ui.label("");
                 ui.end_row();
@@ -727,15 +758,15 @@ fn kv_editor(ui: &mut egui::Ui, id: &str, server: &str, rows: &mut Vec<KvRow>) {
             for (i, r) in rows.iter_mut().enumerate() {
                 ui.add(
                     egui::TextEdit::singleline(&mut r.key)
-                        .hint_text("CHAVE")
+                        .hint_text(tr("CHAVE"))
                         .desired_width(180.0),
                 );
                 let hint = if r.secret && r.existing_ref.is_some() {
-                    "salvo no cofre · digite para substituir"
+                    tr("salvo no cofre · digite para substituir")
                 } else if r.secret {
-                    "valor (vai para o cofre)"
+                    tr("valor (vai para o cofre)")
                 } else {
-                    "valor"
+                    tr("valor")
                 };
                 ui.add(
                     egui::TextEdit::singleline(&mut r.value)
@@ -757,7 +788,7 @@ fn kv_editor(ui: &mut egui::Ui, id: &str, server: &str, rows: &mut Vec<KvRow>) {
                 } else {
                     ui.label("");
                 }
-                if ui.button("remover").clicked() {
+                if ui.button(tr("remover")).clicked() {
                     remove = Some(i);
                 }
                 ui.end_row();
@@ -767,10 +798,10 @@ fn kv_editor(ui: &mut egui::Ui, id: &str, server: &str, rows: &mut Vec<KvRow>) {
         rows.remove(i);
     }
     ui.horizontal(|ui| {
-        if ui.button("+ variável").clicked() {
+        if ui.button(tr("+ variável")).clicked() {
             rows.push(KvRow::default());
         }
-        if ui.button("+ segredo").clicked() {
+        if ui.button(tr("+ segredo")).clicked() {
             rows.push(KvRow {
                 secret: true,
                 ..Default::default()

@@ -3,6 +3,7 @@
 
 use super::SettingsState;
 use crate::help;
+use crate::i18n::{tr, trf};
 use crate::pages::Cx;
 use crate::service::{j, Loader, Task};
 use crate::ui::{self, SecretAction, SecretField, Tone};
@@ -57,15 +58,15 @@ impl TelegramPage {
                     Ok(v) => {
                         if ui::b(&v, "ok") {
                             cx.toasts
-                                .success(format!("Bot OK: @{}", ui::s(&v, "username")));
+                                .success(trf("Bot OK: @{}", &[&ui::s(&v, "username")]));
                         } else {
                             cx.toasts
-                                .error(format!("Teste do bot falhou: {}", ui::s(&v, "error")));
+                                .error(trf("Teste do bot falhou: {}", &[&ui::s(&v, "error")]));
                         }
                         self.last_test = Some(v);
                     }
                     Err(e) => {
-                        cx.toasts.error(format!("Teste do bot: {e}"));
+                        cx.toasts.error(trf("Teste do bot: {}", &[&e]));
                         self.last_test = None;
                     }
                 }
@@ -75,10 +76,10 @@ impl TelegramPage {
 
     pub fn ui(&mut self, ui: &mut egui::Ui, cx: &mut Cx, st: &mut SettingsState) {
         self.poll(cx);
-        ui::heading_help(ui, "Telegram", Some("Supergrupo com tópicos: 1 tópico = 1 thread. Deny-by-default: só chats E usuários na allowlist conversam."), &help::TELEGRAM);
+        ui::heading_help(ui, tr("Telegram"), Some(tr("Supergrupo com tópicos: 1 tópico = 1 thread. Deny-by-default: só chats E usuários na allowlist conversam.")), &help::TELEGRAM);
 
         // ---- bot ----
-        ui::section(ui, "Bot", |ui| {
+        ui::section(ui, tr("Bot"), |ui| {
             let status = cx
                 .snap
                 .modules
@@ -86,7 +87,7 @@ impl TelegramPage {
                 .cloned()
                 .unwrap_or(will_core::ModuleStatus::Stopped);
             ui.horizontal(|ui| {
-                ui.label("Módulo:");
+                ui.label(tr("Módulo:"));
                 ui::badge(ui, &ui::module_label(&status), ui::tone_for_module(&status));
             });
             ui.add_space(4.0);
@@ -94,8 +95,8 @@ impl TelegramPage {
                 let testing = self.test_task.is_some();
                 let has_token = st.secret_present("telegram_bot_token");
                 if ui
-                    .add_enabled(!testing && has_token, egui::Button::new("Testar bot"))
-                    .on_disabled_hover_text("Salve o token do bot primeiro.")
+                    .add_enabled(!testing && has_token, egui::Button::new(tr("Testar bot")))
+                    .on_disabled_hover_text(tr("Salve o token do bot primeiro."))
                     .clicked()
                 {
                     self.test_task = Some(
@@ -129,9 +130,9 @@ impl TelegramPage {
             });
             if !st.secret_present("telegram_bot_token") {
                 ui.label(
-                    egui::RichText::new(
+                    egui::RichText::new(tr(
                         "Sem token ainda? O ícone ? no título tem o passo a passo (BotFather, grupo, IDs).",
-                    )
+                    ))
                     .weak()
                     .small(),
                 );
@@ -139,8 +140,8 @@ impl TelegramPage {
 
             ui.add_space(8.0);
             ui.horizontal(|ui| {
-                ui.label(egui::RichText::new("Threads do Telegram").strong());
-                if ui.button("atualizar").clicked() {
+                ui.label(egui::RichText::new(tr("Threads do Telegram")).strong());
+                if ui.button(tr("atualizar")).clicked() {
                     self.status.loaded_at = None;
                 }
                 if self.status.loading() {
@@ -159,17 +160,17 @@ impl TelegramPage {
                 .cloned()
                 .unwrap_or_default();
             if threads.is_empty() {
-                ui.label(egui::RichText::new("Nenhuma thread ainda. Cada chat (ou tópico de supergrupo) vira uma thread ao receber a primeira mensagem.").weak().small());
+                ui.label(egui::RichText::new(tr("Nenhuma thread ainda. Cada chat (ou tópico de supergrupo) vira uma thread ao receber a primeira mensagem.")).weak().small());
             } else {
                 egui::Grid::new("tg-threads")
                     .num_columns(4)
                     .striped(true)
                     .spacing([14.0, 4.0])
                     .show(ui, |ui| {
-                        ui.label(egui::RichText::new("Thread key").weak().small());
-                        ui.label(egui::RichText::new("Thread").weak().small());
-                        ui.label(egui::RichText::new("Título").weak().small());
-                        ui.label(egui::RichText::new("Estado").weak().small());
+                        ui.label(egui::RichText::new(tr("Thread key")).weak().small());
+                        ui.label(egui::RichText::new(tr("Thread")).weak().small());
+                        ui.label(egui::RichText::new(tr("Título")).weak().small());
+                        ui.label(egui::RichText::new(tr("Estado")).weak().small());
                         ui.end_row();
                         for t in &threads {
                             ui.monospace(ui::s(t, "thread_key"));
@@ -190,16 +191,16 @@ impl TelegramPage {
                             });
                             ui.horizontal(|ui| {
                                 if ui::b(t, "alive") {
-                                    ui::badge(ui, "vivo", Tone::Success);
+                                    ui::badge(ui, tr("vivo"), Tone::Success);
                                 } else {
-                                    ui::badge(ui, "dormente", Tone::Neutral);
+                                    ui::badge(ui, tr("dormente"), Tone::Neutral);
                                 }
                                 let pending = ui::i(t, "pending");
                                 if pending > 0 {
-                                    ui::badge(ui, &format!("{pending} pendente(s)"), Tone::Info);
+                                    ui::badge(ui, &trf("{} pendente(s)", &[&pending]), Tone::Info);
                                 }
                                 if ui::b(t, "session_expired") {
-                                    ui::badge(ui, "sessão expirada", Tone::Warning);
+                                    ui::badge(ui, tr("sessão expirada"), Tone::Warning);
                                 }
                             });
                             ui.end_row();
@@ -209,11 +210,11 @@ impl TelegramPage {
         });
 
         // ---- configuração ----
-        ui::section(ui, "Configuração", |ui| {
+        ui::section(ui, tr("Configuração"), |ui| {
             ui::field(
                 ui,
-                "Habilitar",
-                Some("Long polling no bot; 1 tópico = 1 thread."),
+                tr("Habilitar"),
+                Some(tr("Long polling no bot; 1 tópico = 1 thread.")),
                 |ui| {
                     ui::toggle(ui, &mut st.draft.telegram.enabled);
                 },
@@ -222,8 +223,10 @@ impl TelegramPage {
             let mut action = SecretAction::None;
             ui::field(
                 ui,
-                "Token do bot",
-                Some("Do @BotFather. Vai para o cofre de segredos; nunca para o banco ou logs."),
+                tr("Token do bot"),
+                Some(tr(
+                    "Do @BotFather. Vai para o cofre de segredos; nunca para o banco ou logs.",
+                )),
                 |ui| {
                     action = self.token.ui(ui, present, "123456789:AA…");
                 },
@@ -237,8 +240,10 @@ impl TelegramPage {
             let t = &mut st.draft.telegram;
             ui::field(
                 ui,
-                "Chats permitidos",
-                Some("IDs (negativos para grupos), separados por vírgula ou linha."),
+                tr("Chats permitidos"),
+                Some(tr(
+                    "IDs (negativos para grupos), separados por vírgula ou linha.",
+                )),
                 |ui| {
                     let mut buf = self.chats_buf.take().unwrap_or_else(|| {
                         t.allowed_chats
@@ -255,8 +260,8 @@ impl TelegramPage {
             );
             ui::field(
                 ui,
-                "Usuários permitidos",
-                Some("IDs de usuário, separados por vírgula ou linha."),
+                tr("Usuários permitidos"),
+                Some(tr("IDs de usuário, separados por vírgula ou linha.")),
                 |ui| {
                     let mut buf = self.users_buf.take().unwrap_or_else(|| {
                         t.allowed_users
@@ -271,65 +276,71 @@ impl TelegramPage {
                     self.users_buf = Some(buf);
                 },
             );
-            ui::field(ui, "Destino padrão", Some("Chat (e tópico, opcional) usado por telegram_send quando o agente não indica destino e pelo anúncio de boot."), |ui| {
+            ui::field(ui, tr("Destino padrão"), Some(tr("Chat (e tópico, opcional) usado por telegram_send quando o agente não indica destino e pelo anúncio de boot.")), |ui| {
                 ui.horizontal(|ui| {
-                    ui.label("chat");
-                    ui::optional_i64(ui, &mut t.default_chat_id, "ex.: -1001234567890");
-                    ui.label("tópico");
-                    ui::optional_i64(ui, &mut t.default_topic_id, "opcional");
+                    ui.label(tr("chat"));
+                    ui::optional_i64(ui, &mut t.default_chat_id, tr("ex.: -1001234567890"));
+                    ui.label(tr("tópico"));
+                    ui::optional_i64(ui, &mut t.default_topic_id, tr("opcional"));
                 });
             });
             ui::field(
                 ui,
-                "Anunciar no boot",
-                Some("Manda uma mensagem ao destino padrão quando o serviço sobe."),
+                tr("Anunciar no boot"),
+                Some(tr(
+                    "Manda uma mensagem ao destino padrão quando o serviço sobe.",
+                )),
                 |ui| {
                     ui::toggle(ui, &mut t.announce_boot);
                 },
             );
             ui::field(
                 ui,
-                "Não autorizados",
-                Some("O que fazer com mensagens fora da allowlist (além de /start)."),
+                tr("Não autorizados"),
+                Some(tr(
+                    "O que fazer com mensagens fora da allowlist (além de /start).",
+                )),
                 |ui| {
                     ui::select(
                         ui,
                         "tg-unauth",
                         &mut t.unauthorized_behavior,
-                        &[("ignore", "Ignorar"), ("reply", "Responder aviso")],
+                        &[("ignore", tr("Ignorar")), ("reply", tr("Responder aviso"))],
                     );
                 },
             );
             ui::field(
                 ui,
-                "Formato da resposta",
-                Some("HTML converte Markdown do Claude para a formatação do Telegram."),
+                tr("Formato da resposta"),
+                Some(tr(
+                    "HTML converte Markdown do Claude para a formatação do Telegram.",
+                )),
                 |ui| {
                     ui::select(
                         ui,
                         "tg-fmt",
                         &mut t.reply_format,
-                        &[("text", "Texto puro"), ("html", "HTML")],
+                        &[("text", tr("Texto puro")), ("html", tr("HTML"))],
                     );
                 },
             );
-            ui::field(ui, "Resumo em áudio", Some("Respostas longas ganham uma versão falada (TTS da OpenAI; requer a API key da seção Voz)."), |ui| {
+            ui::field(ui, tr("Resumo em áudio"), Some(tr("Respostas longas ganham uma versão falada (TTS da OpenAI; requer a API key da seção Voz).")), |ui| {
                 ui::toggle(ui, &mut t.audio_summary);
             });
             ui.add_enabled_ui(t.audio_summary, |ui| {
                 ui::field(
                     ui,
-                    "Mínimo de caracteres",
-                    Some("Só respostas com pelo menos este tamanho ganham áudio."),
+                    tr("Mínimo de caracteres"),
+                    Some(tr("Só respostas com pelo menos este tamanho ganham áudio.")),
                     |ui| {
                         ui::number(ui, &mut t.audio_min_chars, 0..=10_000);
                     },
                 );
-                ui::field(ui, "Voz do áudio", None, |ui| {
+                ui::field(ui, tr("Voz do áudio"), None, |ui| {
                     let opts: Vec<(&str, &str)> = VOICES.iter().map(|v| (*v, *v)).collect();
                     ui::select(ui, "tg-voice", &mut t.audio_voice, &opts);
                 });
-                ui::field(ui, "Velocidade", Some("0,5 a 2,0."), |ui| {
+                ui::field(ui, tr("Velocidade"), Some(tr("0,5 a 2,0.")), |ui| {
                     ui.add(
                         egui::DragValue::new(&mut t.audio_speed)
                             .range(0.5..=2.0)
@@ -338,18 +349,20 @@ impl TelegramPage {
                     );
                 });
             });
-            ui::field(ui, "Transcrever voice notes", Some("Áudios recebidos viram texto antes de ir ao cérebro (requer a API key da OpenAI)."), |ui| {
+            ui::field(ui, tr("Transcrever voice notes"), Some(tr("Áudios recebidos viram texto antes de ir ao cérebro (requer a API key da OpenAI).")), |ui| {
                 ui::toggle(ui, &mut t.transcribe_voice_notes);
             });
             ui::field(
                 ui,
-                "Pasta de anexos",
-                Some("Relativa à base de conhecimento; arquivos recebidos são salvos aqui."),
+                tr("Pasta de anexos"),
+                Some(tr(
+                    "Relativa à base de conhecimento; arquivos recebidos são salvos aqui.",
+                )),
                 |ui| {
                     ui::text_input(ui, &mut t.attachments_dir, "inbox/telegram");
                 },
             );
-            ui::field(ui, "Atraso para apagar status (s)", Some("Tempo que a mensagem de status (\"pensando…\") fica visível depois da resposta."), |ui| {
+            ui::field(ui, tr("Atraso para apagar status (s)"), Some(tr("Tempo que a mensagem de status (\"pensando…\") fica visível depois da resposta.")), |ui| {
                 ui::number(ui, &mut t.status_delete_delay_secs, 0..=600);
             });
         });

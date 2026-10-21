@@ -295,23 +295,22 @@ impl RealtimeManager {
         self.audio_out.subscribe()
     }
 
+    /// `Running` = pronta (habilitada + chave da OpenAI), em sessão ou ociosa;
+    /// `Degraded` = falta chave ou a última sessão falhou; `Disabled` = desligada.
+    /// Se há sessão ativa é `status().active` / `is_active()`, não o `ModuleStatus`.
     pub fn module_status(&self) -> ModuleStatus {
         let cfg = self.config.read();
         if !cfg.settings.enabled {
             return ModuleStatus::Disabled;
         }
         if cfg.api_key.is_none() {
-            return ModuleStatus::Degraded("API key da OpenAI não configurada".into());
+            return ModuleStatus::Degraded("sem chave da OpenAI".into());
         }
         let v = self.voice.lock();
         if let Some(err) = &v.last_error {
             return ModuleStatus::Degraded(err.clone());
         }
-        if self.is_active() {
-            ModuleStatus::Running
-        } else {
-            ModuleStatus::Stopped
-        }
+        ModuleStatus::Running
     }
 
     // ----- interno -----------------------------------------------------------

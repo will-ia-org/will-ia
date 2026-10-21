@@ -3,6 +3,7 @@
 
 use super::SettingsState;
 use crate::help;
+use crate::i18n::{tr, trf};
 use crate::pages::Cx;
 use crate::service::{j, Loader, Task};
 use crate::ui::{self, Tone};
@@ -28,20 +29,20 @@ pub struct McpPage {
 
 fn policy_label(p: &str) -> &'static str {
     match p {
-        "auto" => "automático",
-        "confirm" => "confirmar",
-        "off" => "desligada",
-        _ => "padrão",
+        "auto" => tr("automático"),
+        "confirm" => tr("confirmar"),
+        "off" => tr("desligada"),
+        _ => tr("padrão"),
     }
 }
 
 fn family_label(f: &str) -> String {
     match f {
-        "telegram" => "Telegram".into(),
-        "whatsapp" => "WhatsApp".into(),
-        "calendar" => "Agenda".into(),
-        "gmail" => "Gmail".into(),
-        "core" => "Sistema".into(),
+        "telegram" => tr("Telegram").into(),
+        "whatsapp" => tr("WhatsApp").into(),
+        "calendar" => tr("Agenda").into(),
+        "gmail" => tr("Gmail").into(),
+        "core" => tr("Sistema").into(),
         other => other.to_string(),
     }
 }
@@ -104,11 +105,11 @@ impl McpPage {
                 match r {
                     Ok(v) => {
                         cx.toasts
-                            .success("Token regenerado. O anterior deixou de valer.");
+                            .success(tr("Token regenerado. O anterior deixou de valer."));
                         self.script_token.data = Some(v);
                         self.reveal_token = false;
                     }
-                    Err(e) => cx.toasts.error(format!("Regenerar token: {e}")),
+                    Err(e) => cx.toasts.error(trf("Regenerar token: {}", &[&e])),
                 }
             }
         }
@@ -124,12 +125,12 @@ impl McpPage {
                 match r {
                     Ok(_) => {
                         cx.toasts
-                            .success(format!("Política de '{name}' atualizada."));
+                            .success(trf("Política de '{}' atualizada.", &[&name]));
                         // O handler grava direto nas settings; realinha rascunho e salvo.
                         st.load(cx.svc);
                         self.reload_tools(cx);
                     }
-                    Err(e) => cx.toasts.error(format!("Política de '{name}': {e}")),
+                    Err(e) => cx.toasts.error(trf("Política de '{}': {}", &[&name, &e])),
                 }
             }
         }
@@ -164,15 +165,17 @@ impl McpPage {
     fn script_token_ui(&mut self, ui: &mut egui::Ui, cx: &mut Cx) {
         ui::field(
             ui,
-            "Token para scripts",
-            Some("Fixo entre reinicializações, para scripts e chamadas HTTP de fora das threads."),
+            tr("Token para scripts"),
+            Some(tr(
+                "Fixo entre reinicializações, para scripts e chamadas HTTP de fora das threads.",
+            )),
             |ui| {
                 if let Some(e) = &self.script_token.error {
                     ui::error_text(ui, e);
                     return;
                 }
                 let Some(v) = &self.script_token.data else {
-                    ui::busy(ui, "carregando…");
+                    ui::busy(ui, tr("carregando…"));
                     return;
                 };
                 let token = ui::s(v, "token");
@@ -185,34 +188,34 @@ impl McpPage {
                         ui::mono(ui, &format!("••••••••••••{masked}"));
                     }
                     if ui
-                        .small_button(if self.reveal_token { "Ocultar" } else { "Mostrar" })
+                        .small_button(if self.reveal_token { tr("Ocultar") } else { tr("Mostrar") })
                         .clicked()
                     {
                         self.reveal_token = !self.reveal_token;
                     }
-                    if ui.small_button("Copiar").clicked() {
+                    if ui.small_button(tr("Copiar")).clicked() {
                         ui.ctx().copy_text(token.clone());
-                        cx.toasts.success("Token copiado.");
+                        cx.toasts.success(tr("Token copiado."));
                     }
                     if ui
-                        .small_button("Copiar como export")
-                        .on_hover_text("WILL_IA_MCP_URL e WILL_IA_MCP_TOKEN prontos para colar num shell")
+                        .small_button(tr("Copiar como export"))
+                        .on_hover_text(tr("WILL_IA_MCP_URL e WILL_IA_MCP_TOKEN prontos para colar num shell"))
                         .clicked()
                     {
                         ui.ctx().copy_text(format!(
                             "export WILL_IA_MCP_URL='{url}' WILL_IA_MCP_TOKEN='{token}'"
                         ));
-                        cx.toasts.success("Variáveis copiadas.");
+                        cx.toasts.success(tr("Variáveis copiadas."));
                     }
                     let busy = self.rotate_task.is_some();
                     if ui
-                        .add_enabled(!busy, egui::Button::new("Regenerar").small())
+                        .add_enabled(!busy, egui::Button::new(tr("Regenerar")).small())
                         .clicked()
                     {
                         self.confirm_rotate = Some(ui::Confirm {
-                            title: "Regenerar token para scripts?".into(),
-                            body: "O token atual deixa de valer imediatamente. Scripts que o usam precisarão do novo valor.".into(),
-                            confirm_label: "Regenerar".into(),
+                            title: tr("Regenerar token para scripts?").into(),
+                            body: tr("O token atual deixa de valer imediatamente. Scripts que o usam precisarão do novo valor.").into(),
+                            confirm_label: tr("Regenerar").into(),
                             danger: true,
                             tag: "mcp-rotate".into(),
                         });
@@ -223,9 +226,9 @@ impl McpPage {
                 });
                 if !ui::b(v, "active") {
                     ui.label(
-                        egui::RichText::new(
+                        egui::RichText::new(tr(
                             "O servidor MCP está desligado: o token só vale com ele no ar.",
-                        )
+                        ))
                         .small()
                         .weak(),
                     );
@@ -249,10 +252,10 @@ impl McpPage {
 
     pub fn ui(&mut self, ui: &mut egui::Ui, cx: &mut Cx, st: &mut SettingsState) {
         self.poll(cx, st);
-        ui::heading(ui, "Servidor MCP", Some("Servidor local (Streamable HTTP em 127.0.0.1) que expõe as ferramentas do will-ia aos agentes. Bearer efêmero por processo; cada chamada sabe de qual thread veio."));
+        ui::heading(ui, tr("Servidor MCP"), Some(tr("Servidor local (Streamable HTTP em 127.0.0.1) que expõe as ferramentas do will-ia aos agentes. Bearer efêmero por processo; cada chamada sabe de qual thread veio.")));
 
         // ---- servidor ----
-        ui::section_help(ui, "Servidor", Some(&help::MCP_SERVER), |ui| {
+        ui::section_help(ui, tr("Servidor"), Some(&help::MCP_SERVER), |ui| {
             let status = cx
                 .snap
                 .modules
@@ -260,14 +263,14 @@ impl McpPage {
                 .cloned()
                 .unwrap_or(will_core::ModuleStatus::Stopped);
             ui.horizontal(|ui| {
-                ui.label("Módulo:");
+                ui.label(tr("Módulo:"));
                 ui::badge(ui, &ui::module_label(&status), ui::tone_for_module(&status));
             });
             let url = cx.svc.state.mcp_url.read().clone();
             ui.horizontal(|ui| {
-                ui.label("URL:");
+                ui.label(tr("URL:"));
                 if url.is_empty() {
-                    ui.label(egui::RichText::new("(servidor não está no ar)").weak());
+                    ui.label(egui::RichText::new(tr("(servidor não está no ar)")).weak());
                 } else {
                     ui::mono(ui, &url);
                 }
@@ -278,19 +281,23 @@ impl McpPage {
             let m = &mut st.draft.mcp;
             ui::field(
                 ui,
-                "Habilitar",
-                Some("Desligado, os agentes ficam sem as ferramentas will_ia."),
+                tr("Habilitar"),
+                Some(tr(
+                    "Desligado, os agentes ficam sem as ferramentas will_ia.",
+                )),
                 |ui| {
                     ui::toggle(ui, &mut m.enabled);
                 },
             );
-            ui::field(ui, "Porta", Some("0 = aleatória a cada execução (recomendado); o .mcp.json da KB é regravado com a URL atual."), |ui| {
+            ui::field(ui, tr("Porta"), Some(tr("0 = aleatória a cada execução (recomendado); o .mcp.json da KB é regravado com a URL atual.")), |ui| {
                 ui::number(ui, &mut m.port, 0..=65535);
             });
             ui::field(
                 ui,
-                "Timeout de aprovação (s)",
-                Some("Pedido de confirmação sem resposta é negado após esse tempo."),
+                tr("Timeout de aprovação (s)"),
+                Some(tr(
+                    "Pedido de confirmação sem resposta é negado após esse tempo.",
+                )),
                 |ui| {
                     ui::number(ui, &mut m.approval_timeout_secs, 10..=3600);
                 },
@@ -301,11 +308,11 @@ impl McpPage {
         // ---- ferramentas ----
         ui::section_help(
             ui,
-            "Ferramentas e políticas",
+            tr("Ferramentas e políticas"),
             Some(&help::MCP_TOOLS),
             |ui| {
                 ui.horizontal(|ui| {
-                    if ui.button("Atualizar").clicked() {
+                    if ui.button(tr("Atualizar")).clicked() {
                         self.tools.loaded_at = None;
                     }
                     if self.tools.loading() {
@@ -313,7 +320,7 @@ impl McpPage {
                     }
                     if let Some((n, _)) = &self.policy_task {
                         ui.label(
-                            egui::RichText::new(format!("aplicando política de {n}…"))
+                            egui::RichText::new(trf("aplicando política de {}…", &[&n]))
                                 .weak()
                                 .small(),
                         );
@@ -330,7 +337,7 @@ impl McpPage {
                     .cloned()
                     .unwrap_or_default();
                 if list.is_empty() && !self.tools.loading() {
-                    ui.label(egui::RichText::new("Nenhuma ferramenta registrada.").weak());
+                    ui.label(egui::RichText::new(tr("Nenhuma ferramenta registrada.")).weak());
                 }
                 let mut by_family: BTreeMap<String, Vec<&Value>> = BTreeMap::new();
                 for t in &list {
@@ -353,12 +360,12 @@ impl McpPage {
                                 let policy = ui::s(t, "policy");
                                 let desc = ui::s(t, "description");
                                 let default_label =
-                                    format!("padrão ({})", policy_label(&default_policy));
+                                    trf("padrão ({})", &[&policy_label(&default_policy)]);
                                 let opts: [(&str, &str); 4] = [
                                     ("default", default_label.as_str()),
-                                    ("auto", "automático"),
-                                    ("confirm", "confirmar"),
-                                    ("off", "desligada"),
+                                    ("auto", tr("automático")),
+                                    ("confirm", tr("confirmar")),
+                                    ("off", tr("desligada")),
                                 ];
                                 let mut v = if overridden {
                                     policy.clone()
@@ -368,9 +375,9 @@ impl McpPage {
                                 let busy = self.policy_task.is_some();
                                 ui.monospace(&name);
                                 if available {
-                                    ui::badge(ui, "disponível", Tone::Success);
+                                    ui::badge(ui, tr("disponível"), Tone::Success);
                                 } else {
-                                    ui::badge(ui, "indisponível", Tone::Neutral);
+                                    ui::badge(ui, tr("indisponível"), Tone::Neutral);
                                 }
                                 ui.add_enabled_ui(!busy, |ui| {
                                     if ui::select(ui, &format!("pol-{name}"), &mut v, &opts) {
@@ -395,9 +402,9 @@ impl McpPage {
         );
 
         // ---- chamadas ----
-        ui::section(ui, "Chamadas recentes", |ui| {
+        ui::section(ui, tr("Chamadas recentes"), |ui| {
             ui.horizontal(|ui| {
-                if ui.button("Atualizar").clicked() {
+                if ui.button(tr("Atualizar")).clicked() {
                     self.calls.loaded_at = None;
                 }
                 if self.calls.loading() {
@@ -415,7 +422,7 @@ impl McpPage {
                 .cloned()
                 .unwrap_or_default();
             if calls.is_empty() && !self.calls.loading() {
-                ui.label(egui::RichText::new("Nenhuma chamada registrada ainda.").weak());
+                ui.label(egui::RichText::new(tr("Nenhuma chamada registrada ainda.")).weak());
                 return;
             }
             egui::ScrollArea::vertical()
@@ -428,12 +435,12 @@ impl McpPage {
                         .spacing([14.0, 4.0])
                         .show(ui, |ui| {
                             for h in [
-                                "Hora",
-                                "Ferramenta",
-                                "Thread",
-                                "Resultado",
-                                "Duração",
-                                "Erro",
+                                tr("Hora"),
+                                tr("Ferramenta"),
+                                tr("Thread"),
+                                tr("Resultado"),
+                                tr("Duração"),
+                                tr("Erro"),
                             ] {
                                 ui.label(egui::RichText::new(h).weak().small());
                             }
@@ -448,9 +455,9 @@ impl McpPage {
                                     tid.chars().take(8).collect()
                                 });
                                 if ui::b(c, "ok") {
-                                    ui::badge(ui, "ok", Tone::Success);
+                                    ui::badge(ui, tr("ok"), Tone::Success);
                                 } else {
-                                    ui::badge(ui, "erro", Tone::Danger);
+                                    ui::badge(ui, tr("erro"), Tone::Danger);
                                 }
                                 let ms = c
                                     .get("duration_ms")

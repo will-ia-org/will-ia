@@ -3,6 +3,7 @@
 
 use super::SettingsState;
 use crate::help;
+use crate::i18n::{tr, trf};
 use crate::pages::Cx;
 use crate::service::{j, Loader, Task};
 use crate::ui::{self, Tone};
@@ -57,8 +58,9 @@ impl WhatsAppPage {
                 self.pair_task = None;
                 match r {
                     Ok(_) => {
-                        cx.toasts
-                            .info("Pareamento iniciado; o QR/código aparece abaixo em instantes.");
+                        cx.toasts.info(tr(
+                            "Pareamento iniciado; o QR/código aparece abaixo em instantes.",
+                        ));
                         self.show_code_pair = None;
                         self.status.loaded_at = None;
                     }
@@ -103,7 +105,7 @@ impl WhatsAppPage {
 
     pub fn ui(&mut self, ui: &mut egui::Ui, cx: &mut Cx, st: &mut SettingsState) {
         self.poll(cx);
-        ui::heading_help(ui, "WhatsApp", Some("Contas pessoais pareadas como aparelho conectado; expostas aos agentes só como ferramentas whatsapp_* (não é canal de entrada)."), &help::WHATSAPP);
+        ui::heading_help(ui, tr("WhatsApp"), Some(tr("Contas pessoais pareadas como aparelho conectado; expostas aos agentes só como ferramentas whatsapp_* (não é canal de entrada).")), &help::WHATSAPP);
 
         let enabled_saved = st.saved.whatsapp.enabled;
         let status = self.status.data.clone();
@@ -114,7 +116,7 @@ impl WhatsAppPage {
             .cloned()
             .unwrap_or_default();
 
-        ui::section(ui, "Contas", |ui| {
+        ui::section(ui, tr("Contas"), |ui| {
             if let Some(e) = &self.status.error {
                 ui::error_text(ui, e);
             }
@@ -128,30 +130,32 @@ impl WhatsAppPage {
                         .unwrap_or(will_core::ModuleStatus::Stopped);
                     ui::badge(ui, &ui::module_label(&m), ui::tone_for_module(&m));
                     ui.label(
-                        egui::RichText::new(format!(
+                        egui::RichText::new(trf(
                             "backend {} · índice total: {} chats, {} mensagens",
-                            ui::s(s, "backend"),
-                            ui::i(&s["index_total"], "chats"),
-                            ui::i(&s["index_total"], "messages")
+                            &[
+                                &ui::s(s, "backend"),
+                                &ui::i(&s["index_total"], "chats"),
+                                &ui::i(&s["index_total"], "messages"),
+                            ],
                         ))
                         .small()
                         .weak(),
                     );
-                    if ui.button("atualizar").clicked() {
+                    if ui.button(tr("atualizar")).clicked() {
                         self.status.loaded_at = None;
                     }
                 });
             }
             if !enabled_saved {
                 ui.label(
-                    egui::RichText::new(
+                    egui::RichText::new(tr(
                         "Habilite o módulo na configuração abaixo e salve para parear contas.",
-                    )
+                    ))
                     .weak(),
                 );
             }
             if accounts.is_empty() {
-                ui.label(egui::RichText::new("Nenhuma conta pareada.").weak());
+                ui.label(egui::RichText::new(tr("Nenhuma conta pareada.")).weak());
             }
             for a in &accounts {
                 let id = ui::s(a, "id");
@@ -171,18 +175,18 @@ impl WhatsAppPage {
                         match &mut self.rename {
                             Some((rid, buf)) if rid == &id => {
                                 ui.add(egui::TextEdit::singleline(buf).desired_width(200.0));
-                                if ui.button("OK").clicked() {
+                                if ui.button(tr("OK")).clicked() {
                                     let new_label = buf.clone();
                                     let id2 = id.clone();
-                                    self.action_task = Some(("Renomear".into(), cx.svc.call(move |s| async move { j(api::wa_account_patch(State(s), Path(id2), Some(Json(api::AccountPatch { label: Some(new_label), enabled: None }))).await) })));
+                                    self.action_task = Some((tr("Renomear").into(), cx.svc.call(move |s| async move { j(api::wa_account_patch(State(s), Path(id2), Some(Json(api::AccountPatch { label: Some(new_label), enabled: None }))).await) })));
                                     self.rename = None;
-                                } else if ui.button("cancelar").clicked() {
+                                } else if ui.button(tr("cancelar")).clicked() {
                                     self.rename = None;
                                 }
                             }
                             _ => {
                                 ui.label(egui::RichText::new(&label).strong());
-                                if ui.button("renomear").clicked() {
+                                if ui.button(tr("renomear")).clicked() {
                                     self.rename = Some((id.clone(), label.clone()));
                                 }
                             }
@@ -191,12 +195,12 @@ impl WhatsAppPage {
                             ui.label(egui::RichText::new(format!("+{p}")).weak());
                         }
                         ui::badge(ui, &match state.as_str() {
-                            "connected" => "conectado".to_string(),
-                            "qr" => "aguardando QR".to_string(),
-                            "code" => "aguardando código".to_string(),
-                            "logged_out" => "sessão revogada".to_string(),
-                            "degraded" => format!("degradado · {}", ui::s(a, "detail")),
-                            "disconnected" => if ui::b(a, "has_session") { "desconectado".to_string() } else { "não pareado".to_string() },
+                            "connected" => tr("conectado").to_string(),
+                            "qr" => tr("aguardando QR").to_string(),
+                            "code" => tr("aguardando código").to_string(),
+                            "logged_out" => tr("sessão revogada").to_string(),
+                            "degraded" => trf("degradado · {}", &[&ui::s(a, "detail")]),
+                            "disconnected" => if ui::b(a, "has_session") { tr("desconectado").to_string() } else { tr("não pareado").to_string() },
                             other => other.to_string(),
                         }, tone);
                         if let Some(me) = a.get("me") {
@@ -209,24 +213,24 @@ impl WhatsAppPage {
                     });
                     ui.horizontal(|ui| {
                         let mut en = ui::b(a, "enabled");
-                        if ui.checkbox(&mut en, "usar nas ferramentas").changed() {
+                        if ui.checkbox(&mut en, tr("usar nas ferramentas")).changed() {
                             let id2 = id.clone();
-                            self.action_task = Some(("Conta".into(), cx.svc.call(move |s| async move { j(api::wa_account_patch(State(s), Path(id2), Some(Json(api::AccountPatch { label: None, enabled: Some(en) }))).await) })));
+                            self.action_task = Some((tr("Conta").into(), cx.svc.call(move |s| async move { j(api::wa_account_patch(State(s), Path(id2), Some(Json(api::AccountPatch { label: None, enabled: Some(en) }))).await) })));
                         }
                         if state != "connected" {
-                            if ui.add_enabled(!busy && enabled_saved, egui::Button::new("Parear por QR")).clicked() {
+                            if ui.add_enabled(!busy && enabled_saved, egui::Button::new(tr("Parear por QR"))).clicked() {
                                 let id2 = id.clone();
                                 self.pair_task = Some(cx.svc.call(move |s| async move { j(api::wa_pair(State(s), Some(Json(api::PairBody { account_id: Some(id2), phone: None, label: None }))).await) }));
                             }
-                            if ui.add_enabled(!busy && enabled_saved, egui::Button::new("Parear por código")).clicked() {
+                            if ui.add_enabled(!busy && enabled_saved, egui::Button::new(tr("Parear por código"))).clicked() {
                                 self.show_code_pair = Some(id.clone());
                             }
-                            if ui::b(a, "has_session") && ui.add_enabled(!busy, egui::Button::new("Reconectar")).clicked() {
+                            if ui::b(a, "has_session") && ui.add_enabled(!busy, egui::Button::new(tr("Reconectar"))).clicked() {
                                 let id2 = id.clone();
-                                self.action_task = Some(("Reconectar".into(), cx.svc.call(move |s| async move { j(api::wa_reconnect(State(s), Json(api::AccountIdBody { account_id: id2 })).await) })));
+                                self.action_task = Some((tr("Reconectar").into(), cx.svc.call(move |s| async move { j(api::wa_reconnect(State(s), Json(api::AccountIdBody { account_id: id2 })).await) })));
                             }
                         }
-                        if ui.add_enabled(!busy, egui::Button::new("Desvincular / remover")).clicked() {
+                        if ui.add_enabled(!busy, egui::Button::new(tr("Desvincular / remover"))).clicked() {
                             self.confirm_unlink = Some((id.clone(), label.clone()));
                             self.clear_index = false;
                             self.remove_account = !ui::b(a, "has_session");
@@ -235,21 +239,21 @@ impl WhatsAppPage {
                     // QR / código
                     if state == "qr" {
                         if let Some(qr) = a.get("last_qr").filter(|q| !q.is_null()).cloned() {
-                            ui.label(egui::RichText::new("No telefone: WhatsApp › Aparelhos conectados › Conectar aparelho, e aponte para o código:").small());
+                            ui.label(egui::RichText::new(tr("No telefone: WhatsApp › Aparelhos conectados › Conectar aparelho, e aponte para o código:")).small());
                             if let Some((modules, w)) = self.qr_modules(&id, &qr) {
                                 draw_qr(ui, &modules, w, 264.0);
                             }
                             ui.ctx().request_repaint_after(std::time::Duration::from_secs(2));
                         } else {
-                            ui::busy(ui, "gerando QR…");
+                            ui::busy(ui, tr("gerando QR…"));
                         }
                     }
                     if state == "code" {
                         if let Some(code) = a.get("last_pair_code").and_then(|c| c.as_str()) {
-                            ui.label(egui::RichText::new("No telefone: Aparelhos conectados › Conectar com número de telefone, e digite:").small());
+                            ui.label(egui::RichText::new(tr("No telefone: Aparelhos conectados › Conectar com número de telefone, e digite:")).small());
                             ui.label(egui::RichText::new(code).monospace().size(28.0));
                         } else {
-                            ui::busy(ui, "gerando código…");
+                            ui::busy(ui, tr("gerando código…"));
                         }
                     }
                 });
@@ -259,14 +263,15 @@ impl WhatsAppPage {
                 let busy = self.pair_task.is_some();
                 ui.add(
                     egui::TextEdit::singleline(&mut self.new_label)
-                        .hint_text("rótulo da nova conta (opcional)")
+                        .hint_text(tr("rótulo da nova conta (opcional)"))
                         .desired_width(220.0),
                 );
                 if ui
                     .add_enabled(
                         !busy && enabled_saved,
                         egui::Button::new(
-                            egui::RichText::new("+ Nova conta por QR").color(egui::Color32::WHITE),
+                            egui::RichText::new(tr("+ Nova conta por QR"))
+                                .color(egui::Color32::WHITE),
                         )
                         .fill(Tone::Success.color(true)),
                     )
@@ -293,7 +298,7 @@ impl WhatsAppPage {
                 if ui
                     .add_enabled(
                         !busy && enabled_saved,
-                        egui::Button::new("+ Nova conta por código"),
+                        egui::Button::new(tr("+ Nova conta por código")),
                     )
                     .clicked()
                 {
@@ -305,7 +310,7 @@ impl WhatsAppPage {
             });
             if let Some(target) = self.show_code_pair.clone() {
                 ui.horizontal(|ui| {
-                    ui.label("Telefone com DDI, só dígitos:");
+                    ui.label(tr("Telefone com DDI, só dígitos:"));
                     ui.add(
                         egui::TextEdit::singleline(&mut self.phone)
                             .hint_text("5511999998888")
@@ -314,7 +319,7 @@ impl WhatsAppPage {
                     self.phone.retain(|c| c.is_ascii_digit());
                     let ok = self.phone.len() >= 8;
                     if ui
-                        .add_enabled(ok, egui::Button::new("Gerar código"))
+                        .add_enabled(ok, egui::Button::new(tr("Gerar código")))
                         .clicked()
                     {
                         let phone = Some(self.phone.clone());
@@ -340,7 +345,7 @@ impl WhatsAppPage {
                             .await)
                         }));
                     }
-                    if ui.button("Cancelar").clicked() {
+                    if ui.button(tr("Cancelar")).clicked() {
                         self.show_code_pair = None;
                     }
                 });
@@ -351,15 +356,15 @@ impl WhatsAppPage {
             let mut decided = None;
             let m = egui::Modal::new(egui::Id::unique(("wa-unlink", &id))).show(ui.ctx(), |ui| {
                 ui.set_width(440.0);
-                ui.heading(format!("Desvincular '{label}'"));
-                ui.label("Faz logout remoto (o telefone deixa de listar este aparelho) e apaga a sessão local.");
-                ui.checkbox(&mut self.clear_index, "Apagar também o índice de mensagens desta conta");
-                ui.checkbox(&mut self.remove_account, "Remover a conta da lista");
+                ui.heading(trf("Desvincular '{}'", &[&label]));
+                ui.label(tr("Faz logout remoto (o telefone deixa de listar este aparelho) e apaga a sessão local."));
+                ui.checkbox(&mut self.clear_index, tr("Apagar também o índice de mensagens desta conta"));
+                ui.checkbox(&mut self.remove_account, tr("Remover a conta da lista"));
                 ui.horizontal(|ui| {
-                    if ui.button("Cancelar").clicked() {
+                    if ui.button(tr("Cancelar")).clicked() {
                         decided = Some(false);
                     }
-                    if ui::danger_button(ui, "Desvincular").clicked() {
+                    if ui::danger_button(ui, tr("Desvincular")).clicked() {
                         decided = Some(true);
                     }
                 });
@@ -372,7 +377,7 @@ impl WhatsAppPage {
                 if ok {
                     let (clear, remove) = (self.clear_index, self.remove_account);
                     self.action_task = Some((
-                        "Desvincular".into(),
+                        tr("Desvincular").into(),
                         cx.svc.call(move |s| async move {
                             j(api::wa_unlink(
                                 State(s),
@@ -389,52 +394,54 @@ impl WhatsAppPage {
             }
         }
 
-        ui::section(ui, "Configuração", |ui| {
+        ui::section(ui, tr("Configuração"), |ui| {
             let w = &mut st.draft.whatsapp;
             ui::field(
                 ui,
-                "Habilitar módulo",
-                Some("Sem isso nenhuma conta conecta e as ferramentas ficam indisponíveis."),
+                tr("Habilitar módulo"),
+                Some(tr(
+                    "Sem isso nenhuma conta conecta e as ferramentas ficam indisponíveis.",
+                )),
                 |ui| {
                     ui::toggle(ui, &mut w.enabled);
                 },
             );
             ui::field(
                 ui,
-                "Retenção do índice (dias)",
-                Some("Mensagens mais antigas são apagadas do índice local."),
+                tr("Retenção do índice (dias)"),
+                Some(tr("Mensagens mais antigas são apagadas do índice local.")),
                 |ui| {
                     ui::number(ui, &mut w.retention_days, 1..=3650);
                 },
             );
             ui::field(
                 ui,
-                "Limite de envio",
-                Some("Mensagens por janela de minutos, por conta."),
+                tr("Limite de envio"),
+                Some(tr("Mensagens por janela de minutos, por conta.")),
                 |ui| {
                     ui.horizontal(|ui| {
                         ui::number(ui, &mut w.send_rate_limit_count, 1..=1000);
-                        ui.label("msgs /");
+                        ui.label(tr("msgs /"));
                         ui::number(ui, &mut w.send_rate_limit_minutes, 1..=1440);
-                        ui.label("min");
+                        ui.label(tr("min"));
                     });
                 },
             );
             ui::field(
                 ui,
-                "Permitir números não salvos",
-                Some("Envio para telefones que não estão nos contatos."),
+                tr("Permitir números não salvos"),
+                Some(tr("Envio para telefones que não estão nos contatos.")),
                 |ui| {
                     ui::toggle(ui, &mut w.allow_unsaved_numbers);
                 },
             );
-            ui::field(ui, "Recibo de leitura em mark_read", None, |ui| {
+            ui::field(ui, tr("Recibo de leitura em mark_read"), None, |ui| {
                 ui::toggle(ui, &mut w.send_read_receipts);
             });
             ui::field(
                 ui,
-                "Pasta de mídia",
-                Some("Relativa à base de conhecimento."),
+                tr("Pasta de mídia"),
+                Some(tr("Relativa à base de conhecimento.")),
                 |ui| {
                     ui::text_input(ui, &mut w.media_dir, "inbox/whatsapp");
                 },

@@ -141,13 +141,13 @@ Tabela de ferramentas agrupada por família com coluna **Política** (`auto` / `
 Status dos módulos, base de conhecimento, motor (processos vivos, token ativo) e aprovações pendentes.
 
 ### Threads
-Lista com origem, título, status (🟢🟡⚪❌), última atividade, custo acumulado. Ações por thread: abrir, renomear, reiniciar, zerar, interromper, excluir (com opção de apagar transcrição). Chat com streaming e envio mid-turn.
+Lista com origem, título, status (🟢🟡⚪❌), última atividade, custo acumulado. Ações por thread: abrir, renomear, reiniciar, zerar, interromper, excluir (com opção de apagar transcrição). Chat com streaming e envio mid-turn. Cada balão traz um rodapé discreto: tempo relativo ("há 5 min"; o hover mostra a data exata), botão "copiar" e, na resposta, um ícone "i" que abre um popover com modelo, duração, custo, início/fim, sessão e id do turno.
 
 ### Aprovações
-Pendentes (✅/❌ com detalhe dos argumentos) e histórico.
+Pendentes como cartões (ferramenta, contagem regressiva, resumo gerado pelo serviço, quem pediu, argumentos em chave/valor com rótulos legíveis e JSON completo em "Detalhes", botões Aprovar/Negar) e histórico em tabela com filtros por texto e decisão (quando, ferramenta, resumo, decisão, por onde foi decidida).
 
 ### Logs
-Tail dos logs com filtro por módulo/nível; botão "Exportar diagnóstico".
+Visor estilo terminal (monoespaçado, uma linha por registro: hora · nível · módulo · mensagem, mesmas cores nos dois temas) com histórico do banco + cauda ao vivo; filtro de texto com destaque, nível mínimo, módulo, seguir, quebrar linhas, data, pausar ao vivo, copiar visíveis, limpar tela e abrir a pasta de logs.
 
 ## Esquema (Rust)
 
@@ -184,3 +184,19 @@ Assistente em 3 passos: (1) token do Claude + teste; (2) pasta da KB + criar est
 ## Interface
 
 egui/eframe em `crates/will-desktop` (ADR-0016). Modo imediato: cada página lê um snapshot de `Arc<AppState>` e dispara ações no runtime tokio; respostas chegam por canais e `request_repaint` dirigido pelos eventos do `EventBus`. Formulários validam espelhando o backend (erros por campo). Sem lógica de negócio na UI. Diálogos nativos: pasta (`rfd`), QR do WhatsApp desenhado na própria janela.
+
+## Ajuda, idioma e estado dos módulos
+
+**Ajuda "?".** Títulos de página (`ui::heading_help`) e cartões de seção (`ui::section_help`) podem levar um ícone "?" que abre um modal com introdução, passo a passo numerado, bloco "No terminal" (com Copiar), notas (dúvidas e erros comuns) e links. O conteúdo é estático em `crates/will-desktop/src/help.rs` (uma constante `Help` por assunto: tokens e execução do motor, KB, Telegram, voz, WhatsApp, servidor MCP, políticas, MCPs externos, Google). Nada disso ocupa espaço na página fechada.
+
+**Idioma (i18n).** Sem crates externas: os textos da UI ficam em pt-BR no código e são a própria chave. `i18n::tr("Salvar")` devolve o texto no idioma corrente; `i18n::trf("Criados: {}", &[&n])` preenche marcadores `{}` em ordem. A tabela `i18n::TABLE` guarda os pares `(pt-BR, en)`; chave ausente devolve o pt-BR. O idioma vem de Geral › Idioma (`settings.general.language`) e o app chama `set_language` a cada quadro a partir do snapshot, então salvar a seção troca a UI inteira no quadro seguinte (exceções: o menu da bandeja em Windows/macOS é construído na inicialização e só atualiza o item de voz). Testes garantem chaves únicas e mesma quantidade de `{}` nos dois idiomas. Não se traduzem ids, nomes de nível de log, URLs, modelos e textos técnicos copiáveis (ex.: `export …`).
+
+**Estado dos módulos** (`will_core::ModuleStatus`, bolinhas do Início e do menu lateral; rótulo em `ui::module_label`):
+
+| Cor | Estado | Significado |
+|---|---|---|
+| verde | `Running` → "pronto" | habilitado, configurado e operacional, mesmo ocioso (motor: token ativo + KB ok; voz: habilitada + chave; Google: conta conectada; Telegram: polling no ar; WhatsApp: conta conectada; MCP: ouvindo). O Início acrescenta detalhes ("N processo(s) vivo(s)", "em sessão", "N conta(s)") |
+| azul | `Starting` → "iniciando" | transição |
+| amarelo | `Degraded(motivo)` → "atenção · motivo" | habilitado, mas falta algo ou algo falha; o motivo é sempre mostrado |
+| vermelho | `Error(motivo)` → "erro · motivo" | falhou ao subir ou erro fatal |
+| cinza | `Disabled` → "desligado" / `Stopped` → "parado" | desligado nas configurações / parado explicitamente. "Ocioso mas pronto" **não** é cinza: é verde |

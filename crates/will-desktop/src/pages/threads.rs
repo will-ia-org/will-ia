@@ -3,6 +3,7 @@
 //! renomear e apagar.
 
 use super::Cx;
+use crate::i18n::{tr, trf};
 use crate::service::{j, Loader, Task};
 use crate::ui::{self, Tone};
 use axum::extract::{Path, Query, State};
@@ -31,7 +32,7 @@ pub struct ThreadsPage {
     notes: HashMap<ThreadId, Vec<String>>,
     input: String,
     send_task: Option<Task<Value>>,
-    action_task: Option<(String, Task<Value>)>,
+    action_task: Option<(&'static str, Task<Value>)>,
     create_task: Option<Task<Value>>,
     rename_buf: Option<String>,
     confirm_delete: Option<(ThreadId, bool)>,
@@ -51,7 +52,7 @@ fn origin_label(t: &ThreadSummary) -> String {
             Some(tp) => format!("telegram {chat_id}:{tp}"),
             None => format!("telegram {chat_id}"),
         },
-        will_core::Origin::Realtime => "voz".into(),
+        will_core::Origin::Realtime => tr("voz").into(),
     }
 }
 
@@ -69,6 +70,134 @@ fn status_tone(t: &ThreadSummary) -> Tone {
         ThreadStatus::Error => Tone::Danger,
         ThreadStatus::Archived => Tone::Neutral,
         ThreadStatus::Idle => Tone::Neutral,
+    }
+}
+
+/// Tempo relativo (traduzido): "agora", "há 1 min", "há 5 min", "há 2 h",
+/// "há 1 dia", "há 3 dias", "há 2 sem".
+fn time_ago(dt: &chrono::DateTime<chrono::Utc>) -> String {
+    let secs = (chrono::Utc::now() - *dt).num_seconds().max(0);
+    let mins = secs / 60;
+    let hours = secs / 3600;
+    let days = secs / 86400;
+    if secs < 60 {
+        tr("agora").to_string()
+    } else if mins < 60 {
+        trf("há {} min", &[&mins])
+    } else if hours < 24 {
+        trf("há {} h", &[&hours])
+    } else if days == 1 {
+        tr("há 1 dia").to_string()
+    } else if days < 7 {
+        trf("há {} dias", &[&days])
+    } else {
+        trf("há {} sem", &[&(days / 7)])
+    }
+}
+
+/// Data/hora exata, no fuso local, para tooltips.
+fn fmt_exact(dt: &chrono::DateTime<chrono::Utc>) -> String {
+    dt.with_timezone(&chrono::Local)
+        .format("%d/%m/%Y %H:%M:%S")
+        .to_string()
+}
+
+/// Lê um campo RFC3339 do JSON do turno (`started_at`/`finished_at`).
+fn turn_dt(turn: &Value, key: &str) -> Option<chrono::DateTime<chrono::Utc>> {
+    turn.get(key)
+        .and_then(|v| v.as_str())
+        .and_then(|s| chrono::DateTime::parse_from_rfc3339(s).ok())
+        .map(|d| d.with_timezone(&chrono::Utc))
+}
+
+/// Rótulo discreto de tempo relativo; o hover mostra a data exata.
+fn when_label(ui: &mut egui::Ui, pal: &ui::Palette, dt: Option<&chrono::DateTime<chrono::Utc>>) {
+    if let Some(dt) = dt {
+        ui.add(
+            egui::Label::new(
+                egui::RichText::new(time_ago(dt))
+                    .size(11.0)
+                    .color(pal.text_weak),
+            )
+            .sense(egui::Sense::hover()),
+        )
+        .on_hover_text(fmt_exact(dt));
+    }
+}
+
+/// Botão pequeno "copiar" com área de clique real (moldura só no hover).
+fn copy_button(ui: &mut egui::Ui, pal: &ui::Palette, hover: &str) -> bool {
+    ui.add(
+        egui::Button::new(
+            egui::RichText::new(tr("copiar"))
+                .size(11.0)
+                .color(pal.text_weak),
+        )
+        .frame_when_inactive(false)
+        .corner_radius(6.0)
+        .min_size(egui::vec2(44.0, 18.0)),
+    )
+    .on_hover_text(hover)
+    .clicked()
+}
+
+/// Ícone "i" desenhado (círculo + letra), sem depender de glifos especiais.
+fn info_icon(ui: &mut egui::Ui, pal: &ui::Palette) -> egui::Response {
+    let (rect, resp) = ui.allocate_exact_size(egui::vec2(18.0, 18.0), egui::Sense::click());
+    let color = if resp.hovered() {
+        pal.text
+    } else {
+        pal.text_weak
+    };
+    let c = rect.center();
+    ui.painter()
+        .circle_stroke(c, 6.5, egui::Stroke::new(1.0, color));
+    ui.painter().text(
+        c,
+        egui::Align2::CENTER_CENTER,
+        "i",
+        egui::FontId::proportional(10.0),
+        color,
+    );
+    resp
+}
+
+/// Corpo do popover de metadados do turno.
+fn turn_info_body(ui: &mut egui::Ui, pal: &ui::Palette, turn: &Value) {
+    ui.set_min_width(220.0);
+    ui.spacing_mut().item_spacing.y = 2.0;
+    let res = turn.get("result").cloned().unwrap_or(Value::Null);
+    let row = |ui: &mut egui::Ui, k: &str, v: String| {
+        ui.horizontal(|ui| {
+            ui.label(egui::RichText::new(k).small().color(pal.text_weak));
+            ui.add(
+                egui::Label::new(egui::RichText::new(v).small().color(pal.text))
+                    .truncate()
+                    .selectable(true),
+            );
+        });
+    };
+    if let Some(m) = res.get("model").and_then(|c| c.as_str()) {
+        row(ui, tr("modelo"), m.to_string());
+    }
+    if let Some(d) = res.get("duration_ms").and_then(|c| c.as_u64()) {
+        row(ui, tr("duração"), ui::fmt_ms(d));
+    }
+    if let Some(c) = res.get("cost_usd").and_then(|c| c.as_f64()) {
+        row(ui, tr("custo"), ui::fmt_usd(c));
+    }
+    if let Some(dt) = turn_dt(turn, "started_at") {
+        row(ui, tr("início"), fmt_exact(&dt));
+    }
+    if let Some(dt) = turn_dt(turn, "finished_at") {
+        row(ui, tr("fim"), fmt_exact(&dt));
+    }
+    if let Some(sid) = res.get("session_id").and_then(|c| c.as_str()) {
+        row(ui, tr("sessão"), sid.to_string());
+    }
+    let id = ui::s(turn, "id");
+    if !id.is_empty() {
+        row(ui, tr("turno"), id);
     }
 }
 
@@ -124,7 +253,7 @@ impl ThreadsPage {
                     self.notes
                         .entry(*thread_id)
                         .or_default()
-                        .push("mensagem entregue no meio do turno (steering)".into());
+                        .push(tr("mensagem entregue no meio do turno (steering)").into());
                 }
                 let l = self.live.entry(*thread_id).or_default();
                 if l.started.is_none() {
@@ -149,7 +278,8 @@ impl ThreadsPage {
             }
             Event::StaleSession { thread_id } => {
                 self.notes.entry(*thread_id).or_default().push(
-                    "sessão expirada: a thread recomeçou do zero e reenviou as pendências".into(),
+                    tr("sessão expirada: a thread recomeçou do zero e reenviou as pendências")
+                        .into(),
                 );
             }
             _ => {}
@@ -180,7 +310,7 @@ impl ThreadsPage {
                 match r {
                     Ok(v) => {
                         if ui::b(&v, "mid_turn") {
-                            cx.toasts.info("Entregue no meio do turno.");
+                            cx.toasts.info(tr("Entregue no meio do turno."));
                         }
                     }
                     Err(e) => cx.toasts.error(e),
@@ -189,15 +319,15 @@ impl ThreadsPage {
         }
         if let Some((what, t)) = &self.action_task {
             if let Some(r) = t.take() {
-                let what = what.clone();
+                let what = *what;
                 self.action_task = None;
                 match r {
                     Ok(_) => {
-                        cx.toasts.success(format!("{what}: ok"));
+                        cx.toasts.success(trf("{}: ok", &[&tr(what)]));
                         self.list.loaded_at = None;
                         self.turns.loaded_at = None;
                     }
-                    Err(e) => cx.toasts.error(format!("{what}: {e}")),
+                    Err(e) => cx.toasts.error(format!("{}: {e}", tr(what))),
                 }
             }
         }
@@ -248,12 +378,13 @@ impl ThreadsPage {
                 .call(move |s| async move { j(api::interrupt(State(s), Path(sid)).await) }),
             _ => return,
         };
-        self.action_task = Some((what.to_string(), t));
+        self.action_task = Some((what, t));
     }
 
     pub fn ui(&mut self, ui: &mut egui::Ui, cx: &mut Cx) {
         self.poll(cx);
         let avail_h = ui.available_height();
+        let pal = ui::palette(ui.visuals().dark_mode);
         ui.horizontal_top(|ui| {
             ui.set_min_height(avail_h);
             // ----- lista -----
@@ -261,15 +392,15 @@ impl ThreadsPage {
                 ui.set_width(228.0);
                 ui.set_min_height(avail_h);
                 ui.horizontal(|ui| {
-                    ui.label(egui::RichText::new("Threads").font(ui::semibold(16.0)));
-                    if ui.add_enabled(self.create_task.is_none(), egui::Button::new("+ Nova").small()).clicked() {
+                    ui.label(egui::RichText::new(tr("Threads")).font(ui::semibold(16.0)));
+                    if ui.add_enabled(self.create_task.is_none(), egui::Button::new(tr("+ Nova")).small()).clicked() {
                         self.create_task = Some(cx.svc.call(|s| async move { j(api::create(State(s), None).await) }));
                     }
-                    if ui.add(egui::Button::new("↺").small()).on_hover_text("Atualizar").clicked() {
+                    if ui.add(egui::Button::new("↺").small()).on_hover_text(tr("Atualizar")).clicked() {
                         self.list.loaded_at = None;
                     }
                 });
-                ui.checkbox(&mut self.show_archived, egui::RichText::new("arquivadas").small());
+                ui.checkbox(&mut self.show_archived, egui::RichText::new(tr("arquivadas")).small());
                 if let Some(e) = &self.list.error {
                     ui::error_text(ui, e);
                 }
@@ -277,35 +408,48 @@ impl ThreadsPage {
                     let mut sorted: Vec<&ThreadSummary> = self.threads.iter().filter(|t| self.show_archived || t.status != ThreadStatus::Archived).collect();
                     sorted.sort_by_key(|t| std::cmp::Reverse(t.last_activity_at));
                     if sorted.is_empty() {
-                        ui.label(egui::RichText::new("Nenhuma thread. Crie uma com “+ Nova” ou mande mensagem pelo Telegram/voz.").weak());
+                        ui.label(egui::RichText::new(tr("Nenhuma thread. Crie uma com “+ Nova” ou mande mensagem pelo Telegram/voz.")).weak());
                     }
                     let mut click = None;
-                    for t in sorted {
+                    let n = sorted.len();
+                    let divider = egui::Stroke::new(1.0, pal.border.linear_multiply(0.6));
+                    ui.spacing_mut().item_spacing.y = 3.0;
+                    for (i, t) in sorted.into_iter().enumerate() {
                         let selected = self.selected == Some(t.id);
                         let fill = if selected { ui.visuals().selection.bg_fill.linear_multiply(0.35) } else { egui::Color32::TRANSPARENT };
-                        let r = egui::Frame::new().fill(fill).corner_radius(6.0).inner_margin(egui::Margin::symmetric(8, 5)).show(ui, |ui| {
+                        let r = egui::Frame::new().fill(fill).corner_radius(6.0).inner_margin(egui::Margin::symmetric(8, 3)).show(ui, |ui| {
                             ui.set_width(ui.available_width());
-                            ui.spacing_mut().item_spacing = egui::vec2(6.0, 2.0);
+                            ui.spacing_mut().item_spacing = egui::vec2(6.0, 0.0);
                             ui.horizontal(|ui| {
                                 ui::dot(ui, status_tone(t));
                                 ui.add(egui::Label::new(egui::RichText::new(title_of(t)).font(ui::medium(13.0))).truncate());
                             });
-                            ui.horizontal(|ui| {
-                                ui.add_space(16.0);
-                                let mut meta = format!("{} · {}", origin_label(t), ui::fmt_relative(&t.last_activity_at));
-                                if t.pending > 0 {
-                                    meta.push_str(&format!(" · {} pendente(s)", t.pending));
-                                } else if t.alive {
-                                    meta.push_str(" · vivo");
-                                }
-                                if t.session_expired {
-                                    meta.push_str(" · sessão expirada");
-                                }
-                                ui.add(egui::Label::new(egui::RichText::new(meta).size(11.5).weak()).truncate());
+                            ui.with_layout(egui::Layout::right_to_left(egui::Align::Min), |ui| {
+                                ui.label(egui::RichText::new(time_ago(&t.last_activity_at)).size(10.5).color(pal.text_weak));
                             });
                         });
-                        if r.response.interact(egui::Sense::click()).clicked() {
+                        // Detalhes saem da linha e vão para o tooltip.
+                        let mut tip = format!("{}\n{}", origin_label(t), fmt_exact(&t.last_activity_at));
+                        if t.pending > 0 {
+                            tip.push('\n');
+                            tip.push_str(&trf("{} pendente(s)", &[&t.pending]));
+                        }
+                        tip.push('\n');
+                        tip.push_str(if t.alive { tr("processo vivo") } else { tr("processo dormente") });
+                        if t.session_expired {
+                            tip.push('\n');
+                            tip.push_str(tr("sessão expirada"));
+                        }
+                        if r.response.interact(egui::Sense::click()).on_hover_text(tip).clicked() {
                             click = Some(t.id);
+                        }
+                        if i + 1 < n {
+                            let rect = r.response.rect;
+                            ui.painter().hline(
+                                egui::Rangef::new(rect.left() + 8.0, rect.right() - 8.0),
+                                rect.bottom() + 1.5,
+                                divider,
+                            );
                         }
                     }
                     if let Some(id) = click {
@@ -324,7 +468,7 @@ impl ThreadsPage {
                     None => {
                         ui.add_space(40.0);
                         ui.vertical_centered(|ui| {
-                            ui.label(egui::RichText::new("Selecione uma thread ou crie uma nova.").weak().size(16.0));
+                            ui.label(egui::RichText::new(tr("Selecione uma thread ou crie uma nova.")).weak().size(16.0));
                         });
                     }
                     Some(t) => self.chat_ui(ui, cx, &t),
@@ -334,13 +478,15 @@ impl ThreadsPage {
 
         if let Some((id, purge)) = self.confirm_delete {
             let c = ui::Confirm {
-                title: "Apagar thread".into(),
+                title: tr("Apagar thread").into(),
                 body: if purge {
-                    "Apagar a thread e a transcrição salva do Claude? Isso não tem volta.".into()
+                    tr("Apagar a thread e a transcrição salva do Claude? Isso não tem volta.")
+                        .into()
                 } else {
-                    "Apagar a thread do will-ia? A transcrição do Claude Code fica no disco.".into()
+                    tr("Apagar a thread do will-ia? A transcrição do Claude Code fica no disco.")
+                        .into()
                 },
-                confirm_label: "Apagar".into(),
+                confirm_label: tr("Apagar").into(),
                 danger: true,
                 tag: "del-thread".into(),
             };
@@ -349,7 +495,7 @@ impl ThreadsPage {
                 if ok {
                     let sid = id.to_string();
                     self.action_task = Some((
-                        "Apagar".into(),
+                        "Apagar",
                         cx.svc.call(move |s| async move {
                             j(api::delete_one(
                                 State(s),
@@ -364,7 +510,7 @@ impl ThreadsPage {
             }
         }
         if let Some(id) = self.confirm_reset {
-            let c = ui::Confirm { title: "Reset da thread".into(), body: "Mata o processo e esquece a sessão: a próxima mensagem começa uma conversa nova com o Claude.".into(), confirm_label: "Reset".into(), danger: true, tag: "reset-thread".into() };
+            let c = ui::Confirm { title: tr("Reset da thread").into(), body: tr("Mata o processo e esquece a sessão: a próxima mensagem começa uma conversa nova com o Claude.").into(), confirm_label: tr("Reset").into(), danger: true, tag: "reset-thread".into() };
             if let Some(ok) = ui::confirm_modal(ui.ctx(), &c) {
                 self.confirm_reset = None;
                 if ok {
@@ -381,12 +527,12 @@ impl ThreadsPage {
                 Some(buf) => {
                     let r = ui.add(egui::TextEdit::singleline(buf).desired_width(260.0));
                     let enter = r.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
-                    if ui.button("OK").clicked() || enter {
+                    if ui.button(tr("OK")).clicked() || enter {
                         let title = buf.clone();
                         let sid = t.id.to_string();
                         self.action_task =
                             Some((
-                                "Renomear".into(),
+                                "Renomear",
                                 cx.svc.call(move |s| async move {
                                     j(api::rename(
                                         State(s),
@@ -397,37 +543,46 @@ impl ThreadsPage {
                                 }),
                             ));
                         self.rename_buf = None;
-                    } else if ui.button("Cancelar").clicked() {
+                    } else if ui.button(tr("Cancelar")).clicked() {
                         self.rename_buf = None;
                     }
                 }
                 None => {
-                    ui.heading(title_of(t));
-                    if ui.button("renomear").clicked() {
+                    // Título truncado: um nome longo não pode empurrar "renomear"
+                    // para cima dos botões alinhados à direita.
+                    let w = (ui.available_width() - 460.0).max(160.0);
+                    ui.scope(|ui| {
+                        ui.set_max_width(w);
+                        ui.add(
+                            egui::Label::new(egui::RichText::new(title_of(t)).heading()).truncate(),
+                        )
+                        .on_hover_text(title_of(t));
+                    });
+                    if ui.button(tr("renomear")).clicked() {
                         self.rename_buf = Some(title_of(t));
                     }
                 }
             }
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                if ui.button("apagar").clicked() {
+                if ui.button(tr("apagar")).clicked() {
                     self.confirm_delete = Some((t.id, false));
                 }
                 if ui
-                    .button("reset")
-                    .on_hover_text("mata o processo e esquece a sessão")
+                    .button(tr("reset"))
+                    .on_hover_text(tr("mata o processo e esquece a sessão"))
                     .clicked()
                 {
                     self.confirm_reset = Some(t.id);
                 }
                 if ui
-                    .button("reiniciar")
-                    .on_hover_text("mata o processo; volta com --resume")
+                    .button(tr("reiniciar"))
+                    .on_hover_text(tr("mata o processo; volta com --resume"))
                     .clicked()
                 {
                     self.action(cx, t.id, "Reiniciar");
                 }
                 if ui
-                    .add_enabled(t.pending > 0, egui::Button::new("interromper").small())
+                    .add_enabled(t.pending > 0, egui::Button::new(tr("interromper")).small())
                     .clicked()
                 {
                     self.action(cx, t.id, "Interromper");
@@ -448,13 +603,17 @@ impl ThreadsPage {
             );
             if let Some(sid) = &t.claude_session_id {
                 ui.label(
-                    egui::RichText::new(format!("sessão {}", &sid[..sid.len().min(8)]))
+                    egui::RichText::new(trf("sessão {}", &[&&sid[..sid.len().min(8)]]))
                         .small()
                         .weak(),
                 );
             }
             if t.session_expired {
-                ui::badge(ui, "sessão expirada no disco; vai recomeçar", Tone::Warning);
+                ui::badge(
+                    ui,
+                    tr("sessão expirada no disco; vai recomeçar"),
+                    Tone::Warning,
+                );
             }
         });
         ui.separator();
@@ -484,6 +643,7 @@ impl ThreadsPage {
         let has_live = live.is_some();
         let dark = ui.visuals().dark_mode;
         let pal = ui::palette(dark);
+        let toasts = &mut *cx.toasts;
         egui::ScrollArea::vertical()
             .id_salt(("chat", t.id))
             .auto_shrink([false, false])
@@ -493,7 +653,7 @@ impl ThreadsPage {
                 ui.set_width(ui.available_width());
                 ui.add_space(6.0);
                 if loading {
-                    ui::busy(ui, "carregando…");
+                    ui::busy(ui, tr("carregando…"));
                 }
                 if let Some(e) = &turns_err {
                     ui::error_text(ui, e);
@@ -503,16 +663,12 @@ impl ThreadsPage {
                     // (tabelas, blocos de código) não colidem entre si.
                     ui.push_id(ui::s(turn, "id"), |ui| {
                         let prompt = ui::s(turn, "prompt");
-                        let when = turn.get("started_at").map(ui::fmt_dt).unwrap_or_default();
+                        let started = turn_dt(turn, "started_at");
                         if !prompt.is_empty() {
-                            user_bubble(ui, pal, &prompt, &when);
+                            user_bubble(ui, pal, toasts, &prompt, started.as_ref());
                         }
                         let text = ui::s(turn, "text");
                         let is_err = ui::b(turn, "is_error");
-                        let res = turn
-                            .get("result")
-                            .cloned()
-                            .unwrap_or(serde_json::Value::Null);
                         if is_err {
                             let msg = if text.is_empty() {
                                 ui::s(turn, "error_kind")
@@ -521,18 +677,15 @@ impl ThreadsPage {
                             };
                             error_card(ui, pal, &msg);
                         } else if !text.is_empty() {
-                            assistant_card(
-                                ui,
-                                pal,
-                                &mut self.md_cache,
-                                &text,
-                                &res,
-                                turn.get("finished_at").map(ui::fmt_dt).unwrap_or_default(),
-                            );
+                            assistant_card(ui, pal, &mut self.md_cache, toasts, &text, turn);
                         } else if turn.get("finished_at").map(|f| f.is_null()).unwrap_or(true)
                             && !has_live
                         {
-                            ui.label(egui::RichText::new("aguardando resposta…").weak().small());
+                            ui.label(
+                                egui::RichText::new(tr("aguardando resposta…"))
+                                    .weak()
+                                    .small(),
+                            );
                         }
                     });
                 }
@@ -574,9 +727,9 @@ impl ThreadsPage {
                             .frame(egui::Frame::NONE)
                             .desired_rows(2)
                             .hint_text(if t.pending > 0 {
-                                "Turno em andamento: a mensagem entra no meio. Ctrl+Enter envia."
+                                tr("Turno em andamento: a mensagem entra no meio. Ctrl+Enter envia.")
                             } else {
-                                "Mensagem para o Claude. Ctrl+Enter envia."
+                                tr("Mensagem para o Claude. Ctrl+Enter envia.")
                             }),
                     );
                         if self.focus_input {
@@ -591,7 +744,7 @@ impl ThreadsPage {
                         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                             let can = !busy && !self.input.trim().is_empty();
                             let b = egui::Button::new(
-                                egui::RichText::new(if busy { "…" } else { "Enviar" })
+                                egui::RichText::new(if busy { "…" } else { tr("Enviar") })
                                     .color(egui::Color32::WHITE),
                             )
                             .fill(if can {
@@ -622,8 +775,15 @@ fn md(ui: &mut egui::Ui, cache: &mut egui_commonmark::CommonMarkCache, text: &st
     egui_commonmark::CommonMarkViewer::new().show(ui, cache, &text);
 }
 
-fn user_bubble(ui: &mut egui::Ui, pal: &ui::Palette, text: &str, when: &str) {
-    let text = &ui::clean_emoji(text);
+fn user_bubble(
+    ui: &mut egui::Ui,
+    pal: &ui::Palette,
+    toasts: &mut ui::Toasts,
+    text: &str,
+    started: Option<&chrono::DateTime<chrono::Utc>>,
+) {
+    let raw = text;
+    let shown = ui::clean_emoji(text);
     let dark = ui.visuals().dark_mode;
     let fill = pal.accent.linear_multiply(if dark { 0.28 } else { 0.14 });
     ui.with_layout(egui::Layout::right_to_left(egui::Align::Min), |ui| {
@@ -642,17 +802,20 @@ fn user_bubble(ui: &mut egui::Ui, pal: &ui::Palette, text: &str, when: &str) {
                 ui.set_max_width(ui.available_width() * 0.72);
                 ui.vertical(|ui| {
                     ui.add(
-                        egui::Label::new(egui::RichText::new(text).color(pal.text))
+                        egui::Label::new(egui::RichText::new(&shown).color(pal.text))
                             .wrap()
                             .selectable(true),
                     );
-                    if !when.is_empty() {
-                        ui.label(
-                            egui::RichText::new(format!("você · {when}"))
-                                .small()
-                                .color(pal.text_weak),
-                        );
-                    }
+                    ui.add_space(2.0);
+                    // rodapé: uma linha, discreto (copiar + tempo relativo)
+                    ui.horizontal(|ui| {
+                        ui.spacing_mut().item_spacing.x = 6.0;
+                        if copy_button(ui, pal, tr("copiar a mensagem enviada")) {
+                            ui.ctx().copy_text(raw.to_string());
+                            toasts.success(tr("Mensagem copiada."));
+                        }
+                        when_label(ui, pal, started);
+                    });
                 });
             });
     });
@@ -663,10 +826,11 @@ fn assistant_card(
     ui: &mut egui::Ui,
     pal: &ui::Palette,
     cache: &mut egui_commonmark::CommonMarkCache,
+    toasts: &mut ui::Toasts,
     text: &str,
-    res: &serde_json::Value,
-    when: String,
+    turn: &Value,
 ) {
+    let finished = turn_dt(turn, "finished_at").or_else(|| turn_dt(turn, "started_at"));
     ui.with_layout(egui::Layout::left_to_right(egui::Align::Min), |ui| {
         ui.add_space(4.0);
         egui::Frame::new()
@@ -684,34 +848,26 @@ fn assistant_card(
                 ui.set_width(ui.available_width() * 0.88);
                 ui.vertical(|ui| {
                     md(ui, cache, text);
-                    ui.add_space(6.0);
-                    ui.horizontal_wrapped(|ui| {
-                        ui.label(
-                            egui::RichText::new("Claude")
-                                .font(ui::medium(12.0))
-                                .color(pal.text_weak),
-                        );
-                        if !when.is_empty() {
-                            ui.label(egui::RichText::new(when).small().color(pal.text_weak));
-                        }
-                        if let Some(m) = res.get("model").and_then(|c| c.as_str()) {
-                            ui::badge(ui, m, Tone::Neutral);
-                        }
-                        if let Some(d) = res.get("duration_ms").and_then(|c| c.as_u64()) {
-                            ui::badge(ui, &ui::fmt_ms(d), Tone::Neutral);
-                        }
-                        if let Some(c) = res.get("cost_usd").and_then(|c| c.as_f64()) {
-                            ui::badge(ui, &ui::fmt_usd(c), Tone::Neutral);
-                        }
-                        if ui
-                            .add(
-                                egui::Button::new(egui::RichText::new("copiar").small())
-                                    .frame(false),
-                            )
-                            .clicked()
-                        {
-                            ui.ctx().copy_text(text.to_string());
-                        }
+                    ui.add_space(4.0);
+                    // rodapé: tempo relativo à esquerda; "i" + copiar à direita
+                    ui.horizontal(|ui| {
+                        ui.spacing_mut().item_spacing.x = 6.0;
+                        when_label(ui, pal, finished.as_ref());
+                        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                            let info =
+                                info_icon(ui, pal).on_hover_cursor(egui::CursorIcon::PointingHand);
+                            // clique abre um popover fixo; hover mostra o mesmo conteúdo
+                            let opened = egui::containers::Popup::menu(&info)
+                                .close_behavior(egui::PopupCloseBehavior::CloseOnClickOutside)
+                                .show(|ui| turn_info_body(ui, pal, turn));
+                            if opened.is_none() {
+                                info.on_hover_ui(|ui| turn_info_body(ui, pal, turn));
+                            }
+                            if copy_button(ui, pal, tr("copiar a resposta (Markdown)")) {
+                                ui.ctx().copy_text(text.to_string());
+                                toasts.success(tr("Resposta copiada."));
+                            }
+                        });
                     });
                 });
             });
@@ -730,7 +886,7 @@ fn error_card(ui: &mut egui::Ui, _pal: &ui::Palette, msg: &str) {
             ui.set_width(ui.available_width() * 0.88);
             ui.horizontal_top(|ui| {
                 ui.label(
-                    egui::RichText::new("Erro")
+                    egui::RichText::new(tr("Erro"))
                         .font(ui::medium(13.0))
                         .color(red),
                 );
@@ -781,7 +937,7 @@ fn live_card(
                 );
                 ui.painter().circle_filled(r.center(), 3.0, pal.accent);
                 ui.label(
-                    egui::RichText::new(format!("Claude está trabalhando{dots}"))
+                    egui::RichText::new(trf("Claude está trabalhando{}", &[&dots]))
                         .font(ui::medium(13.0))
                         .color(pal.text),
                 );
@@ -837,7 +993,7 @@ fn live_card(
                                 egui::Label::new(
                                     egui::RichText::new(format!(
                                         "{} {prev}",
-                                        if *is_error { "falhou:" } else { "ok:" }
+                                        if *is_error { tr("falhou:") } else { tr("ok:") }
                                     ))
                                     .monospace()
                                     .size(12.0)
@@ -858,7 +1014,7 @@ fn live_card(
                         ui.horizontal_top(|ui| {
                             timeline_dot(ui, line_x, Tone::Warning.color(dark));
                             egui::CollapsingHeader::new(
-                                egui::RichText::new("raciocínio")
+                                egui::RichText::new(tr("raciocínio"))
                                     .small()
                                     .color(pal.text_weak),
                             )

@@ -2,6 +2,7 @@
 //! registros recentes em linhas compactas.
 
 use super::Cx;
+use crate::i18n::{tr, trf};
 use crate::service::{j, Loader};
 use crate::ui::{self, Tone};
 use axum::extract::{Query, State};
@@ -18,10 +19,10 @@ pub struct CostsPage {
 
 fn source_label(s: &str) -> &str {
     match s {
-        "voice" => "Voz",
-        "claude" => "Claude Code",
-        "telegram_stt" => "Telegram · transcrição",
-        "telegram_tts" => "Telegram · áudio",
+        "voice" => tr("Voz"),
+        "claude" => tr("Claude Code"),
+        "telegram_stt" => tr("Telegram · transcrição"),
+        "telegram_tts" => tr("Telegram · áudio"),
         other => other,
     }
 }
@@ -36,16 +37,16 @@ fn source_tone(s: &str) -> Tone {
 
 fn unit_label(k: &str) -> &str {
     match k {
-        "text_in" => "texto in",
-        "text_out" => "texto out",
-        "text_cached" => "texto cache",
-        "audio_in" => "áudio in",
-        "audio_out" => "áudio out",
-        "audio_cached" => "áudio cache",
-        "input_tokens" => "entrada",
-        "output_tokens" => "saída",
-        "cache_read_input_tokens" => "cache lido",
-        "cache_creation_input_tokens" => "cache criado",
+        "text_in" => tr("texto in"),
+        "text_out" => tr("texto out"),
+        "text_cached" => tr("texto cache"),
+        "audio_in" => tr("áudio in"),
+        "audio_out" => tr("áudio out"),
+        "audio_cached" => tr("áudio cache"),
+        "input_tokens" => tr("entrada"),
+        "output_tokens" => tr("saída"),
+        "cache_read_input_tokens" => tr("cache lido"),
+        "cache_creation_input_tokens" => tr("cache criado"),
         other => other,
     }
 }
@@ -111,21 +112,25 @@ impl CostsPage {
         self.summary.poll();
         self.rows.poll();
 
-        ui::heading(ui, "Custos de IA", Some("Voz: estimativa pela tabela de preços (Voz › Preços). Claude: valor informado pelo CLI a cada turno."));
+        ui::heading(ui, tr("Custos de IA"), Some(tr("Voz: estimativa pela tabela de preços (Voz › Preços). Claude: valor informado pelo CLI a cada turno.")));
 
         // ---- filtro (vale para o resumo e para os registros) ----
         ui.horizontal(|ui| {
-            ui.label(egui::RichText::new("Fonte").strong());
+            ui.label(egui::RichText::new(tr("Fonte")).strong());
             if ui::select(
                 ui,
                 "cost-source",
                 &mut self.source,
-                &[("", "todas"), ("voice", "Voz"), ("claude", "Claude Code")],
+                &[
+                    ("", tr("todas")),
+                    ("voice", tr("Voz")),
+                    ("claude", tr("Claude Code")),
+                ],
             ) {
                 self.summary.loaded_at = None;
                 self.rows.loaded_at = None;
             }
-            if ui.button("Atualizar").clicked() {
+            if ui.button(tr("Atualizar")).clicked() {
                 self.summary.loaded_at = None;
                 self.rows.loaded_at = None;
             }
@@ -138,9 +143,9 @@ impl CostsPage {
         ui::section(
             ui,
             if self.source.is_empty() {
-                "Resumo (todas as fontes)"
+                tr("Resumo (todas as fontes)")
             } else {
-                "Resumo (fonte filtrada)"
+                tr("Resumo (fonte filtrada)")
             },
             |ui| {
                 if let Some(e) = &self.summary.error {
@@ -148,10 +153,10 @@ impl CostsPage {
                 }
                 if let Some(s) = &self.summary.data {
                     let periods = [
-                        ("Hoje", "today_usd", "today"),
-                        ("7 dias", "last_7d_usd", "last_7d"),
-                        ("30 dias", "last_30d_usd", "last_30d"),
-                        ("Total", "all_time_usd", "all_time"),
+                        (tr("Hoje"), "today_usd", "today"),
+                        (tr("7 dias"), "last_7d_usd", "last_7d"),
+                        (tr("30 dias"), "last_30d_usd", "last_30d"),
+                        (tr("Total"), "all_time_usd", "all_time"),
                     ];
                     let per_row = if ui.available_width() >= 760.0 { 4 } else { 2 };
                     let rows: Vec<&[(&str, &str, &str)]> = periods.chunks(per_row).collect();
@@ -177,11 +182,18 @@ impl CostsPage {
                                             for x in b {
                                                 ui.add(
                                                     egui::Label::new(
-                                                        egui::RichText::new(format!(
-                                                            "{}: US$ {:.4} · {} reg.",
-                                                            source_label(&ui::s(x, "source")),
-                                                            x["usd"].as_f64().unwrap_or(0.0),
-                                                            ui::i(x, "count")
+                                                        egui::RichText::new(trf(
+                                                            "{}: US$ {} · {} reg.",
+                                                            &[
+                                                                &source_label(&ui::s(x, "source")),
+                                                                &format!(
+                                                                    "{:.4}",
+                                                                    x["usd"]
+                                                                        .as_f64()
+                                                                        .unwrap_or(0.0)
+                                                                ),
+                                                                &ui::i(x, "count"),
+                                                            ],
                                                         ))
                                                         .small()
                                                         .weak(),
@@ -191,7 +203,7 @@ impl CostsPage {
                                             }
                                             if b.is_empty() {
                                                 ui.label(
-                                                    egui::RichText::new("sem registros")
+                                                    egui::RichText::new(tr("sem registros"))
                                                         .small()
                                                         .weak(),
                                                 );
@@ -203,13 +215,13 @@ impl CostsPage {
                         ui.add_space(8.0);
                     }
                 } else if self.summary.loading() {
-                    ui::busy(ui, "calculando…");
+                    ui::busy(ui, tr("calculando…"));
                 }
             },
         );
 
         // ---- registros ----
-        ui::section(ui, "Registros", |ui| {
+        ui::section(ui, tr("Registros"), |ui| {
             if let Some(e) = &self.rows.error {
                 ui::error_text(ui, e);
             }
@@ -221,7 +233,7 @@ impl CostsPage {
                 .cloned()
                 .unwrap_or_default();
             if rows.is_empty() && !self.rows.loading() {
-                ui.label(egui::RichText::new("Nenhum custo registrado ainda. Use a voz ou mande uma mensagem a uma thread.").weak());
+                ui.label(egui::RichText::new(tr("Nenhum custo registrado ainda. Use a voz ou mande uma mensagem a uma thread.")).weak());
             }
             for r in &rows {
                 let src = ui::s(r, "source");
@@ -243,9 +255,9 @@ impl CostsPage {
                             );
                             ui.label(
                                 egui::RichText::new(if ui::b(r, "estimated") {
-                                    "estimado"
+                                    tr("estimado")
                                 } else {
-                                    "informado"
+                                    tr("informado")
                                 })
                                 .small()
                                 .weak(),

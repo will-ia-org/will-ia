@@ -1,6 +1,7 @@
 //! Atalho global de voz (`global-hotkey`): Windows, macOS e X11. Em Wayland o
 //! registro falha e o módulo fica desligado (aviso no log).
 
+use crate::i18n::trf;
 use crate::service::{Service, UiCommand};
 use global_hotkey::hotkey::HotKey;
 use global_hotkey::{GlobalHotKeyEvent, GlobalHotKeyManager, HotKeyState};
@@ -84,12 +85,12 @@ impl Hotkeys {
                     self.current = Some(hk);
                 }
                 Err(e) => {
-                    self.error = Some(format!("não foi possível registrar '{text}': {e}"));
+                    self.error = Some(trf("não foi possível registrar '{}': {}", &[&text, &e]));
                     tracing::warn!(error = %e, hotkey = %norm, "registro do atalho global falhou");
                 }
             },
             Err(e) => {
-                self.error = Some(format!("atalho inválido '{text}': {e}"));
+                self.error = Some(trf("atalho inválido '{}': {}", &[&text, &e]));
             }
         }
     }

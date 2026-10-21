@@ -9,6 +9,7 @@ use will_core::{Module, ModuleStatus, ToolPolicy};
 use will_mcp::McpServerDeps;
 
 pub async fn start_all(state: &Arc<AppState>) {
+    spawn_status_sync(state);
     start_mcp(state).await;
     register_core_tools(state);
     refresh_engine(state, false).await;
@@ -21,20 +22,95 @@ pub async fn start_all(state: &Arc<AppState>) {
     start_telegram(state).await;
     #[cfg(feature = "whatsapp")]
     start_whatsapp(state).await;
+    recompute_engine_status(state);
+}
+
+// ----- estado dos módulos (semântica em `will_core::ModuleStatus`) -----
+
+/// Mantém `AppState::module_status` em dia com os status que os módulos emitem
+/// direto no barramento (Google, voz, WhatsApp, Telegram), para que o snapshot
+/// inicial da UI e `/api/status` não fiquem defasados. Para o Google recalcula
+/// também Agenda e Gmail, que dependem das contas.
+fn spawn_status_sync(state: &Arc<AppState>) {
+    let state = state.clone();
+    tokio::spawn(async move {
+        let mut rx = state.bus.subscribe();
+        loop {
+            let ev = tokio::select! {
+                _ = state.cancel.cancelled() => break,
+                ev = rx.recv() => ev,
+            };
+            match ev {
+                Ok(will_core::Event::ModuleStatus { module, status }) => {
+                    #[cfg(feature = "google")]
+                    if matches!(module, Module::Google | Module::Calendar | Module::Gmail) {
+                        recompute_google_status(&state);
+                        continue;
+                    }
+                    // Sem `set_module_status`: o evento já está no barramento.
+                    state.module_status.write().insert(module, status);
+                }
+                Ok(_) => {}
+                Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => continue,
+                Err(_) => break,
+            }
+        }
+    });
+}
+
+/// Motor: `Running` = pronto (token ativo + KB válida), com ou sem processos
+/// vivos; senão `Degraded` com o que falta. Chamar após mudar KB/tokens e ao
+/// subir um processo (limpa um `Degraded` transitório de auth/rate limit).
+pub fn recompute_engine_status(state: &Arc<AppState>) {
     let kb_ok = state.kb_path().map(|p| p.is_dir()).unwrap_or(false);
     let has_token = state.settings.read().engine.tokens.iter().any(|t| t.active);
-    if !kb_ok || !has_token {
-        state.set_module_status(
-            Module::Engine,
-            ModuleStatus::Degraded(if !kb_ok {
-                "Pasta da base de conhecimento não configurada".into()
-            } else {
-                "Nenhum token do Claude ativo".into()
-            }),
-        );
+    let status = if !kb_ok {
+        ModuleStatus::Degraded("pasta da base de conhecimento não configurada".into())
+    } else if !has_token {
+        ModuleStatus::Degraded("sem token do Claude ativo".into())
     } else {
-        state.set_module_status(Module::Engine, ModuleStatus::Stopped);
-    }
+        ModuleStatus::Running
+    };
+    state.set_module_status(Module::Engine, status);
+}
+
+/// Voz: delega ao `RealtimeManager` (`Running` = habilitada + chave, em sessão
+/// ou não). Sem gerenciador: `Disabled` se desligada nas configurações.
+pub fn recompute_realtime_status(state: &Arc<AppState>) {
+    let rt = state.realtime.read().clone();
+    let status = match rt {
+        Some(rt) => rt.module_status(),
+        None if !state.settings.read().realtime.enabled => ModuleStatus::Disabled,
+        None => ModuleStatus::Degraded("módulo de voz não inicializado".into()),
+    };
+    state.set_module_status(Module::Realtime, status);
+}
+
+/// Google, Agenda e Gmail a partir das contas conectadas no módulo.
+#[cfg(feature = "google")]
+pub fn recompute_google_status(state: &Arc<AppState>) {
+    let module = state.google.read().clone();
+    let (google, calendar, gmail) = match module {
+        Some(m) => (m.status(), m.calendar_status(), m.gmail_status()),
+        None => {
+            let s = state.settings.read();
+            let off = |enabled: bool| {
+                if enabled {
+                    ModuleStatus::Degraded("módulo Google não inicializado".into())
+                } else {
+                    ModuleStatus::Disabled
+                }
+            };
+            (
+                ModuleStatus::Disabled,
+                off(s.calendar.enabled),
+                off(s.gmail.enabled),
+            )
+        }
+    };
+    state.set_module_status(Module::Google, google);
+    state.set_module_status(Module::Calendar, calendar);
+    state.set_module_status(Module::Gmail, gmail);
 }
 
 pub async fn stop_all(state: &Arc<AppState>) {
@@ -215,7 +291,6 @@ pub async fn start_realtime(state: &Arc<AppState>) {
     match existing {
         Some(rt) => {
             rt.update(s.clone(), key);
-            state.set_module_status(Module::Realtime, rt.module_status());
         }
         None => {
             let rt = will_realtime::RealtimeManager::new(
@@ -227,10 +302,10 @@ pub async fn start_realtime(state: &Arc<AppState>) {
                 s.clone(),
                 key,
             );
-            state.set_module_status(Module::Realtime, rt.module_status());
             *state.realtime.write() = Some(rt);
         }
     }
+    recompute_realtime_status(state);
 }
 
 pub async fn openai_key(state: &AppState) -> Option<SecretString> {
@@ -326,24 +401,9 @@ pub async fn start_google(state: &Arc<AppState>) {
     };
     state.registry.add_provider(module.calendar_provider());
     state.registry.add_provider(module.gmail_provider());
-    let st = module.status();
-    state.set_module_status(Module::Google, st.clone());
-    state.set_module_status(
-        Module::Calendar,
-        if s.calendar.enabled {
-            st.clone()
-        } else {
-            ModuleStatus::Disabled
-        },
-    );
-    state.set_module_status(
-        Module::Gmail,
-        if s.gmail.enabled {
-            st
-        } else {
-            ModuleStatus::Disabled
-        },
-    );
+    // As contas carregam em segundo plano na primeira vez; quando terminarem o
+    // módulo emite `ModuleStatus` e `spawn_status_sync` recalcula os três.
+    recompute_google_status(state);
 }
 
 #[cfg(feature = "whatsapp")]
@@ -447,18 +507,13 @@ pub async fn apply_section(state: &Arc<AppState>, section: &str) {
             // Troca de permissões/modelo/allowlist exige novo processo; aplicamos sem derrubar
             // (vale no próximo spawn). Troca de token é via activate_token.
             refresh_engine(state, false).await;
-            let has_token = state.settings.read().engine.tokens.iter().any(|t| t.active);
-            if !has_token {
-                state.set_module_status(
-                    Module::Engine,
-                    ModuleStatus::Degraded("Nenhum token do Claude ativo".into()),
-                );
-            }
+            recompute_engine_status(state);
         }
         "kb" => {
             let _ = crate::mcp_json::write(state).await;
             register_core_tools(state);
             refresh_engine(state, true).await;
+            recompute_engine_status(state);
             #[cfg(feature = "telegram")]
             start_telegram(state).await;
             #[cfg(feature = "google")]
@@ -527,7 +582,7 @@ pub async fn activate_token(state: &Arc<AppState>, id: &str) -> Result<usize, St
     }
     state.save_settings().await?;
     let n = refresh_engine(state, true).await;
-    state.set_module_status(Module::Engine, ModuleStatus::Stopped);
+    recompute_engine_status(state);
     state.bus.log(
         "info",
         "engine",

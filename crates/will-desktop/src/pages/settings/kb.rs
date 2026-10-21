@@ -2,6 +2,7 @@
 
 use super::SettingsState;
 use crate::help;
+use crate::i18n::{tr, trf};
 use crate::pages::Cx;
 use crate::service::{j, Loader, Task};
 use crate::ui;
@@ -45,9 +46,9 @@ impl KbPage {
                             })
                             .unwrap_or_default();
                         cx.toasts.success(if created.is_empty() {
-                            "Estrutura já existia; nada criado.".to_string()
+                            tr("Estrutura já existia; nada criado.").to_string()
                         } else {
-                            format!("Criados: {}", created.join(", "))
+                            trf("Criados: {}", &[&created.join(", ")])
                         });
                         self.status.loaded_at = None;
                     }
@@ -56,9 +57,9 @@ impl KbPage {
             }
         }
 
-        ui::heading_help(ui, "Base de conhecimento", Some("Pasta onde o Claude Code roda (CLAUDE.md, agentes, tools/, .mcp.json). O serviço só cria o esqueleto; não roda git nela."), &help::KB);
+        ui::heading_help(ui, tr("Base de conhecimento"), Some(tr("Pasta onde o Claude Code roda (CLAUDE.md, agentes, tools/, .mcp.json). O serviço só cria o esqueleto; não roda git nela.")), &help::KB);
 
-        ui::section(ui, "Pasta", |ui| {
+        ui::section(ui, tr("Pasta"), |ui| {
             let kb = &mut st.draft.kb;
             let mut path = self
                 .path_buf
@@ -66,11 +67,11 @@ impl KbPage {
                 .unwrap_or_else(|| kb.path.clone().unwrap_or_default());
             ui::field(
                 ui,
-                "Caminho",
+                tr("Caminho"),
                 Some(if cx.snap.portable_root.is_some() {
-                    "Absoluto, ou relativo à raiz do pendrive (ex.: workspace). Mudar derruba processos vivos."
+                    tr("Absoluto, ou relativo à raiz do pendrive (ex.: workspace). Mudar derruba processos vivos.")
                 } else {
-                    "Caminho absoluto. Mudar derruba todos os processos vivos."
+                    tr("Caminho absoluto. Mudar derruba todos os processos vivos.")
                 }),
                 |ui| {
                     ui.horizontal(|ui| {
@@ -89,9 +90,9 @@ impl KbPage {
                                 Some(path.trim().to_string())
                             };
                         }
-                        if ui.button("Escolher…").clicked() {
-                            let mut dlg =
-                                rfd::FileDialog::new().set_title("Pasta da base de conhecimento");
+                        if ui.button(tr("Escolher…")).clicked() {
+                            let mut dlg = rfd::FileDialog::new()
+                                .set_title(tr("Pasta da base de conhecimento"));
                             if let Some(p) = kb
                                 .path
                                 .as_ref()
@@ -106,7 +107,7 @@ impl KbPage {
                             }
                         }
                         if cx.snap.portable_root.is_some()
-                            && ui.button("usar workspace/ do pendrive").clicked()
+                            && ui.button(tr("usar workspace/ do pendrive")).clicked()
                         {
                             path = "workspace".into();
                             kb.path = Some(path.clone());
@@ -121,7 +122,7 @@ impl KbPage {
             st.save_bar(ui, cx.svc, "kb");
         });
 
-        ui::section(ui, "Status", |ui| {
+        ui::section(ui, tr("Status"), |ui| {
             if let Some(e) = &self.status.error {
                 ui::error_text(ui, e);
             }
@@ -143,21 +144,21 @@ impl KbPage {
                 let path = ui::s(s, "path");
                 row(
                     ui,
-                    "Pasta",
+                    tr("Pasta"),
                     ui::b(s, "exists"),
                     if path.is_empty() {
-                        "não configurada"
+                        tr("não configurada")
                     } else {
                         &path
                     },
                 );
-                row(ui, "Gravável", ui::b(s, "writable"), "");
+                row(ui, tr("Gravável"), ui::b(s, "writable"), "");
                 row(ui, "CLAUDE.md", ui::b(s, "has_claude_md"), "");
                 row(
                     ui,
                     ".mcp.json",
                     ui::b(s, "has_mcp_json"),
-                    "gerado pelo serviço",
+                    tr("gerado pelo serviço"),
                 );
                 let node = s.get("node").and_then(|v| v.as_str());
                 let py = s.get("python").and_then(|v| v.as_str());
@@ -165,13 +166,13 @@ impl KbPage {
                     ui,
                     "Node.js",
                     node.is_some(),
-                    node.unwrap_or("não encontrado (opcional, para scripts em tools/)"),
+                    node.unwrap_or(tr("não encontrado (opcional, para scripts em tools/)")),
                 );
                 row(
                     ui,
                     "Python",
                     py.is_some(),
-                    py.unwrap_or("não encontrado (opcional)"),
+                    py.unwrap_or(tr("não encontrado (opcional)")),
                 );
                 if let Some(w) = s.get("warnings").and_then(|w| w.as_array()) {
                     for w in w {
@@ -184,7 +185,7 @@ impl KbPage {
                     }
                 }
             } else {
-                ui::busy(ui, "verificando…");
+                ui::busy(ui, tr("verificando…"));
             }
             ui.add_space(6.0);
             ui.horizontal(|ui| {
@@ -192,7 +193,7 @@ impl KbPage {
                 if ui
                     .add_enabled(
                         has && self.scaffold.is_none(),
-                        egui::Button::new("Criar estrutura inicial"),
+                        egui::Button::new(tr("Criar estrutura inicial")),
                     )
                     .clicked()
                 {
@@ -202,7 +203,7 @@ impl KbPage {
                     );
                 }
                 if ui
-                    .add_enabled(has, egui::Button::new("Abrir pasta"))
+                    .add_enabled(has, egui::Button::new(tr("Abrir pasta")))
                     .clicked()
                 {
                     let svc = cx.svc.clone();
@@ -210,7 +211,7 @@ impl KbPage {
                     drop(t);
                 }
                 if ui
-                    .add_enabled(has, egui::Button::new("Ver .mcp.json"))
+                    .add_enabled(has, egui::Button::new(tr("Ver .mcp.json")))
                     .clicked()
                 {
                     self.mcp_json.start(
@@ -218,7 +219,7 @@ impl KbPage {
                             .call(|s| async move { j(api::mcp_json(State(s)).await) }),
                     );
                 }
-                if ui.button("Atualizar").clicked() {
+                if ui.button(tr("Atualizar")).clicked() {
                     self.status.loaded_at = None;
                 }
             });
@@ -226,7 +227,7 @@ impl KbPage {
 
         if self.show_mcp_json {
             if let Some(v) = &self.mcp_json.data {
-                ui::section(ui, ".mcp.json gerado", |ui| {
+                ui::section(ui, tr(".mcp.json gerado"), |ui| {
                     let path = ui::s(v, "path");
                     if !path.is_empty() {
                         ui::mono(ui, &path);
@@ -244,7 +245,7 @@ impl KbPage {
                         .show(ui, |ui| {
                             ui::mono(ui, &text);
                         });
-                    if ui.button("fechar").clicked() {
+                    if ui.button(tr("fechar")).clicked() {
                         self.show_mcp_json = false;
                     }
                 });

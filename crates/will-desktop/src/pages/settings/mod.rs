@@ -12,6 +12,7 @@ pub mod voice;
 pub mod whatsapp;
 
 use super::{Cx, SettingsSection};
+use crate::i18n::{tr, trf};
 use crate::service::{j, Loader, Service, Task};
 use crate::ui;
 use axum::extract::{Path, State};
@@ -74,7 +75,7 @@ impl SettingsState {
                         self.loaded = true;
                         self.last_error = None;
                     }
-                    Err(e) => self.last_error = Some(format!("settings inválidas: {e}")),
+                    Err(e) => self.last_error = Some(trf("settings inválidas: {}", &[&e])),
                 }
                 if let Some(m) = v.get("secrets_present").and_then(|x| x.as_object()) {
                     self.secrets_present = m
@@ -93,10 +94,10 @@ impl SettingsState {
                 match r {
                     Ok(_) => {
                         cx.toasts
-                            .success(format!("Seção '{}' salva.", section_label(&section)));
+                            .success(trf("Seção '{}' salva.", &[&section_label(&section)]));
                         self.load(cx.svc);
                     }
-                    Err(e) => cx.toasts.error(format!("Não salvou: {e}")),
+                    Err(e) => cx.toasts.error(trf("Não salvou: {}", &[&e])),
                 }
             }
         }
@@ -106,10 +107,10 @@ impl SettingsState {
                 self.secret_task = None;
                 match r {
                     Ok(_) => {
-                        cx.toasts.success(format!("Segredo '{key}' atualizado."));
+                        cx.toasts.success(trf("Segredo '{}' atualizado.", &[&key]));
                         self.load(cx.svc);
                     }
-                    Err(e) => cx.toasts.error(format!("Segredo: {e}")),
+                    Err(e) => cx.toasts.error(trf("Segredo: {}", &[&e])),
                 }
             }
         }
@@ -190,15 +191,17 @@ impl SettingsState {
             if ui
                 .add_enabled(
                     dirty && !self.saving(),
-                    egui::Button::new(egui::RichText::new("Salvar").color(egui::Color32::WHITE))
-                        .fill(ui::palette(ui.visuals().dark_mode).accent),
+                    egui::Button::new(
+                        egui::RichText::new(tr("Salvar")).color(egui::Color32::WHITE),
+                    )
+                    .fill(ui::palette(ui.visuals().dark_mode).accent),
                 )
                 .clicked()
             {
                 self.save(svc, section);
             }
             if ui
-                .add_enabled(dirty && !self.saving(), egui::Button::new("Descartar"))
+                .add_enabled(dirty && !self.saving(), egui::Button::new(tr("Descartar")))
                 .clicked()
             {
                 self.reset(section);
@@ -206,7 +209,7 @@ impl SettingsState {
             if self.saving() {
                 ui.spinner();
             } else if dirty {
-                ui.label(egui::RichText::new("alterações não salvas").weak());
+                ui.label(egui::RichText::new(tr("alterações não salvas")).weak());
             }
         });
     }
@@ -214,17 +217,17 @@ impl SettingsState {
 
 fn section_label(s: &str) -> &str {
     match s {
-        "general" => "Geral",
-        "engine" => "Motor Claude",
-        "kb" => "Base de conhecimento",
-        "realtime" => "Voz",
-        "telegram" => "Telegram",
-        "mcp" => "Servidor MCP",
-        "whatsapp" => "WhatsApp",
-        "google" => "Google",
-        "calendar" => "Agenda",
-        "gmail" => "Gmail",
-        "external_mcps" => "MCPs externos",
+        "general" => tr("Geral"),
+        "engine" => tr("Motor Claude"),
+        "kb" => tr("Base de conhecimento"),
+        "realtime" => tr("Voz"),
+        "telegram" => tr("Telegram"),
+        "mcp" => tr("Servidor MCP"),
+        "whatsapp" => tr("WhatsApp"),
+        "google" => tr("Google"),
+        "calendar" => tr("Agenda"),
+        "gmail" => tr("Gmail"),
+        "external_mcps" => tr("MCPs externos"),
         other => other,
     }
 }
@@ -259,11 +262,11 @@ impl SettingsPages {
         if !self.state.loaded {
             if let Some(e) = &self.state.last_error {
                 ui::error_text(ui, e);
-                if ui.button("Tentar de novo").clicked() {
+                if ui.button(tr("Tentar de novo")).clicked() {
                     self.state.load(cx.svc);
                 }
             } else {
-                ui::busy(ui, "carregando configurações…");
+                ui::busy(ui, tr("carregando configurações…"));
             }
             return;
         }

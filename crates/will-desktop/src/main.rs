@@ -13,6 +13,7 @@
 mod app;
 mod help;
 mod hotkey;
+mod i18n;
 mod icon;
 mod ipc;
 mod pages;

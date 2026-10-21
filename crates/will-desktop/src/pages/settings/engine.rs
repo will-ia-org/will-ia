@@ -3,6 +3,7 @@
 
 use super::SettingsState;
 use crate::help;
+use crate::i18n::{tr, trf};
 use crate::pages::Cx;
 use crate::service::{j, Loader, Task};
 use crate::ui::{self, Tone};
@@ -58,12 +59,12 @@ impl EnginePage {
                 match r {
                     Ok(v) => {
                         if ui::b(&v, "activated") {
-                            cx.toasts.success("Token cadastrado e ativado.");
+                            cx.toasts.success(tr("Token cadastrado e ativado."));
                         } else if let Some(e) = v.get("activation_error").and_then(|e| e.as_str()) {
                             cx.toasts
-                                .error(format!("Token cadastrado, mas a ativação falhou: {e}"));
+                                .error(trf("Token cadastrado, mas a ativação falhou: {}", &[&e]));
                         } else {
-                            cx.toasts.success("Token cadastrado.");
+                            cx.toasts.success(tr("Token cadastrado."));
                         }
                         self.new_label.clear();
                         self.new_token.clear();
@@ -82,10 +83,10 @@ impl EnginePage {
                         let out = ui::s(&v, "output");
                         self.last_test_output = if out.is_empty() { None } else { Some(out) };
                         if ui::b(&v, "ok") {
-                            cx.toasts.success("Token OK.");
+                            cx.toasts.success(tr("Token OK."));
                         } else {
                             cx.toasts
-                                .error(format!("Token reprovado: {}", ui::s(&v, "error")));
+                                .error(trf("Token reprovado: {}", &[&ui::s(&v, "error")]));
                         }
                         self.reload_tokens(cx);
                     }
@@ -100,13 +101,13 @@ impl EnginePage {
                     Ok(v) => {
                         let n = ui::i(&v, "restarted_threads");
                         cx.toasts.success(if n > 0 {
-                            format!("Token ativado; {n} thread(s) voltam com --resume.")
+                            trf("Token ativado; {} thread(s) voltam com --resume.", &[&n])
                         } else {
-                            "Token ativado.".into()
+                            tr("Token ativado.").into()
                         });
                         self.reload_tokens(cx);
                     }
-                    Err(e) => cx.toasts.error(format!("Ativação falhou: {e}")),
+                    Err(e) => cx.toasts.error(trf("Ativação falhou: {}", &[&e])),
                 }
             }
         }
@@ -115,7 +116,7 @@ impl EnginePage {
                 self.delete_task = None;
                 match r {
                     Ok(_) => {
-                        cx.toasts.success("Token removido.");
+                        cx.toasts.success(tr("Token removido."));
                         self.reload_tokens(cx);
                     }
                     Err(e) => cx.toasts.error(e),
@@ -126,12 +127,12 @@ impl EnginePage {
 
     pub fn ui(&mut self, ui: &mut egui::Ui, cx: &mut Cx, st: &mut SettingsState) {
         self.poll(cx);
-        ui::heading(ui, "Motor Claude", Some("Processos `claude -p` headless, um por thread, rodando sobre a base de conhecimento. Nenhuma chamada direta à API da Anthropic."));
+        ui::heading(ui, tr("Motor Claude"), Some(tr("Processos `claude -p` headless, um por thread, rodando sobre a base de conhecimento. Nenhuma chamada direta à API da Anthropic.")));
 
         // ---- tokens ----
         ui::section_help(
             ui,
-            "Tokens de assinatura (claude setup-token)",
+            tr("Tokens de assinatura (claude setup-token)"),
             Some(&help::ENGINE_TOKENS),
             |ui| {
                 if let Some(e) = &self.tokens.error {
@@ -145,7 +146,7 @@ impl EnginePage {
                     .cloned()
                     .unwrap_or_default();
                 if list.is_empty() && !self.tokens.loading() {
-                    ui.label(egui::RichText::new("Nenhum token cadastrado. Gere um com `claude setup-token` no terminal e cole abaixo.").weak());
+                    ui.label(egui::RichText::new(tr("Nenhum token cadastrado. Gere um com `claude setup-token` no terminal e cole abaixo.")).weak());
                 }
                 egui::Grid::new("tokens-grid")
                     .num_columns(5)
@@ -157,16 +158,16 @@ impl EnginePage {
                             let active = ui::b(t, "active");
                             ui.horizontal(|ui| {
                                 if active {
-                                    ui::badge(ui, "ativo", Tone::Success);
+                                    ui::badge(ui, tr("ativo"), Tone::Success);
                                 }
                                 ui.label(egui::RichText::new(ui::s(t, "label")).strong());
                             });
                             ui.monospace(ui::s(t, "masked"));
                             let status = ui::s(t, "status");
                             match status.as_str() {
-                                "ok" => ui::badge(ui, "ok", Tone::Success),
-                                "error" => ui::badge(ui, "erro", Tone::Danger),
-                                _ => ui::badge(ui, "não testado", Tone::Neutral),
+                                "ok" => ui::badge(ui, tr("ok"), Tone::Success),
+                                "error" => ui::badge(ui, tr("erro"), Tone::Danger),
+                                _ => ui::badge(ui, tr("não testado"), Tone::Neutral),
                             }
                             ui.label(
                                 egui::RichText::new(
@@ -186,7 +187,7 @@ impl EnginePage {
                                 if ui
                                     .add_enabled(
                                         !testing && !activating,
-                                        egui::Button::new("Testar"),
+                                        egui::Button::new(tr("Testar")),
                                     )
                                     .clicked()
                                 {
@@ -202,7 +203,7 @@ impl EnginePage {
                                     && ui
                                         .add_enabled(
                                             !testing && !activating,
-                                            egui::Button::new("Ativar"),
+                                            egui::Button::new(tr("Ativar")),
                                         )
                                         .clicked()
                                 {
@@ -214,7 +215,7 @@ impl EnginePage {
                                         }),
                                     ));
                                 }
-                                if ui.button("remover").clicked() {
+                                if ui.button(tr("remover")).clicked() {
                                     self.confirm_delete = Some((id.clone(), ui::s(t, "label")));
                                 }
                             });
@@ -222,24 +223,24 @@ impl EnginePage {
                         }
                     });
                 if let Some(out) = &self.last_test_output {
-                    ui.collapsing("Saída do último teste", |ui| ui::mono(ui, out));
+                    ui.collapsing(tr("Saída do último teste"), |ui| ui::mono(ui, out));
                 }
                 ui.add_space(6.0);
                 if !self.show_add {
-                    if ui::primary_button(ui, "Adicionar token").clicked() {
+                    if ui::primary_button(ui, tr("Adicionar token")).clicked() {
                         self.show_add = true;
                     }
                 } else {
-                    ui::field(ui, "Rótulo", Some("Ex.: conta pessoal"), |ui| {
-                        ui::text_input(ui, &mut self.new_label, "rótulo");
+                    ui::field(ui, tr("Rótulo"), Some(tr("Ex.: conta pessoal")), |ui| {
+                        ui::text_input(ui, &mut self.new_label, tr("rótulo"));
                     });
-                    ui::field(ui, "Token", Some("Saída de `claude setup-token` (sk-ant-oat01-…). Vai para o cofre de segredos, nunca para o banco."), |ui| {
+                    ui::field(ui, tr("Token"), Some(tr("Saída de `claude setup-token` (sk-ant-oat01-…). Vai para o cofre de segredos, nunca para o banco.")), |ui| {
                     ui.add(egui::TextEdit::singleline(&mut self.new_token).password(true).desired_width(f32::INFINITY));
                 });
                     ui.horizontal(|ui| {
                         let ok = self.new_token.trim().len() >= 20 && self.add_task.is_none();
                         if ui
-                            .add_enabled(ok, egui::Button::new("Cadastrar e ativar"))
+                            .add_enabled(ok, egui::Button::new(tr("Cadastrar e ativar")))
                             .clicked()
                         {
                             let label = self.new_label.clone();
@@ -257,7 +258,7 @@ impl EnginePage {
                             }));
                         }
                         if ui
-                            .add_enabled(ok, egui::Button::new("Só cadastrar"))
+                            .add_enabled(ok, egui::Button::new(tr("Só cadastrar")))
                             .clicked()
                         {
                             let label = self.new_label.clone();
@@ -274,7 +275,7 @@ impl EnginePage {
                                 .await)
                             }));
                         }
-                        if ui.button("Cancelar").clicked() {
+                        if ui.button(tr("Cancelar")).clicked() {
                             self.show_add = false;
                         }
                         if self.add_task.is_some() {
@@ -286,7 +287,16 @@ impl EnginePage {
         );
 
         if let Some((id, label)) = self.confirm_delete.clone() {
-            let c = ui::Confirm { title: "Remover token".into(), body: format!("Remover o token '{label}'? Se estiver ativo, o motor fica sem token até ativar outro."), confirm_label: "Remover".into(), danger: true, tag: "del-token".into() };
+            let c = ui::Confirm {
+                title: tr("Remover token").into(),
+                body: trf(
+                    "Remover o token '{}'? Se estiver ativo, o motor fica sem token até ativar outro.",
+                    &[&label],
+                ),
+                confirm_label: tr("Remover").into(),
+                danger: true,
+                tag: "del-token".into(),
+            };
             if let Some(ok) = ui::confirm_modal(ui.ctx(), &c) {
                 self.confirm_delete = None;
                 if ok {
@@ -298,17 +308,19 @@ impl EnginePage {
         }
 
         // ---- execução ----
-        ui::section_help(ui, "Execução", Some(&help::ENGINE_EXECUTION), |ui| {
+        ui::section_help(ui, tr("Execução"), Some(&help::ENGINE_EXECUTION), |ui| {
             let e = &mut st.draft.engine;
             ui::field(
                 ui,
-                "Binário claude",
-                Some("Caminho ou nome no PATH. Instale com: npm i -g @anthropic-ai/claude-code"),
+                tr("Binário claude"),
+                Some(tr(
+                    "Caminho ou nome no PATH. Instale com: npm i -g @anthropic-ai/claude-code",
+                )),
                 |ui| {
                     ui.horizontal(|ui| {
                         let w = (ui.available_width() - 110.0).max(160.0);
                         ui.add(egui::TextEdit::singleline(&mut e.claude_bin).desired_width(w));
-                        if ui.button("Verificar").clicked() {
+                        if ui.button(tr("Verificar")).clicked() {
                             self.check.start(
                                 cx.svc
                                     .call(|s| async move { j(api::check(State(s)).await) }),
@@ -316,7 +328,7 @@ impl EnginePage {
                         }
                     });
                     if self.check.loading() {
-                        ui::busy(ui, "procurando…");
+                        ui::busy(ui, tr("procurando…"));
                     }
                     if let Some(c) = &self.check.data {
                         if ui::b(c, "found") {
@@ -327,7 +339,7 @@ impl EnginePage {
                                     ui::s(c, "path"),
                                     c.get("version")
                                         .and_then(|v| v.as_str())
-                                        .unwrap_or("versão desconhecida")
+                                        .unwrap_or(tr("versão desconhecida"))
                                 ),
                             );
                         } else {
@@ -338,14 +350,14 @@ impl EnginePage {
             );
             ui::field(
                 ui,
-                "Modelo",
-                Some("Vazio = padrão do CLI. Ex.: sonnet, opus."),
-                |ui| ui::optional_text(ui, &mut e.model, "padrão"),
+                tr("Modelo"),
+                Some(tr("Vazio = padrão do CLI. Ex.: sonnet, opus.")),
+                |ui| ui::optional_text(ui, &mut e.model, tr("padrão")),
             );
             ui::field(
                 ui,
-                "Modo de permissão",
-                Some("acceptEdits com allowlist é o recomendado."),
+                tr("Modo de permissão"),
+                Some(tr("acceptEdits com allowlist é o recomendado.")),
                 |ui| {
                     let mut v = match e.permission_mode {
                         PermissionMode::AcceptEdits => "acceptEdits".to_string(),
@@ -356,8 +368,11 @@ impl EnginePage {
                         "perm",
                         &mut v,
                         &[
-                            ("acceptEdits", "acceptEdits (recomendado, com allowlist)"),
-                            ("bypassPermissions", "bypassPermissions (perigoso)"),
+                            (
+                                "acceptEdits",
+                                tr("acceptEdits (recomendado, com allowlist)"),
+                            ),
+                            ("bypassPermissions", tr("bypassPermissions (perigoso)")),
                         ],
                     ) {
                         if v == "bypassPermissions" {
@@ -370,8 +385,10 @@ impl EnginePage {
             );
             ui::field(
                 ui,
-                "Ferramentas permitidas",
-                Some("Uma por linha (modo acceptEdits). Padrões como Bash(npm *) são aceitos."),
+                tr("Ferramentas permitidas"),
+                Some(tr(
+                    "Uma por linha (modo acceptEdits). Padrões como Bash(npm *) são aceitos.",
+                )),
                 |ui| {
                     let mut buf = self
                         .allowed_buf
@@ -385,37 +402,39 @@ impl EnginePage {
             );
             ui::field(
                 ui,
-                "Processos vivos (máx.)",
-                Some("Acima disso o menos usado é aposentado (volta com --resume)."),
+                tr("Processos vivos (máx.)"),
+                Some(tr(
+                    "Acima disso o menos usado é aposentado (volta com --resume).",
+                )),
                 |ui| {
                     ui::number(ui, &mut e.max_live_processes, 1..=20);
                 },
             );
             ui::field(
                 ui,
-                "Ociosidade (min)",
-                Some("Processo sem mensagens é encerrado após esse tempo."),
+                tr("Ociosidade (min)"),
+                Some(tr("Processo sem mensagens é encerrado após esse tempo.")),
                 |ui| {
                     ui::number(ui, &mut e.idle_timeout_minutes, 1..=600);
                 },
             );
-            ui::field(ui, "Timeout do turno (min)", None, |ui| {
+            ui::field(ui, tr("Timeout do turno (min)"), None, |ui| {
                 ui::number(ui, &mut e.turn_timeout_minutes, 1..=600);
             });
             ui::field(
                 ui,
-                "Orçamento por turno (USD)",
-                Some("Vazio = sem limite."),
-                |ui| ui::optional_number(ui, &mut e.max_budget_usd, "sem limite"),
+                tr("Orçamento por turno (USD)"),
+                Some(tr("Vazio = sem limite.")),
+                |ui| ui::optional_number(ui, &mut e.max_budget_usd, tr("sem limite")),
             );
-            ui::field(ui, "Effort", None, |ui| {
+            ui::field(ui, tr("Effort"), None, |ui| {
                 let mut v = e.effort.clone().unwrap_or_default();
                 if ui::select(
                     ui,
                     "effort",
                     &mut v,
                     &[
-                        ("", "padrão"),
+                        ("", tr("padrão")),
                         ("low", "low"),
                         ("medium", "medium"),
                         ("high", "high"),
@@ -427,29 +446,31 @@ impl EnginePage {
             });
             ui::field(
                 ui,
-                "Mensagens parciais",
-                Some("Streaming token a token na UI (mais eventos)."),
+                tr("Mensagens parciais"),
+                Some(tr("Streaming token a token na UI (mais eventos).")),
                 |ui| {
                     ui::toggle(ui, &mut e.include_partial_messages);
                 },
             );
             ui::field(
                 ui,
-                "Herdar MCPs globais do Claude",
-                Some("Desligado = --strict-mcp-config (só o .mcp.json da KB)."),
+                tr("Herdar MCPs globais do Claude"),
+                Some(tr(
+                    "Desligado = --strict-mcp-config (só o .mcp.json da KB).",
+                )),
                 |ui| {
                     ui::toggle(ui, &mut e.inherit_global_mcps);
                 },
             );
             ui::field(
                 ui,
-                "Gravar stream bruto",
-                Some("claude-<data>.log na pasta de logs (debug)."),
+                tr("Gravar stream bruto"),
+                Some(tr("claude-<data>.log na pasta de logs (debug).")),
                 |ui| {
                     ui::toggle(ui, &mut e.log_raw_stream);
                 },
             );
-            ui::field(ui, "System prompt adicional", None, |ui| {
+            ui::field(ui, tr("System prompt adicional"), None, |ui| {
                 ui::text_area(ui, &mut e.append_system_prompt, 5);
             });
         });
@@ -457,9 +478,9 @@ impl EnginePage {
 
         if self.confirm_bypass {
             let c = ui::Confirm {
-                title: "Ativar bypassPermissions".into(),
-                body: "Neste modo o Claude executa qualquer comando sem confirmação (--dangerously-skip-permissions). Use só numa KB isolada e com ferramentas MCP de envio em 'confirmar'.".into(),
-                confirm_label: "Entendo, ativar".into(),
+                title: tr("Ativar bypassPermissions").into(),
+                body: tr("Neste modo o Claude executa qualquer comando sem confirmação (--dangerously-skip-permissions). Use só numa KB isolada e com ferramentas MCP de envio em 'confirmar'.").into(),
+                confirm_label: tr("Entendo, ativar").into(),
                 danger: true,
                 tag: "bypass".into(),
             };

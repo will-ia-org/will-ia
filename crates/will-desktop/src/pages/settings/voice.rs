@@ -3,6 +3,7 @@
 
 use super::SettingsState;
 use crate::help;
+use crate::i18n::{tr, trf};
 use crate::pages::Cx;
 use crate::service::{j, Loader};
 use crate::ui::{self, SecretAction, SecretField, Tone};
@@ -57,10 +58,10 @@ impl VoicePage {
             self.devices = Some(audio::list_devices());
         }
 
-        ui::heading(ui, "Voz (OpenAI Realtime)", Some("Conversa por voz pelo microfone e alto-falante deste computador; tarefas longas vão para o cérebro via ask_brain."));
+        ui::heading(ui, tr("Voz (OpenAI Realtime)"), Some(tr("Conversa por voz pelo microfone e alto-falante deste computador; tarefas longas vão para o cérebro via ask_brain.")));
 
         // ---- painel da sessão ----
-        ui::section_help(ui, "Sessão de voz", Some(&help::VOICE_SESSION), |ui| {
+        ui::section_help(ui, tr("Sessão de voz"), Some(&help::VOICE_SESSION), |ui| {
             let v = &mut *cx.voice;
             ui.horizontal(|ui| {
                 let enabled = st.saved.realtime.enabled;
@@ -69,7 +70,7 @@ impl VoicePage {
                         .add_enabled(
                             !v.busy(),
                             egui::Button::new(
-                                egui::RichText::new("Parar").color(egui::Color32::WHITE),
+                                egui::RichText::new(tr("Parar")).color(egui::Color32::WHITE),
                             )
                             .fill(Tone::Danger.color(true)),
                         )
@@ -81,7 +82,7 @@ impl VoicePage {
                     .add_enabled(
                         !v.busy() && enabled,
                         egui::Button::new(
-                            egui::RichText::new("Iniciar").color(egui::Color32::WHITE),
+                            egui::RichText::new(tr("Iniciar")).color(egui::Color32::WHITE),
                         )
                         .fill(Tone::Success.color(true)),
                     )
@@ -95,7 +96,11 @@ impl VoicePage {
                 let (label, color) = crate::voice::overlay::label_for(&v.state);
                 ui::badge(
                     ui,
-                    if v.session_active { label } else { "inativa" },
+                    if v.session_active {
+                        label
+                    } else {
+                        tr("inativa")
+                    },
                     if v.session_active {
                         Tone::Success
                     } else {
@@ -108,7 +113,7 @@ impl VoicePage {
                 let _ = color;
                 if !enabled {
                     ui.label(
-                        egui::RichText::new("habilite e salve a configuração abaixo")
+                        egui::RichText::new(tr("habilite e salve a configuração abaixo"))
                             .weak()
                             .small(),
                     );
@@ -123,7 +128,7 @@ impl VoicePage {
             {
                 let (u, l) = v.audio_stats();
                 if u > 0 || l > 0 {
-                    ui.colored_label(Tone::Warning.color(true), format!("falhas de áudio nesta sessão: {u} esvaziamento(s) da fila, {l} delta(s) perdido(s)"));
+                    ui.colored_label(Tone::Warning.color(true), trf("falhas de áudio nesta sessão: {} esvaziamento(s) da fila, {} delta(s) perdido(s)", &[&u, &l]));
                 }
             }
             if let Some(last) = self
@@ -139,18 +144,20 @@ impl VoicePage {
                     .inner_margin(10.0)
                     .show(ui, |ui| {
                         ui.set_width(ui.available_width());
-                        ui.label(egui::RichText::new("Última sessão").weak().small());
+                        ui.label(egui::RichText::new(tr("Última sessão")).weak().small());
                         ui::wrapped_text(ui, &ui::s(last, "summary"));
-                        if ui.button("Ver custos").clicked() {
+                        if ui.button(tr("Ver custos")).clicked() {
                             *cx.go = Some(crate::pages::Nav::Costs);
                         }
                     });
             }
             if v.assistant_playing() && !v.barge_in {
                 ui.label(
-                    egui::RichText::new("assistente falando: microfone silenciado até terminar")
-                        .small()
-                        .weak(),
+                    egui::RichText::new(tr(
+                        "assistente falando: microfone silenciado até terminar",
+                    ))
+                    .small()
+                    .weak(),
                 );
             }
             // nível do microfone
@@ -167,9 +174,9 @@ impl VoicePage {
             ui.horizontal(|ui| {
                 let btn = egui::Button::new(
                     egui::RichText::new(if self.ptt_button_down {
-                        "Falando…"
+                        tr("Falando…")
                     } else {
-                        "Segurar para falar"
+                        tr("Segurar para falar")
                     })
                     .color(egui::Color32::WHITE),
                 )
@@ -186,14 +193,14 @@ impl VoicePage {
                     v.set_ptt(cx.svc, down);
                 }
                 if ui
-                    .add_enabled(v.session_active, egui::Button::new("Enviar agora"))
+                    .add_enabled(v.session_active, egui::Button::new(tr("Enviar agora")))
                     .clicked()
                 {
                     v.commit(cx.svc);
                 }
             });
             ui.add_space(6.0);
-            ui.label(egui::RichText::new("Transcrições").strong());
+            ui.label(egui::RichText::new(tr("Transcrições")).strong());
             egui::ScrollArea::vertical()
                 .id_salt("voice-transcripts")
                 .max_height(220.0)
@@ -206,9 +213,9 @@ impl VoicePage {
                                 let role = ui::s(t, "role");
                                 ui.label(
                                     egui::RichText::new(if role == "user" {
-                                        "você"
+                                        tr("você")
                                     } else {
-                                        "assistente"
+                                        tr("assistente")
                                     })
                                     .small()
                                     .color(
@@ -225,12 +232,12 @@ impl VoicePage {
                     }
                     for (role, text) in &v.live_transcripts {
                         ui.horizontal_wrapped(|ui| {
-                            ui.label(egui::RichText::new("agora").small().weak());
+                            ui.label(egui::RichText::new(tr("agora")).small().weak());
                             ui.label(
                                 egui::RichText::new(if role == "user" {
-                                    "você"
+                                    tr("você")
                                 } else {
-                                    "assistente"
+                                    tr("assistente")
                                 })
                                 .small()
                                 .color(if role == "user" {
@@ -251,15 +258,15 @@ impl VoicePage {
                         .unwrap_or(true)
                         && v.live_transcripts.is_empty()
                     {
-                        ui.label(egui::RichText::new("Nenhuma transcrição ainda.").weak());
+                        ui.label(egui::RichText::new(tr("Nenhuma transcrição ainda.")).weak());
                     }
                 });
         });
 
         // ---- configuração ----
-        ui::section_help(ui, "Configuração", Some(&help::VOICE_CONFIG), |ui| {
+        ui::section_help(ui, tr("Configuração"), Some(&help::VOICE_CONFIG), |ui| {
             let r = &mut st.draft.realtime;
-            ui::field(ui, "Habilitar", None, |ui| {
+            ui::field(ui, tr("Habilitar"), None, |ui| {
                 ui::toggle(ui, &mut r.enabled);
             });
             let present = st
@@ -268,7 +275,7 @@ impl VoicePage {
                 .copied()
                 .unwrap_or(false);
             let mut action = SecretAction::None;
-            ui::field(ui, "OpenAI API key", Some("Vai para o cofre de segredos; usada pela voz e pela transcrição de áudios do Telegram."), |ui| {
+            ui::field(ui, tr("OpenAI API key"), Some(tr("Vai para o cofre de segredos; usada pela voz e pela transcrição de áudios do Telegram.")), |ui| {
                 action = self.api_key.ui(ui, present, "sk-…");
             });
             match action {
@@ -277,13 +284,13 @@ impl VoicePage {
                 SecretAction::None => {}
             }
             let r = &mut st.draft.realtime;
-            ui::field(ui, "Modelo Realtime", None, |ui| {
+            ui::field(ui, tr("Modelo Realtime"), None, |ui| {
                 ui::text_input(ui, &mut r.model, "gpt-realtime");
             });
-            ui::field(ui, "Modelo de transcrição", None, |ui| {
+            ui::field(ui, tr("Modelo de transcrição"), None, |ui| {
                 ui::text_input(ui, &mut r.transcription_model, "gpt-4o-mini-transcribe");
             });
-            ui::field(ui, "Voz", None, |ui| {
+            ui::field(ui, tr("Voz"), None, |ui| {
                 let voices = [
                     "alloy", "ash", "ballad", "coral", "echo", "sage", "shimmer", "verse", "marin",
                     "cedar",
@@ -291,50 +298,54 @@ impl VoicePage {
                 let opts: Vec<(&str, &str)> = voices.iter().map(|v| (*v, *v)).collect();
                 ui::select(ui, "voice", &mut r.voice, &opts);
             });
-            ui::field(ui, "Modo de ativação", None, |ui| {
+            ui::field(ui, tr("Modo de ativação"), None, |ui| {
                 ui::select(
                     ui,
                     "activation",
                     &mut r.activation,
                     &[
-                        ("toggle", "Alternar (liga/desliga)"),
-                        ("push_to_talk", "Push-to-talk (segurar)"),
+                        ("toggle", tr("Alternar (liga/desliga)")),
+                        ("push_to_talk", tr("Push-to-talk (segurar)")),
                     ],
                 );
             });
             ui::field(
                 ui,
-                "Atalho global",
-                Some("Ex.: Ctrl+Shift+Space, CommandOrControl+Alt+V. Não funciona em Wayland."),
+                tr("Atalho global"),
+                Some(tr(
+                    "Ex.: Ctrl+Shift+Space, CommandOrControl+Alt+V. Não funciona em Wayland.",
+                )),
                 |ui| {
                     ui::text_input(ui, &mut r.hotkey, "Ctrl+Shift+Space");
                 },
             );
             ui::field(
                 ui,
-                "Sinais sonoros",
-                Some("Toca um bipe curto ao ligar e desligar a voz e em erro."),
+                tr("Sinais sonoros"),
+                Some(tr(
+                    "Toca um bipe curto ao ligar e desligar a voz e em erro.",
+                )),
                 |ui| {
                     ui::toggle(ui, &mut r.sound_cues);
                 },
             );
             ui::field(
                 ui,
-                "Interromper por voz (barge-in)",
-                Some("Desligado: o microfone fica mudo enquanto o assistente fala, evitando que o alto-falante corte a resposta. Ligue só com fone de ouvido."),
+                tr("Interromper por voz (barge-in)"),
+                Some(tr("Desligado: o microfone fica mudo enquanto o assistente fala, evitando que o alto-falante corte a resposta. Ligue só com fone de ouvido.")),
                 |ui| {
                     ui::toggle(ui, &mut r.barge_in);
                 },
             );
             ui::field(
                 ui,
-                "Sensibilidade do detector de fala",
-                Some("Maior = exige voz mais alta para considerar que você falou (0.3 sensível · 0.9 exigente)."),
+                tr("Sensibilidade do detector de fala"),
+                Some(tr("Maior = exige voz mais alta para considerar que você falou (0.3 sensível · 0.9 exigente).")),
                 |ui| {
                     ui.add(egui::Slider::new(&mut r.vad_threshold, 0.1..=0.95).step_by(0.05));
                 },
             );
-            ui::field(ui, "Detecção de turno", None, |ui| {
+            ui::field(ui, tr("Detecção de turno"), None, |ui| {
                 ui::select(
                     ui,
                     "vad",
@@ -346,21 +357,26 @@ impl VoicePage {
                 );
             });
             if let Some(d) = &self.devices {
-                ui::field(ui, "Microfone", Some("Vazio = padrão do sistema."), |ui| {
-                    let mut v = r.input_device.clone().unwrap_or_default();
-                    let mut opts: Vec<(&str, &str)> = vec![("", "padrão do sistema")];
-                    opts.extend(d.inputs.iter().map(|s| (s.as_str(), s.as_str())));
-                    if ui::select(ui, "indev", &mut v, &opts) {
-                        r.input_device = if v.is_empty() { None } else { Some(v) };
-                    }
-                });
                 ui::field(
                     ui,
-                    "Saída de áudio",
-                    Some("Vazio = padrão do sistema."),
+                    tr("Microfone"),
+                    Some(tr("Vazio = padrão do sistema.")),
+                    |ui| {
+                        let mut v = r.input_device.clone().unwrap_or_default();
+                        let mut opts: Vec<(&str, &str)> = vec![("", tr("padrão do sistema"))];
+                        opts.extend(d.inputs.iter().map(|s| (s.as_str(), s.as_str())));
+                        if ui::select(ui, "indev", &mut v, &opts) {
+                            r.input_device = if v.is_empty() { None } else { Some(v) };
+                        }
+                    },
+                );
+                ui::field(
+                    ui,
+                    tr("Saída de áudio"),
+                    Some(tr("Vazio = padrão do sistema.")),
                     |ui| {
                         let mut v = r.output_device.clone().unwrap_or_default();
-                        let mut opts: Vec<(&str, &str)> = vec![("", "padrão do sistema")];
+                        let mut opts: Vec<(&str, &str)> = vec![("", tr("padrão do sistema"))];
                         opts.extend(d.outputs.iter().map(|s| (s.as_str(), s.as_str())));
                         if ui::select(ui, "outdev", &mut v, &opts) {
                             r.output_device = if v.is_empty() { None } else { Some(v) };
@@ -368,10 +384,10 @@ impl VoicePage {
                     },
                 );
             }
-            ui::field(ui, "Testar dispositivos", Some("Use os dispositivos escolhidos acima (sem abrir sessão). Fale e veja a barra reagir; o tom confirma a saída."), |ui| {
+            ui::field(ui, tr("Testar dispositivos"), Some(tr("Use os dispositivos escolhidos acima (sem abrir sessão). Fale e veja a barra reagir; o tom confirma a saída.")), |ui| {
                 ui.horizontal(|ui| {
                     let testing = self.mic_test.is_some();
-                    if ui.button(if testing { "Parar teste do microfone" } else { "Testar microfone" }).clicked() {
+                    if ui.button(if testing { tr("Parar teste do microfone") } else { tr("Testar microfone") }).clicked() {
                         if testing {
                             self.mic_test = None;
                             self.mic_peak = 0.0;
@@ -379,13 +395,13 @@ impl VoicePage {
                             self.mic_test = Some(audio::InputMonitor::start(r.input_device.as_deref()));
                         }
                     }
-                    if ui.button("Tocar tom na saída").clicked() {
+                    if ui.button(tr("Tocar tom na saída")).clicked() {
                         match audio::play_test_tone(r.output_device.as_deref()) {
-                            Ok(name) => cx.toasts.success(format!("Tom enviado para: {name}")),
+                            Ok(name) => cx.toasts.success(trf("Tom enviado para: {}", &[&name])),
                             Err(e) => cx.toasts.error(e),
                         }
                     }
-                    if ui.button("recarregar lista").clicked() {
+                    if ui.button(tr("recarregar lista")).clicked() {
                         self.devices = None;
                     }
                 });
@@ -397,33 +413,39 @@ impl VoicePage {
                     let shown = (self.mic_level_smooth * 6.0).clamp(0.0, 1.0);
                     ui.add(egui::ProgressBar::new(shown).desired_width(ui.available_width()).fill(if shown > 0.08 { Tone::Success.color(true) } else { Tone::Neutral.color(true) }));
                     ui.horizontal(|ui| {
-                        ui.label(egui::RichText::new(format!("dispositivo: {}", if m.device_name.is_empty() { "?" } else { &m.device_name })).small().weak());
-                        ui.label(egui::RichText::new(if self.mic_peak > 0.02 { "✓ captando som" } else { "nenhum som detectado ainda — fale ou escolha outro microfone" }).small().color(if self.mic_peak > 0.02 { Tone::Success.color(true) } else { Tone::Warning.color(true) }));
+                        let dev: &str = if m.device_name.is_empty() { "?" } else { &m.device_name };
+                        ui.label(egui::RichText::new(trf("dispositivo: {}", &[&dev])).small().weak());
+                        ui.label(egui::RichText::new(if self.mic_peak > 0.02 { tr("✓ captando som") } else { tr("nenhum som detectado ainda — fale ou escolha outro microfone") }).small().color(if self.mic_peak > 0.02 { Tone::Success.color(true) } else { Tone::Warning.color(true) }));
                     });
                     if let Some(e) = &m.error {
                         ui::error_text(ui, e);
                     }
                 }
             });
-            ui::field(ui, "Instruções da persona", None, |ui| {
+            ui::field(ui, tr("Instruções da persona"), None, |ui| {
                 ui::text_area(ui, &mut r.instructions, 6);
             });
-            ui::field(ui, "Salvar transcrições", None, |ui| {
+            ui::field(ui, tr("Salvar transcrições"), None, |ui| {
                 ui::toggle(ui, &mut r.save_transcripts);
-            });
-            ui::field(ui, "Limite de caracteres falados do cérebro", None, |ui| {
-                ui::number(ui, &mut r.brain_speech_limit_chars, 0..=20000);
             });
             ui::field(
                 ui,
-                "Limite de minutos/dia",
-                Some("Vazio = sem limite."),
-                |ui| ui::optional_u32(ui, &mut r.daily_minutes_limit, "sem limite"),
+                tr("Limite de caracteres falados do cérebro"),
+                None,
+                |ui| {
+                    ui::number(ui, &mut r.brain_speech_limit_chars, 0..=20000);
+                },
+            );
+            ui::field(
+                ui,
+                tr("Limite de minutos/dia"),
+                Some(tr("Vazio = sem limite.")),
+                |ui| ui::optional_u32(ui, &mut r.daily_minutes_limit, tr("sem limite")),
             );
         });
         ui::section_help(
             ui,
-            "Preços para estimativa (USD por 1 milhão de tokens)",
+            tr("Preços para estimativa (USD por 1 milhão de tokens)"),
             Some(&help::VOICE_PRICING),
             |ui| {
                 let p = &mut st.draft.realtime.pricing;
@@ -431,14 +453,14 @@ impl VoicePage {
                     .num_columns(4)
                     .spacing([16.0, 8.0])
                     .show(ui, |ui| {
-                        ui.label("Texto entrada");
+                        ui.label(tr("Texto entrada"));
                         ui.add(
                             egui::DragValue::new(&mut p.text_in)
                                 .speed(0.1)
                                 .range(0.0..=1000.0)
                                 .prefix("$ "),
                         );
-                        ui.label("Texto em cache");
+                        ui.label(tr("Texto em cache"));
                         ui.add(
                             egui::DragValue::new(&mut p.text_cached)
                                 .speed(0.1)
@@ -446,14 +468,14 @@ impl VoicePage {
                                 .prefix("$ "),
                         );
                         ui.end_row();
-                        ui.label("Texto saída");
+                        ui.label(tr("Texto saída"));
                         ui.add(
                             egui::DragValue::new(&mut p.text_out)
                                 .speed(0.1)
                                 .range(0.0..=1000.0)
                                 .prefix("$ "),
                         );
-                        ui.label("Áudio entrada");
+                        ui.label(tr("Áudio entrada"));
                         ui.add(
                             egui::DragValue::new(&mut p.audio_in)
                                 .speed(0.1)
@@ -461,14 +483,14 @@ impl VoicePage {
                                 .prefix("$ "),
                         );
                         ui.end_row();
-                        ui.label("Áudio em cache");
+                        ui.label(tr("Áudio em cache"));
                         ui.add(
                             egui::DragValue::new(&mut p.audio_cached)
                                 .speed(0.1)
                                 .range(0.0..=1000.0)
                                 .prefix("$ "),
                         );
-                        ui.label("Áudio saída");
+                        ui.label(tr("Áudio saída"));
                         ui.add(
                             egui::DragValue::new(&mut p.audio_out)
                                 .speed(0.1)

@@ -61,6 +61,7 @@ impl Tray {
 #[cfg(target_os = "linux")]
 mod linux {
     use super::*;
+    use crate::i18n::tr;
     use ksni::TrayMethods;
     use std::sync::mpsc::Sender;
 
@@ -90,7 +91,7 @@ mod linux {
             ksni::ToolTip {
                 title: "will-ia".into(),
                 description: if self.voice_active {
-                    "voz ativa".into()
+                    tr("voz ativa").into()
                 } else {
                     String::new()
                 },
@@ -114,16 +115,16 @@ mod linux {
             use ksni::menu::*;
             vec![
                 StandardItem {
-                    label: "Abrir will-ia".into(),
+                    label: tr("Abrir will-ia").into(),
                     activate: Box::new(|t: &mut Self| t.send(UiCommand::Show)),
                     ..Default::default()
                 }
                 .into(),
                 StandardItem {
                     label: if self.voice_active {
-                        "Desligar voz".into()
+                        tr("Desligar voz").into()
                     } else {
-                        "Ligar voz".into()
+                        tr("Ligar voz").into()
                     },
                     activate: Box::new(|t: &mut Self| t.send(UiCommand::ToggleVoice)),
                     ..Default::default()
@@ -131,7 +132,7 @@ mod linux {
                 .into(),
                 MenuItem::Separator,
                 StandardItem {
-                    label: "Sair".into(),
+                    label: tr("Sair").into(),
                     activate: Box::new(|t: &mut Self| t.send(UiCommand::Quit)),
                     ..Default::default()
                 }
@@ -211,6 +212,7 @@ mod linux {
 #[cfg(not(target_os = "linux"))]
 mod other {
     use super::*;
+    use crate::i18n::tr;
     use tray_icon::menu::{Menu, MenuEvent, MenuItem, PredefinedMenuItem};
     use tray_icon::{
         Icon, MouseButton, MouseButtonState, TrayIcon, TrayIconBuilder, TrayIconEvent,
@@ -223,8 +225,11 @@ mod other {
 
     impl Inner {
         pub fn set_voice_active(&self, active: bool) {
-            self.voice_item
-                .set_text(if active { "Desligar voz" } else { "Ligar voz" });
+            self.voice_item.set_text(if active {
+                tr("Desligar voz")
+            } else {
+                tr("Ligar voz")
+            });
             if let Ok(icon) = Icon::from_rgba(crate::icon::rgba(32, active), 32, 32) {
                 let _ = self.tray.set_icon(Some(icon));
             }
@@ -233,9 +238,9 @@ mod other {
 
     pub fn build(svc: &Arc<Service>) -> Option<Inner> {
         let menu = Menu::new();
-        let open = MenuItem::new("Abrir will-ia", true, None);
-        let voice = MenuItem::new("Ligar voz", true, None);
-        let quit = MenuItem::new("Sair", true, None);
+        let open = MenuItem::new(tr("Abrir will-ia"), true, None);
+        let voice = MenuItem::new(tr("Ligar voz"), true, None);
+        let quit = MenuItem::new(tr("Sair"), true, None);
         if let Err(e) = menu.append_items(&[&open, &voice, &PredefinedMenuItem::separator(), &quit])
         {
             tracing::warn!(error = %e, "menu da bandeja");

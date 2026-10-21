@@ -8,6 +8,7 @@ pub mod logs;
 pub mod settings;
 pub mod threads;
 
+use crate::i18n::tr;
 use crate::service::Service;
 use crate::ui::Toasts;
 use crate::voice::VoiceController;
@@ -41,17 +42,18 @@ impl SettingsSection {
         SettingsSection::WhatsApp,
         SettingsSection::Google,
     ];
+    /// Rótulo no idioma corrente da UI.
     pub fn label(self) -> &'static str {
         match self {
-            SettingsSection::General => "Geral",
-            SettingsSection::Engine => "Motor Claude",
-            SettingsSection::Kb => "Base de conhecimento",
-            SettingsSection::Voice => "Voz",
-            SettingsSection::Telegram => "Telegram",
-            SettingsSection::Mcp => "Servidor MCP",
-            SettingsSection::External => "MCPs externos",
-            SettingsSection::WhatsApp => "WhatsApp",
-            SettingsSection::Google => "Google",
+            SettingsSection::General => tr("Geral"),
+            SettingsSection::Engine => tr("Motor Claude"),
+            SettingsSection::Kb => tr("Base de conhecimento"),
+            SettingsSection::Voice => tr("Voz"),
+            SettingsSection::Telegram => tr("Telegram"),
+            SettingsSection::Mcp => tr("Servidor MCP"),
+            SettingsSection::External => tr("MCPs externos"),
+            SettingsSection::WhatsApp => tr("WhatsApp"),
+            SettingsSection::Google => tr("Google"),
         }
     }
     /// Módulo cujo status aparece como ponto colorido no menu.

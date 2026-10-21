@@ -2,6 +2,7 @@
 //! serviço, bandeja, atalho global, voz e indicador flutuante.
 
 use crate::hotkey::Hotkeys;
+use crate::i18n::{tr, trf};
 use crate::pages::{Cx, Nav, Pages, SettingsSection, Snapshot};
 use crate::service::{Service, UiCommand};
 use crate::tray::Tray;
@@ -87,6 +88,7 @@ impl WillApp {
         let tray = Tray::new(&svc);
         let hotkeys = Hotkeys::new(&svc);
         let settings = svc.state.settings();
+        crate::i18n::set_language(&settings.general.language);
         let snap = Snapshot {
             settings: settings.clone(),
             modules: svc.state.module_status.read().clone(),
@@ -126,8 +128,9 @@ impl WillApp {
             pending_screenshot: None,
         };
         if !app.tray.available() {
-            app.toasts
-                .info("Bandeja indisponível neste desktop: fechar a janela encerra o will-ia.");
+            app.toasts.info(tr(
+                "Bandeja indisponível neste desktop: fechar a janela encerra o will-ia.",
+            ));
         }
         app.apply_theme(&cc.egui_ctx);
         app
@@ -161,7 +164,7 @@ impl WillApp {
         }
         self.hotkeys.apply(&hk);
         if let Some(e) = &self.hotkeys.error {
-            self.toasts.error(format!("Atalho global: {e}"));
+            self.toasts.error(trf("Atalho global: {}", &[e]));
         }
         self.hotkey_applied = Some(hk);
     }
@@ -188,18 +191,16 @@ impl WillApp {
     fn handle_event(&mut self, ev: Event) {
         match &ev {
             Event::ModuleStatus { module, status } => {
+                // `Running` em Voz significa "pronta", não "em sessão": a bandeja
+                // acompanha os eventos `Voice` (abaixo).
                 self.snap.modules.insert(*module, status.clone());
-                if *module == Module::Realtime {
-                    let active = status == &will_core::ModuleStatus::Running;
-                    self.tray.set_voice_active(active, &self.svc);
-                }
             }
             Event::ApprovalRequested { approval } => {
                 self.snap.pending_approvals.retain(|a| a.id != approval.id);
                 self.snap.pending_approvals.push(approval.clone());
                 self.toasts.push(
                     Tone::Warning,
-                    format!("Aprovação pedida: {}", approval.summary),
+                    trf("Aprovação pedida: {}", &[&approval.summary]),
                 );
             }
             Event::ApprovalDecided { approval_id, .. } => {
@@ -212,6 +213,8 @@ impl WillApp {
             }
             Event::Voice { state, detail } => {
                 self.voice.on_voice_event(state, detail.as_deref());
+                let active = !matches!(state.as_str(), "stopped" | "error");
+                self.tray.set_voice_active(active, &self.svc);
             }
             Event::Notification { title, body } => {
                 self.toasts.info(format!("{title}: {body}"));
@@ -224,8 +227,9 @@ impl WillApp {
                 }
             }
             Event::StaleSession { .. } => {
-                self.toasts
-                    .info("Sessão do Claude expirou; a thread recomeçou e reenviou as pendências.");
+                self.toasts.info(tr(
+                    "Sessão do Claude expirou; a thread recomeçou e reenviou as pendências.",
+                ));
             }
             Event::TurnFailed { error, .. } => {
                 self.toasts.error(error.clone());
@@ -334,7 +338,7 @@ impl WillApp {
         // Rodapé fixo: voz, ocultar/sair, versão.
         egui::Panel::bottom("nav-bottom").show_separator_line(false).show(ui, |ui| {
             ui.add_space(6.0);
-            let (label, tone) = if voice_active { ("Desligar voz", Tone::Danger) } else { ("Ligar voz", Tone::Success) };
+            let (label, tone) = if voice_active { (tr("Desligar voz"), Tone::Danger) } else { (tr("Ligar voz"), Tone::Success) };
             let btn = egui::Button::new(egui::RichText::new(label).color(egui::Color32::WHITE)).fill(tone.color(ui.visuals().dark_mode)).min_size(egui::vec2(ui.available_width(), 34.0));
             if ui.add_enabled(!self.voice.busy() && self.snap.settings.realtime.enabled, btn).clicked() {
                 self.voice.toggle(&self.svc);
@@ -345,19 +349,19 @@ impl WillApp {
             }
             ui.add_space(4.0);
             ui.horizontal(|ui| {
-                if ui.button("Ocultar").on_hover_text("O serviço continua em segundo plano; rode `will-ia` de novo para reabrir.").clicked() {
+                if ui.button(tr("Ocultar")).on_hover_text(tr("O serviço continua em segundo plano; rode `will-ia` de novo para reabrir.")).clicked() {
                     self.pending_hide = true;
                 }
-                if ui.button("Sair").on_hover_text("Encerra o serviço, os processos claude e a voz.").clicked() {
+                if ui.button(tr("Sair")).on_hover_text(tr("Encerra o serviço, os processos claude e a voz.")).clicked() {
                     self.confirm_quit = true;
                 }
             });
             let mut info = format!("v{}", env!("CARGO_PKG_VERSION"));
             if self.snap.portable_root.is_some() {
-                info.push_str(" · portátil");
+                info.push_str(tr(" · portátil"));
             }
             if !self.tray.available() {
-                info.push_str(" · sem bandeja");
+                info.push_str(tr(" · sem bandeja"));
             }
             ui.label(egui::RichText::new(info).small().weak());
             ui.add_space(4.0);
@@ -374,18 +378,18 @@ impl WillApp {
             .max_height((ui.available_height() - 12.0).max(80.0))
             .show(ui, |ui| {
                 let items: Vec<(Nav, String)> = vec![
-                    (Nav::Dashboard, "Início".into()),
-                    (Nav::Threads, "Threads".into()),
+                    (Nav::Dashboard, tr("Início").into()),
+                    (Nav::Threads, tr("Threads").into()),
                     (
                         Nav::Approvals,
                         if pending > 0 {
-                            format!("Aprovações ({pending})")
+                            trf("Aprovações ({})", &[&pending])
                         } else {
-                            "Aprovações".into()
+                            tr("Aprovações").into()
                         },
                     ),
-                    (Nav::Logs, "Logs".into()),
-                    (Nav::Costs, "Custos".into()),
+                    (Nav::Logs, tr("Logs").into()),
+                    (Nav::Costs, tr("Custos").into()),
                 ];
                 for (n, label) in items {
                     if ui::nav_item(ui, self.nav == n, &label, None).clicked() {
@@ -393,18 +397,24 @@ impl WillApp {
                     }
                 }
                 ui.add_space(14.0);
-                ui.label(egui::RichText::new("CONFIGURAÇÕES").small().weak());
+                ui.label(egui::RichText::new(tr("CONFIGURAÇÕES")).small().weak());
                 ui.add_space(2.0);
                 for (sec, label) in SettingsSection::ALL.iter().map(|s| (*s, s.label())) {
                     let selected = self.nav == Nav::Settings(sec);
-                    let dot_tone = sec.module().map(|m| {
-                        self.snap
-                            .modules
-                            .get(&m)
-                            .map(ui::tone_for_module)
-                            .unwrap_or(Tone::Neutral)
-                    });
-                    if ui::nav_item(ui, selected, label, dot_tone).clicked() {
+                    let status: Option<(Module, Option<&will_core::ModuleStatus>)> =
+                        sec.module().map(|m| (m, self.snap.modules.get(&m)));
+                    let dot_tone =
+                        status.map(|(_, st)| st.map(ui::tone_for_module).unwrap_or(Tone::Neutral));
+                    let mut resp = ui::nav_item(ui, selected, label, dot_tone);
+                    if let Some((m, st)) = status {
+                        // A bolinha explica a cor ao passar o mouse.
+                        let text = match st {
+                            Some(st) => ui::module_label(st),
+                            None => tr("sem estado ainda").to_string(),
+                        };
+                        resp = resp.on_hover_text(format!("{}: {text}", ui::module_name(m)));
+                    }
+                    if resp.clicked() {
                         self.nav = Nav::Settings(sec);
                     }
                 }
@@ -471,7 +481,7 @@ impl WillApp {
             ui.painter().text(
                 egui::pos2(rect.left() + 110.0, rect.center().y),
                 egui::Align2::LEFT_CENTER,
-                format!("voz · {label}"),
+                trf("voz · {}", &[&label]),
                 egui::FontId::proportional(12.5),
                 color,
             );
@@ -587,15 +597,15 @@ impl WillApp {
                 }
             }
             let tip = match *kind {
-                "min" => "Minimizar",
+                "min" => tr("Minimizar"),
                 "max" => {
                     if maximized {
-                        "Restaurar"
+                        tr("Restaurar")
                     } else {
-                        "Maximizar"
+                        tr("Maximizar")
                     }
                 }
-                _ => "Fechar (continua na bandeja)",
+                _ => tr("Fechar (continua na bandeja)"),
             };
             resp.on_hover_text(tip);
             x -= btn_w;
@@ -641,6 +651,9 @@ impl WillApp {
 impl eframe::App for WillApp {
     fn logic(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
         self.pump(ctx);
+        // Idioma da UI vem do snapshot (atualizado por `SettingsChanged`): salvar
+        // a seção Geral troca todos os textos no quadro seguinte.
+        crate::i18n::set_language(&self.snap.settings.general.language);
         if self.voice.overlay_visible() {
             crate::voice::overlay::show(ctx, &self.voice.overlay);
         }
@@ -676,8 +689,8 @@ impl eframe::App for WillApp {
             egui::Panel::top("approvals-banner").show(ui, |ui| {
                 ui.horizontal(|ui| {
                     ui::dot(ui, Tone::Warning);
-                    ui.label(format!("{n} aprovação(ões) pendente(s)."));
-                    if ui.button("Ver").clicked() {
+                    ui.label(trf("{} aprovação(ões) pendente(s).", &[&n]));
+                    if ui.button(tr("Ver")).clicked() {
                         self.nav = Nav::Approvals;
                     }
                 });
@@ -686,9 +699,10 @@ impl eframe::App for WillApp {
 
         let mut requested_nav: Option<Nav> = None;
         egui::CentralPanel::default().show(ui, |ui| {
-            if self.nav == Nav::Threads {
-                // Threads ocupa a janela exatamente (cabeçalho e caixa de
-                // entrada fixos); só o histórico do chat rola, dentro da página.
+            if matches!(self.nav, Nav::Threads | Nav::Logs) {
+                // Threads e Logs ocupam a janela exatamente (cabeçalho, caixa de
+                // entrada e barra de filtros fixos); só o histórico do chat ou o
+                // painel de log rola, dentro da página.
                 ui.set_clip_rect(ui.max_rect());
                 ui.add_space(4.0);
                 let mut cx = Cx {
@@ -706,11 +720,7 @@ impl eframe::App for WillApp {
                 .auto_shrink([false, false])
                 .show(ui, |ui| {
                     let full = ui.available_width();
-                    let max_w = if matches!(self.nav, Nav::Logs) {
-                        full
-                    } else {
-                        full.min(ui::CONTENT_MAX_WIDTH)
-                    };
+                    let max_w = full.min(ui::CONTENT_MAX_WIDTH);
                     let pad = ((full - max_w) / 2.0).max(0.0);
                     ui.add_space(4.0);
                     ui.horizontal_top(|ui| {
@@ -740,9 +750,9 @@ impl eframe::App for WillApp {
         }
         if self.confirm_quit {
             let c = ui::Confirm {
-                title: "Sair do will-ia".into(),
-                body: "Encerra o serviço: processos claude, sessão de voz, Telegram e servidor MCP param. Para só fechar a janela, use Ocultar.".into(),
-                confirm_label: "Sair".into(),
+                title: tr("Sair do will-ia").into(),
+                body: tr("Encerra o serviço: processos claude, sessão de voz, Telegram e servidor MCP param. Para só fechar a janela, use Ocultar.").into(),
+                confirm_label: tr("Sair").into(),
                 danger: true,
                 tag: "quit".into(),
             };

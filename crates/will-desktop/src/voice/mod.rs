@@ -3,6 +3,7 @@
 pub mod audio;
 pub mod overlay;
 
+use crate::i18n::{tr, trf};
 use crate::service::{j, Service, Task};
 use audio::AudioPipeline;
 use overlay::Shared;
@@ -254,11 +255,11 @@ impl VoiceController {
                                 .collect();
                             self.pipeline = Some(p);
                             out = Some(if errs.is_empty() {
-                                Ok("Sessão de voz iniciada.".into())
+                                Ok(tr("Sessão de voz iniciada.").into())
                             } else {
-                                Err(format!(
+                                Err(trf(
                                     "Sessão aberta, mas o áudio falhou: {}",
-                                    errs.join("; ")
+                                    &[&errs.join("; ")],
                                 ))
                             });
                         }
@@ -276,7 +277,7 @@ impl VoiceController {
                 self.stop_task = None;
                 self.session_active = false;
                 self.state = "stopped".into();
-                out = Some(r.map(|_| "Sessão de voz encerrada.".into()));
+                out = Some(r.map(|_| tr("Sessão de voz encerrada.").into()));
             }
         }
         self.drain_controls();
