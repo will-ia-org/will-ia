@@ -103,9 +103,39 @@ fn main() {
                 serde_json::json!({"type":"user","message":{"role":"user","content":[{"type":"tool_result","content":"conteúdo"}]},"tool_use_result":{"stdout":"conteúdo","stderr":""},"session_id":session}),
             );
         }
+        if text.starts_with("tools") {
+            for (name, input, result) in [
+                (
+                    "Glob",
+                    serde_json::json!({"pattern": "**/*.md"}),
+                    "docs/01.md\ndocs/02.md",
+                ),
+                (
+                    "Grep",
+                    serde_json::json!({"pattern": "TODO", "path": "docs"}),
+                    "docs/02.md:14: TODO revisar",
+                ),
+                (
+                    "Bash",
+                    serde_json::json!({"command": "ls tools"}),
+                    "tools/\n  fake-claude",
+                ),
+            ] {
+                out(
+                    serde_json::json!({"type":"assistant","message":{"role":"assistant","content":[{"type":"tool_use","name":name,"input":input}]},"session_id":session}),
+                );
+                std::thread::sleep(std::time::Duration::from_millis(900));
+                out(
+                    serde_json::json!({"type":"user","message":{"role":"user","content":[{"type":"tool_result","content":result}]},"tool_use_result":{"stdout":result,"stderr":""},"session_id":session}),
+                );
+                std::thread::sleep(std::time::Duration::from_millis(400));
+            }
+        }
         let is_error = text.starts_with("fail");
         let reply = if is_error {
             "deu erro".to_string()
+        } else if text.starts_with("md") {
+            "## Resumo\n\nEncontrei **3 arquivos** relevantes na base:\n\n1. `docs/01.md` — visão geral\n2. `docs/02.md` — requisitos (tem um *TODO* pendente)\n3. `docs/03.md` — não funcionais\n\n```bash\ngrep -rn TODO docs/\n```\n\n| Arquivo | Linhas |\n|---|---|\n| 01.md | 120 |\n| 02.md | 340 |\n\n> Quer que eu resolva o TODO agora?".to_string()
         } else {
             format!("eco: {text}")
         };

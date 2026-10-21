@@ -100,6 +100,7 @@ mime_guess = "2"
 eframe = { version = "0.37", default-features = false, features = ["glow", "x11", "wayland", "default_fonts", "persistence", "clipboard", "links", "accesskit"] }
 egui = "0.37"
 egui_extras = { version = "0.37", features = ["image", "svg"] }
+egui_commonmark = "0.26"
 cpal = { version = "0.18", features = ["pulseaudio"] }
 rfd = { version = "0.17", default-features = false, features = ["xdg-portal"] }
 global-hotkey = "0.9"

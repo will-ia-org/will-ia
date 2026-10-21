@@ -38,6 +38,7 @@ pub struct ThreadsPage {
     confirm_reset: Option<ThreadId>,
     show_archived: bool,
     focus_input: bool,
+    md_cache: egui_commonmark::CommonMarkCache,
 }
 
 fn origin_label(t: &ThreadSummary) -> String {
@@ -80,6 +81,13 @@ impl ThreadsPage {
         self.turns.start(cx.svc.call(move |s| async move {
             j(api::turns(State(s), Path(sid), Query(api::Limit { limit: Some(200) })).await)
         }));
+    }
+
+    /// Seleciona uma thread (usado pela captura de diagnóstico).
+    pub fn select(&mut self, id: ThreadId) {
+        self.selected = Some(id);
+        self.list.loaded_at = None;
+        self.turns.loaded_at = None;
     }
 
     pub fn on_event(&mut self, ev: &Event) {
@@ -450,6 +458,23 @@ impl ThreadsPage {
         // histórico + ao vivo
         let input_h = 110.0;
         let hist_h = (avail_h - input_h - 90.0).max(120.0);
+        let loading = self.turns.loading() && self.turns.data.is_none();
+        let turns_err = self.turns.error.clone();
+        let turns = self
+            .turns
+            .data
+            .as_ref()
+            .and_then(|v| v.as_array())
+            .cloned()
+            .unwrap_or_default();
+        let notes = self.notes.get(&t.id).cloned().unwrap_or_default();
+        let live = self
+            .live
+            .get(&t.id)
+            .map(|l| (l.items.clone(), l.text.clone(), l.started));
+        let has_live = live.is_some();
+        let dark = ui.visuals().dark_mode;
+        let pal = ui::palette(dark);
         egui::ScrollArea::vertical()
             .id_salt(("chat", t.id))
             .auto_shrink([false, false])
@@ -457,132 +482,59 @@ impl ThreadsPage {
             .stick_to_bottom(true)
             .show(ui, |ui| {
                 ui.set_width(ui.available_width());
-                if self.turns.loading() && self.turns.data.is_none() {
+                ui.add_space(6.0);
+                if loading {
                     ui::busy(ui, "carregando…");
                 }
-                if let Some(e) = &self.turns.error {
+                if let Some(e) = &turns_err {
                     ui::error_text(ui, e);
                 }
-                let turns = self
-                    .turns
-                    .data
-                    .as_ref()
-                    .and_then(|v| v.as_array())
-                    .cloned()
-                    .unwrap_or_default();
                 for turn in &turns {
                     let prompt = ui::s(turn, "prompt");
+                    let when = turn.get("started_at").map(ui::fmt_dt).unwrap_or_default();
                     if !prompt.is_empty() {
-                        bubble(ui, true, &prompt, None);
+                        user_bubble(ui, pal, &prompt, &when);
                     }
                     let text = ui::s(turn, "text");
                     let is_err = ui::b(turn, "is_error");
-                    let meta = turn.get("result").map(|r| {
-                        let mut parts = vec![];
-                        if let Some(c) = r.get("cost_usd").and_then(|c| c.as_f64()) {
-                            parts.push(ui::fmt_usd(c));
-                        }
-                        if let Some(d) = r.get("duration_ms").and_then(|c| c.as_u64()) {
-                            parts.push(ui::fmt_ms(d));
-                        }
-                        if let Some(m) = r.get("model").and_then(|c| c.as_str()) {
-                            parts.push(m.to_string());
-                        }
-                        parts.join(" · ")
-                    });
-                    if !text.is_empty() || is_err {
-                        if is_err {
-                            ui.colored_label(
-                                Tone::Danger.color(ui.visuals().dark_mode),
-                                format!(
-                                    "erro: {}",
-                                    if text.is_empty() {
-                                        ui::s(turn, "error_kind")
-                                    } else {
-                                        text.clone()
-                                    }
-                                ),
-                            );
+                    let res = turn
+                        .get("result")
+                        .cloned()
+                        .unwrap_or(serde_json::Value::Null);
+                    if is_err {
+                        let msg = if text.is_empty() {
+                            ui::s(turn, "error_kind")
                         } else {
-                            bubble(ui, false, &text, meta.as_deref());
-                        }
+                            text.clone()
+                        };
+                        error_card(ui, pal, &msg);
+                    } else if !text.is_empty() {
+                        assistant_card(
+                            ui,
+                            pal,
+                            &mut self.md_cache,
+                            &text,
+                            &res,
+                            turn.get("finished_at").map(ui::fmt_dt).unwrap_or_default(),
+                        );
                     } else if turn.get("finished_at").map(|f| f.is_null()).unwrap_or(true)
-                        && !self.live.contains_key(&t.id)
+                        && !has_live
                     {
-                        ui.label(egui::RichText::new("(aguardando resposta…)").weak().small());
+                        ui.label(egui::RichText::new("aguardando resposta…").weak().small());
                     }
                 }
-                if let Some(notes) = self.notes.get(&t.id) {
-                    for n in notes {
-                        ui.label(egui::RichText::new(format!("i {n}")).small().weak());
-                    }
+                for n in &notes {
+                    ui.horizontal(|ui| {
+                        ui.add_space(8.0);
+                        ui.label(egui::RichText::new(n).small().weak().italics());
+                    });
                 }
-                if let Some(l) = self.live.get(&t.id) {
+                if let Some((items, text, started)) = &live {
                     ui.ctx()
-                        .request_repaint_after(std::time::Duration::from_millis(250));
-                    egui::Frame::group(ui.style())
-                        .corner_radius(8.0)
-                        .show(ui, |ui| {
-                            ui.set_width(ui.available_width());
-                            ui.horizontal(|ui| {
-                                ui.spinner();
-                                ui.label(egui::RichText::new("processando…").weak());
-                                if let Some(s) = l.started {
-                                    ui.label(
-                                        egui::RichText::new(format!("{} s", s.elapsed().as_secs()))
-                                            .weak()
-                                            .small(),
-                                    );
-                                }
-                            });
-                            for d in &l.items {
-                                match d {
-                                    EngineDelta::Narration { text } => ui::wrapped_text(ui, text),
-                                    EngineDelta::ToolUse {
-                                        name,
-                                        input_preview,
-                                    } => {
-                                        ui.horizontal_wrapped(|ui| {
-                                            ui::badge(ui, name, Tone::Info);
-                                            ui.label(
-                                                egui::RichText::new(input_preview)
-                                                    .small()
-                                                    .monospace()
-                                                    .weak(),
-                                            );
-                                        });
-                                    }
-                                    EngineDelta::ToolResult { preview, is_error } => {
-                                        ui.label(
-                                            egui::RichText::new(format!("└ {preview}"))
-                                                .small()
-                                                .monospace()
-                                                .color(if *is_error {
-                                                    Tone::Danger.color(true)
-                                                } else {
-                                                    Tone::Neutral.color(true)
-                                                }),
-                                        );
-                                    }
-                                    EngineDelta::Status { text } => {
-                                        ui.label(egui::RichText::new(text).small().weak());
-                                    }
-                                    EngineDelta::Thinking { text } => {
-                                        ui.label(
-                                            egui::RichText::new(format!("pensando: {text}"))
-                                                .small()
-                                                .italics()
-                                                .weak(),
-                                        );
-                                    }
-                                    EngineDelta::TextDelta { .. } => {}
-                                }
-                            }
-                            if !l.text.is_empty() {
-                                ui::wrapped_text(ui, &l.text);
-                            }
-                        });
+                        .request_repaint_after(std::time::Duration::from_millis(120));
+                    live_card(ui, pal, &mut self.md_cache, items, text, *started);
                 }
+                ui.add_space(8.0);
             });
 
         // entrada
@@ -625,39 +577,287 @@ impl ThreadsPage {
     }
 }
 
-fn bubble(ui: &mut egui::Ui, user: bool, text: &str, meta: Option<&str>) {
+/// Renderiza Markdown (a IA responde em Markdown).
+fn md(ui: &mut egui::Ui, cache: &mut egui_commonmark::CommonMarkCache, text: &str) {
+    egui_commonmark::CommonMarkViewer::new()
+        .max_image_width(Some(640))
+        .show(ui, cache, text);
+}
+
+fn user_bubble(ui: &mut egui::Ui, pal: &ui::Palette, text: &str, when: &str) {
     let dark = ui.visuals().dark_mode;
-    let fill = if user {
-        if dark {
-            egui::Color32::from_rgb(40, 60, 100)
-        } else {
-            egui::Color32::from_rgb(220, 232, 255)
-        }
-    } else if dark {
-        egui::Color32::from_rgb(38, 42, 52)
-    } else {
-        egui::Color32::from_rgb(244, 245, 248)
-    };
-    let layout = if user {
-        egui::Layout::right_to_left(egui::Align::Min)
-    } else {
-        egui::Layout::left_to_right(egui::Align::Min)
-    };
-    ui.with_layout(layout, |ui| {
+    let fill = pal.accent.linear_multiply(if dark { 0.28 } else { 0.14 });
+    ui.with_layout(egui::Layout::right_to_left(egui::Align::Min), |ui| {
+        ui.add_space(4.0);
         egui::Frame::new()
             .fill(fill)
-            .corner_radius(10.0)
-            .inner_margin(10.0)
+            .stroke(egui::Stroke::new(1.0, pal.accent.linear_multiply(0.45)))
+            .corner_radius(egui::CornerRadius {
+                nw: 12,
+                ne: 12,
+                sw: 12,
+                se: 3,
+            })
+            .inner_margin(egui::Margin::symmetric(12, 8))
             .show(ui, |ui| {
-                ui.set_max_width(ui.available_width() * 0.85);
+                ui.set_max_width(ui.available_width() * 0.72);
                 ui.vertical(|ui| {
-                    ui::wrapped_text(ui, text);
-                    if let Some(m) = meta {
-                        ui.label(egui::RichText::new(m).small().weak());
+                    ui.add(
+                        egui::Label::new(egui::RichText::new(text).color(pal.text))
+                            .wrap()
+                            .selectable(true),
+                    );
+                    if !when.is_empty() {
+                        ui.label(
+                            egui::RichText::new(format!("você · {when}"))
+                                .small()
+                                .color(pal.text_weak),
+                        );
                     }
                 });
             });
     });
+    ui.add_space(6.0);
+}
+
+fn assistant_card(
+    ui: &mut egui::Ui,
+    pal: &ui::Palette,
+    cache: &mut egui_commonmark::CommonMarkCache,
+    text: &str,
+    res: &serde_json::Value,
+    when: String,
+) {
+    ui.with_layout(egui::Layout::left_to_right(egui::Align::Min), |ui| {
+        ui.add_space(4.0);
+        egui::Frame::new()
+            .fill(pal.card)
+            .stroke(egui::Stroke::new(1.0, pal.border))
+            .corner_radius(egui::CornerRadius {
+                nw: 3,
+                ne: 12,
+                sw: 12,
+                se: 12,
+            })
+            .inner_margin(egui::Margin::symmetric(14, 10))
+            .show(ui, |ui| {
+                ui.set_max_width(ui.available_width() * 0.88);
+                ui.set_width(ui.available_width() * 0.88);
+                ui.vertical(|ui| {
+                    md(ui, cache, text);
+                    ui.add_space(6.0);
+                    ui.horizontal_wrapped(|ui| {
+                        ui.label(
+                            egui::RichText::new("Claude")
+                                .font(ui::medium(12.0))
+                                .color(pal.text_weak),
+                        );
+                        if !when.is_empty() {
+                            ui.label(egui::RichText::new(when).small().color(pal.text_weak));
+                        }
+                        if let Some(m) = res.get("model").and_then(|c| c.as_str()) {
+                            ui::badge(ui, m, Tone::Neutral);
+                        }
+                        if let Some(d) = res.get("duration_ms").and_then(|c| c.as_u64()) {
+                            ui::badge(ui, &ui::fmt_ms(d), Tone::Neutral);
+                        }
+                        if let Some(c) = res.get("cost_usd").and_then(|c| c.as_f64()) {
+                            ui::badge(ui, &ui::fmt_usd(c), Tone::Neutral);
+                        }
+                        if ui
+                            .add(
+                                egui::Button::new(egui::RichText::new("copiar").small())
+                                    .frame(false),
+                            )
+                            .clicked()
+                        {
+                            ui.ctx().copy_text(text.to_string());
+                        }
+                    });
+                });
+            });
+    });
+    ui.add_space(8.0);
+}
+
+fn error_card(ui: &mut egui::Ui, _pal: &ui::Palette, msg: &str) {
+    let red = Tone::Danger.color(ui.visuals().dark_mode);
+    egui::Frame::new()
+        .fill(red.linear_multiply(0.12))
+        .stroke(egui::Stroke::new(1.0, red.linear_multiply(0.6)))
+        .corner_radius(10.0)
+        .inner_margin(egui::Margin::symmetric(12, 8))
+        .show(ui, |ui| {
+            ui.set_width(ui.available_width() * 0.88);
+            ui.horizontal_top(|ui| {
+                ui.label(
+                    egui::RichText::new("Erro")
+                        .font(ui::medium(13.0))
+                        .color(red),
+                );
+                ui.add(
+                    egui::Label::new(egui::RichText::new(msg).color(red))
+                        .wrap()
+                        .selectable(true),
+                );
+            });
+        });
+    ui.add_space(8.0);
+}
+
+/// Cartão do turno em andamento: cabeçalho animado + linha do tempo dos eventos
+/// intermediários (ferramentas, raciocínio, status) + texto parcial em Markdown.
+fn live_card(
+    ui: &mut egui::Ui,
+    pal: &ui::Palette,
+    cache: &mut egui_commonmark::CommonMarkCache,
+    items: &[EngineDelta],
+    text: &str,
+    started: Option<std::time::Instant>,
+) {
+    let t = ui.input(|i| i.time);
+    let phase = ((t * 2.0) as usize) % 4;
+    let dots = ".".repeat(phase);
+    let dark = ui.visuals().dark_mode;
+    egui::Frame::new()
+        .fill(pal.card)
+        .stroke(egui::Stroke::new(1.0, pal.accent.linear_multiply(0.55)))
+        .corner_radius(egui::CornerRadius {
+            nw: 3,
+            ne: 12,
+            sw: 12,
+            se: 12,
+        })
+        .inner_margin(egui::Margin::symmetric(14, 10))
+        .show(ui, |ui| {
+            ui.set_width(ui.available_width() * 0.88);
+            ui.horizontal(|ui| {
+                // pulso
+                let (r, _) = ui.allocate_exact_size(egui::vec2(12.0, 12.0), egui::Sense::hover());
+                let pulse = 0.5 + 0.5 * (t * 4.0).sin() as f32;
+                ui.painter().circle_filled(
+                    r.center(),
+                    3.0 + 2.5 * pulse,
+                    pal.accent.linear_multiply(0.35),
+                );
+                ui.painter().circle_filled(r.center(), 3.0, pal.accent);
+                ui.label(
+                    egui::RichText::new(format!("Claude está trabalhando{dots}"))
+                        .font(ui::medium(13.0))
+                        .color(pal.text),
+                );
+                if let Some(s) = started {
+                    ui.label(
+                        egui::RichText::new(format!("{} s", s.elapsed().as_secs()))
+                            .small()
+                            .color(pal.text_weak),
+                    );
+                }
+            });
+            if !items.is_empty() {
+                ui.add_space(4.0);
+            }
+            // linha do tempo
+            let line_x = 6.0;
+            for d in items {
+                match d {
+                    EngineDelta::ToolUse {
+                        name,
+                        input_preview,
+                    } => {
+                        ui.horizontal_top(|ui| {
+                            timeline_dot(ui, line_x, Tone::Info.color(dark));
+                            ui.vertical(|ui| {
+                                ui.horizontal_wrapped(|ui| {
+                                    ui::badge(ui, name, Tone::Info);
+                                    let prev: String = input_preview.chars().take(140).collect();
+                                    ui.add(
+                                        egui::Label::new(
+                                            egui::RichText::new(prev)
+                                                .monospace()
+                                                .size(12.0)
+                                                .color(pal.text_weak),
+                                        )
+                                        .truncate(),
+                                    )
+                                    .on_hover_text(input_preview);
+                                });
+                            });
+                        });
+                    }
+                    EngineDelta::ToolResult { preview, is_error } => {
+                        let col = if *is_error {
+                            Tone::Danger.color(dark)
+                        } else {
+                            Tone::Success.color(dark)
+                        };
+                        ui.horizontal_top(|ui| {
+                            timeline_dot(ui, line_x, col);
+                            let prev: String = preview.chars().take(160).collect();
+                            ui.add(
+                                egui::Label::new(
+                                    egui::RichText::new(format!(
+                                        "{} {prev}",
+                                        if *is_error { "falhou:" } else { "ok:" }
+                                    ))
+                                    .monospace()
+                                    .size(12.0)
+                                    .color(pal.text_weak),
+                                )
+                                .truncate(),
+                            )
+                            .on_hover_text(preview);
+                        });
+                    }
+                    EngineDelta::Status { text } => {
+                        ui.horizontal_top(|ui| {
+                            timeline_dot(ui, line_x, pal.text_weak);
+                            ui.label(egui::RichText::new(text).small().color(pal.text_weak));
+                        });
+                    }
+                    EngineDelta::Thinking { text } => {
+                        ui.horizontal_top(|ui| {
+                            timeline_dot(ui, line_x, Tone::Warning.color(dark));
+                            egui::CollapsingHeader::new(
+                                egui::RichText::new("raciocínio")
+                                    .small()
+                                    .color(pal.text_weak),
+                            )
+                            .id_salt(("think", text.len(), text.as_ptr() as usize))
+                            .show(ui, |ui| {
+                                ui.add(
+                                    egui::Label::new(
+                                        egui::RichText::new(text)
+                                            .italics()
+                                            .size(12.5)
+                                            .color(pal.text_weak),
+                                    )
+                                    .wrap(),
+                                );
+                            });
+                        });
+                    }
+                    EngineDelta::Narration { text } => {
+                        ui.add_space(2.0);
+                        md(ui, cache, text);
+                    }
+                    EngineDelta::TextDelta { .. } => {}
+                }
+            }
+            if !text.is_empty() {
+                ui.add_space(4.0);
+                let caret = if phase.is_multiple_of(2) { "▍" } else { " " };
+                md(ui, cache, &format!("{text}{caret}"));
+            }
+        });
+    ui.add_space(8.0);
+}
+
+fn timeline_dot(ui: &mut egui::Ui, x_pad: f32, color: egui::Color32) {
+    ui.add_space(x_pad);
+    let (r, _) = ui.allocate_exact_size(egui::vec2(10.0, 18.0), egui::Sense::hover());
+    ui.painter()
+        .circle_filled(egui::pos2(r.center().x, r.top() + 9.0), 3.5, color);
     ui.add_space(4.0);
 }
 

@@ -258,6 +258,12 @@ impl WillApp {
             UiCommand::Screenshot(path, nav) => {
                 if let Some(n) = nav.as_deref().and_then(Nav::parse) {
                     self.nav = n;
+                } else if let Some(id) = nav.as_deref().and_then(|n| n.strip_prefix("threads/")) {
+                    // diagnóstico: abre a página de threads já com a thread selecionada
+                    if let Ok(t) = will_core::ThreadId::parse(id) {
+                        self.nav = Nav::Threads;
+                        self.pages.threads.select(t);
+                    }
                 }
                 self.pending_screenshot = Some((path, 3));
             }
