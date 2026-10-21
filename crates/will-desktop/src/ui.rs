@@ -57,8 +57,8 @@ pub fn palette(dark: bool) -> &'static Palette {
 pub const FONT_MEDIUM: &str = "inter-medium";
 pub const FONT_SEMIBOLD: &str = "inter-semibold";
 
-/// Fonte Inter embutida (OFL) como proporcional padrão, com as fontes do egui
-/// como reserva para símbolos e emoji.
+/// Fonte Inter embutida (OFL) como proporcional padrão, Noto Emoji como reserva
+/// para emoji e as fontes do egui para os demais símbolos.
 pub fn install_fonts(ctx: &egui::Context) {
     use egui::epaint::text::{FontData, FontDefinitions, FontFamily};
     let mut fonts = FontDefinitions::default();
@@ -80,11 +80,23 @@ pub fn install_fonts(ctx: &egui::Context) {
             "../assets/fonts/Inter-SemiBold.ttf"
         ))),
     );
-    let fallback: Vec<String> = fonts
+    // Noto Emoji (OFL, monocromático): cobertura completa de emoji. O egui não
+    // desenha fontes coloridas, então os emoji saem na cor do texto.
+    fonts.font_data.insert(
+        "noto-emoji".into(),
+        std::sync::Arc::new(FontData::from_static(include_bytes!(
+            "../assets/fonts/NotoEmoji.ttf"
+        ))),
+    );
+    let mut fallback: Vec<String> = fonts
         .families
         .get(&FontFamily::Proportional)
         .cloned()
         .unwrap_or_default();
+    fallback.insert(0, "noto-emoji".to_string());
+    if let Some(mono) = fonts.families.get_mut(&FontFamily::Monospace) {
+        mono.push("noto-emoji".to_string());
+    }
     let mut prop = vec!["inter".to_string()];
     prop.extend(fallback.iter().cloned());
     fonts.families.insert(FontFamily::Proportional, prop);
@@ -94,6 +106,14 @@ pub fn install_fonts(ctx: &egui::Context) {
         fonts.families.insert(FontFamily::Name(name.into()), fam);
     }
     ctx.set_fonts(fonts);
+}
+
+/// Remove seletores de variação (U+FE0E/U+FE0F) e modificadores de tom de pele,
+/// que virariam "caixinhas" numa fonte de emoji monocromática.
+pub fn clean_emoji(text: &str) -> String {
+    text.chars()
+        .filter(|c| !matches!(*c, '\u{FE0E}' | '\u{FE0F}' | '\u{1F3FB}'..='\u{1F3FF}'))
+        .collect()
 }
 
 pub fn medium(size: f32) -> egui::FontId {

@@ -599,12 +599,14 @@ impl ThreadsPage {
 
 /// Renderiza Markdown (a IA responde em Markdown).
 fn md(ui: &mut egui::Ui, cache: &mut egui_commonmark::CommonMarkCache, text: &str) {
+    let text = ui::clean_emoji(text);
     egui_commonmark::CommonMarkViewer::new()
         .max_image_width(Some(640))
-        .show(ui, cache, text);
+        .show(ui, cache, &text);
 }
 
 fn user_bubble(ui: &mut egui::Ui, pal: &ui::Palette, text: &str, when: &str) {
+    let text = &ui::clean_emoji(text);
     let dark = ui.visuals().dark_mode;
     let fill = pal.accent.linear_multiply(if dark { 0.28 } else { 0.14 });
     ui.with_layout(egui::Layout::right_to_left(egui::Align::Min), |ui| {
