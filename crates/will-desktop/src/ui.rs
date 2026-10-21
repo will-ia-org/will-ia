@@ -833,6 +833,17 @@ pub fn wrapped_text(ui: &mut Ui, text: &str) {
     ui.add(egui::Label::new(text).wrap().selectable(true));
 }
 
+/// Corta um texto em `max` caracteres com reticências (para ids e nomes longos
+/// em grades, onde não há quebra de linha).
+pub fn ellipsize(s: &str, max: usize) -> String {
+    if s.chars().count() <= max {
+        s.to_string()
+    } else {
+        let cut: String = s.chars().take(max.saturating_sub(1)).collect();
+        format!("{}…", cut.trim_end())
+    }
+}
+
 pub fn mono(ui: &mut Ui, text: &str) {
     ui.add(
         egui::Label::new(RichText::new(text).monospace().small())

@@ -623,7 +623,9 @@ impl GooglePage {
                             }
                             color_swatch(ui, &ui::s(cal, "color"));
                             ui.horizontal(|ui| {
-                                ui.label(ui::s(cal, "summary"));
+                                let summary = ui::s(cal, "summary");
+                                ui.label(ui::ellipsize(&summary, 36))
+                                    .on_hover_text(&summary);
                                 let role = ui::s(cal, "access_role");
                                 if !role.is_empty() {
                                     ui::badge(
@@ -637,16 +639,25 @@ impl GooglePage {
                                     );
                                 }
                             });
+                            // id da agenda é longo (…@group.calendar.google.com):
+                            // mostra truncado, completo no hover, e copia ao clicar.
                             let tz = ui::s(cal, "timezone");
-                            ui.label(
-                                egui::RichText::new(if tz.is_empty() {
-                                    cal_id.clone()
-                                } else {
-                                    format!("{tz} · {cal_id}")
-                                })
-                                .weak()
-                                .small(),
-                            );
+                            let short = ui::ellipsize(&cal_id, 22);
+                            let text = if tz.is_empty() {
+                                short
+                            } else {
+                                format!("{tz} · {short}")
+                            };
+                            let r = ui
+                                .add(
+                                    egui::Label::new(egui::RichText::new(text).weak().small())
+                                        .sense(egui::Sense::click()),
+                                )
+                                .on_hover_text(format!("{cal_id}\n(clique para copiar o id)"));
+                            if r.clicked() {
+                                ui.ctx().copy_text(cal_id.clone());
+                                cx.toasts.success("Id da agenda copiado.");
+                            }
                             ui.end_row();
                         }
                     });
