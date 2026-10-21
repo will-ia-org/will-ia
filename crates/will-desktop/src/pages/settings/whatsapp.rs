@@ -2,6 +2,7 @@
 //! código), desvincular, reconectar, configuração das ferramentas.
 
 use super::SettingsState;
+use crate::help;
 use crate::pages::Cx;
 use crate::service::{j, Loader, Task};
 use crate::ui::{self, Tone};
@@ -102,7 +103,7 @@ impl WhatsAppPage {
 
     pub fn ui(&mut self, ui: &mut egui::Ui, cx: &mut Cx, st: &mut SettingsState) {
         self.poll(cx);
-        ui::heading(ui, "WhatsApp", Some("Contas pessoais pareadas como aparelho conectado; expostas aos agentes só como ferramentas whatsapp_* (não é canal de entrada). Protocolo não oficial do WhatsApp Web."));
+        ui::heading_help(ui, "WhatsApp", Some("Contas pessoais pareadas como aparelho conectado; expostas aos agentes só como ferramentas whatsapp_* (não é canal de entrada)."), &help::WHATSAPP);
 
         let enabled_saved = st.saved.whatsapp.enabled;
         let status = self.status.data.clone();

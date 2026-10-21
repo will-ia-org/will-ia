@@ -2,6 +2,7 @@
 //! modelo, permissões, limites.
 
 use super::SettingsState;
+use crate::help;
 use crate::pages::Cx;
 use crate::service::{j, Loader, Task};
 use crate::ui::{self, Tone};
@@ -128,154 +129,161 @@ impl EnginePage {
         ui::heading(ui, "Motor Claude", Some("Processos `claude -p` headless, um por thread, rodando sobre a base de conhecimento. Nenhuma chamada direta à API da Anthropic."));
 
         // ---- tokens ----
-        ui::section(ui, "Tokens de assinatura (claude setup-token)", |ui| {
-            ui.label(egui::RichText::new("Só um token fica ativo. Ativar testa o token num processo descartável, aplica e derruba processos vivos (voltam com --resume).").weak().small());
-            ui.add_space(4.0);
-            if let Some(e) = &self.tokens.error {
-                ui::error_text(ui, e);
-            }
-            let list = self
-                .tokens
-                .data
-                .as_ref()
-                .and_then(|v| v.as_array())
-                .cloned()
-                .unwrap_or_default();
-            if list.is_empty() && !self.tokens.loading() {
-                ui.label(egui::RichText::new("Nenhum token cadastrado. Gere um com `claude setup-token` no terminal e cole abaixo.").weak());
-            }
-            egui::Grid::new("tokens-grid")
-                .num_columns(5)
-                .striped(true)
-                .spacing([14.0, 6.0])
-                .show(ui, |ui| {
-                    for t in &list {
-                        let id = ui::s(t, "id");
-                        let active = ui::b(t, "active");
-                        ui.horizontal(|ui| {
-                            if active {
-                                ui::badge(ui, "ativo", Tone::Success);
+        ui::section_help(
+            ui,
+            "Tokens de assinatura (claude setup-token)",
+            Some(&help::ENGINE_TOKENS),
+            |ui| {
+                if let Some(e) = &self.tokens.error {
+                    ui::error_text(ui, e);
+                }
+                let list = self
+                    .tokens
+                    .data
+                    .as_ref()
+                    .and_then(|v| v.as_array())
+                    .cloned()
+                    .unwrap_or_default();
+                if list.is_empty() && !self.tokens.loading() {
+                    ui.label(egui::RichText::new("Nenhum token cadastrado. Gere um com `claude setup-token` no terminal e cole abaixo.").weak());
+                }
+                egui::Grid::new("tokens-grid")
+                    .num_columns(5)
+                    .striped(true)
+                    .spacing([14.0, 6.0])
+                    .show(ui, |ui| {
+                        for t in &list {
+                            let id = ui::s(t, "id");
+                            let active = ui::b(t, "active");
+                            ui.horizontal(|ui| {
+                                if active {
+                                    ui::badge(ui, "ativo", Tone::Success);
+                                }
+                                ui.label(egui::RichText::new(ui::s(t, "label")).strong());
+                            });
+                            ui.monospace(ui::s(t, "masked"));
+                            let status = ui::s(t, "status");
+                            match status.as_str() {
+                                "ok" => ui::badge(ui, "ok", Tone::Success),
+                                "error" => ui::badge(ui, "erro", Tone::Danger),
+                                _ => ui::badge(ui, "não testado", Tone::Neutral),
                             }
-                            ui.label(egui::RichText::new(ui::s(t, "label")).strong());
-                        });
-                        ui.monospace(ui::s(t, "masked"));
-                        let status = ui::s(t, "status");
-                        match status.as_str() {
-                            "ok" => ui::badge(ui, "ok", Tone::Success),
-                            "error" => ui::badge(ui, "erro", Tone::Danger),
-                            _ => ui::badge(ui, "não testado", Tone::Neutral),
-                        }
-                        ui.label(
-                            egui::RichText::new(
-                                t.get("error").and_then(|e| e.as_str()).unwrap_or(""),
-                            )
-                            .small()
-                            .weak(),
-                        );
-                        ui.horizontal(|ui| {
-                            let testing = self.test_task.as_ref().is_some_and(|(i, _)| i == &id);
-                            let activating =
-                                self.activate_task.as_ref().is_some_and(|(i, _)| i == &id);
-                            if testing || activating {
-                                ui.spinner();
-                            }
-                            if ui
-                                .add_enabled(!testing && !activating, egui::Button::new("Testar"))
-                                .clicked()
-                            {
-                                let id2 = id.clone();
-                                self.test_task = Some((
-                                    id.clone(),
-                                    cx.svc.call(move |s| async move {
-                                        j(api::test_token(State(s), Path(id2)).await)
-                                    }),
-                                ));
-                            }
-                            if !active
-                                && ui
+                            ui.label(
+                                egui::RichText::new(
+                                    t.get("error").and_then(|e| e.as_str()).unwrap_or(""),
+                                )
+                                .small()
+                                .weak(),
+                            );
+                            ui.horizontal(|ui| {
+                                let testing =
+                                    self.test_task.as_ref().is_some_and(|(i, _)| i == &id);
+                                let activating =
+                                    self.activate_task.as_ref().is_some_and(|(i, _)| i == &id);
+                                if testing || activating {
+                                    ui.spinner();
+                                }
+                                if ui
                                     .add_enabled(
                                         !testing && !activating,
-                                        egui::Button::new("Ativar"),
+                                        egui::Button::new("Testar"),
                                     )
                                     .clicked()
-                            {
-                                let id2 = id.clone();
-                                self.activate_task = Some((
-                                    id.clone(),
-                                    cx.svc.call(move |s| async move {
-                                        j(api::activate_token(State(s), Path(id2)).await)
-                                    }),
-                                ));
-                            }
-                            if ui.button("remover").clicked() {
-                                self.confirm_delete = Some((id.clone(), ui::s(t, "label")));
-                            }
-                        });
-                        ui.end_row();
-                    }
-                });
-            if let Some(out) = &self.last_test_output {
-                ui.collapsing("Saída do último teste", |ui| ui::mono(ui, out));
-            }
-            ui.add_space(6.0);
-            if !self.show_add {
-                if ui::primary_button(ui, "Adicionar token").clicked() {
-                    self.show_add = true;
+                                {
+                                    let id2 = id.clone();
+                                    self.test_task = Some((
+                                        id.clone(),
+                                        cx.svc.call(move |s| async move {
+                                            j(api::test_token(State(s), Path(id2)).await)
+                                        }),
+                                    ));
+                                }
+                                if !active
+                                    && ui
+                                        .add_enabled(
+                                            !testing && !activating,
+                                            egui::Button::new("Ativar"),
+                                        )
+                                        .clicked()
+                                {
+                                    let id2 = id.clone();
+                                    self.activate_task = Some((
+                                        id.clone(),
+                                        cx.svc.call(move |s| async move {
+                                            j(api::activate_token(State(s), Path(id2)).await)
+                                        }),
+                                    ));
+                                }
+                                if ui.button("remover").clicked() {
+                                    self.confirm_delete = Some((id.clone(), ui::s(t, "label")));
+                                }
+                            });
+                            ui.end_row();
+                        }
+                    });
+                if let Some(out) = &self.last_test_output {
+                    ui.collapsing("Saída do último teste", |ui| ui::mono(ui, out));
                 }
-            } else {
-                ui::field(ui, "Rótulo", Some("Ex.: conta pessoal"), |ui| {
-                    ui::text_input(ui, &mut self.new_label, "rótulo");
-                });
-                ui::field(ui, "Token", Some("Saída de `claude setup-token` (sk-ant-oat01-…). Vai para o cofre de segredos, nunca para o banco."), |ui| {
+                ui.add_space(6.0);
+                if !self.show_add {
+                    if ui::primary_button(ui, "Adicionar token").clicked() {
+                        self.show_add = true;
+                    }
+                } else {
+                    ui::field(ui, "Rótulo", Some("Ex.: conta pessoal"), |ui| {
+                        ui::text_input(ui, &mut self.new_label, "rótulo");
+                    });
+                    ui::field(ui, "Token", Some("Saída de `claude setup-token` (sk-ant-oat01-…). Vai para o cofre de segredos, nunca para o banco."), |ui| {
                     ui.add(egui::TextEdit::singleline(&mut self.new_token).password(true).desired_width(f32::INFINITY));
                 });
-                ui.horizontal(|ui| {
-                    let ok = self.new_token.trim().len() >= 20 && self.add_task.is_none();
-                    if ui
-                        .add_enabled(ok, egui::Button::new("Cadastrar e ativar"))
-                        .clicked()
-                    {
-                        let label = self.new_label.clone();
-                        let token = self.new_token.clone();
-                        self.add_task = Some(cx.svc.call(move |s| async move {
-                            j(api::add_token(
-                                State(s),
-                                Json(api::AddToken {
-                                    label,
-                                    token,
-                                    activate: Some(true),
-                                }),
-                            )
-                            .await)
-                        }));
-                    }
-                    if ui
-                        .add_enabled(ok, egui::Button::new("Só cadastrar"))
-                        .clicked()
-                    {
-                        let label = self.new_label.clone();
-                        let token = self.new_token.clone();
-                        self.add_task = Some(cx.svc.call(move |s| async move {
-                            j(api::add_token(
-                                State(s),
-                                Json(api::AddToken {
-                                    label,
-                                    token,
-                                    activate: Some(false),
-                                }),
-                            )
-                            .await)
-                        }));
-                    }
-                    if ui.button("Cancelar").clicked() {
-                        self.show_add = false;
-                    }
-                    if self.add_task.is_some() {
-                        ui.spinner();
-                    }
-                });
-            }
-        });
+                    ui.horizontal(|ui| {
+                        let ok = self.new_token.trim().len() >= 20 && self.add_task.is_none();
+                        if ui
+                            .add_enabled(ok, egui::Button::new("Cadastrar e ativar"))
+                            .clicked()
+                        {
+                            let label = self.new_label.clone();
+                            let token = self.new_token.clone();
+                            self.add_task = Some(cx.svc.call(move |s| async move {
+                                j(api::add_token(
+                                    State(s),
+                                    Json(api::AddToken {
+                                        label,
+                                        token,
+                                        activate: Some(true),
+                                    }),
+                                )
+                                .await)
+                            }));
+                        }
+                        if ui
+                            .add_enabled(ok, egui::Button::new("Só cadastrar"))
+                            .clicked()
+                        {
+                            let label = self.new_label.clone();
+                            let token = self.new_token.clone();
+                            self.add_task = Some(cx.svc.call(move |s| async move {
+                                j(api::add_token(
+                                    State(s),
+                                    Json(api::AddToken {
+                                        label,
+                                        token,
+                                        activate: Some(false),
+                                    }),
+                                )
+                                .await)
+                            }));
+                        }
+                        if ui.button("Cancelar").clicked() {
+                            self.show_add = false;
+                        }
+                        if self.add_task.is_some() {
+                            ui.spinner();
+                        }
+                    });
+                }
+            },
+        );
 
         if let Some((id, label)) = self.confirm_delete.clone() {
             let c = ui::Confirm { title: "Remover token".into(), body: format!("Remover o token '{label}'? Se estiver ativo, o motor fica sem token até ativar outro."), confirm_label: "Remover".into(), danger: true, tag: "del-token".into() };
@@ -290,7 +298,7 @@ impl EnginePage {
         }
 
         // ---- execução ----
-        ui::section(ui, "Execução", |ui| {
+        ui::section_help(ui, "Execução", Some(&help::ENGINE_EXECUTION), |ui| {
             let e = &mut st.draft.engine;
             ui::field(
                 ui,

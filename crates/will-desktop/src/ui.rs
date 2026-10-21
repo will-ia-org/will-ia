@@ -406,19 +406,7 @@ pub fn heading(ui: &mut Ui, title: &str, description: Option<&str>) {
 }
 
 pub fn section(ui: &mut Ui, title: &str, add: impl FnOnce(&mut Ui)) {
-    ui.add_space(8.0);
-    let p = palette(ui.visuals().dark_mode);
-    egui::Frame::new()
-        .fill(p.card)
-        .stroke(egui::Stroke::new(1.0, p.border))
-        .corner_radius(10.0)
-        .inner_margin(egui::Margin::symmetric(18, 14))
-        .show(ui, |ui| {
-            ui.set_width(ui.available_width());
-            ui.label(RichText::new(title).font(semibold(15.0)));
-            ui.add_space(8.0);
-            add(ui);
-        });
+    section_help(ui, title, None, add);
 }
 
 /// Linha de formulário: rótulo (+dica) à esquerda, widget à direita.
@@ -863,4 +851,180 @@ pub fn optional_i64(ui: &mut Ui, value: &mut Option<i64>, hint: &str) {
     if r.changed() {
         *value = text.trim().parse().ok();
     }
+}
+
+// ---------- ajuda (ícone "?" + modal) ----------
+
+/// Conteúdo de uma ajuda: passo a passo e notas, mostrados num modal aberto
+/// pelo ícone "?" ao lado do título da seção. Nada disso ocupa espaço na página.
+pub struct Help {
+    pub title: &'static str,
+    pub intro: &'static str,
+    /// (título do passo, explicação)
+    pub steps: &'static [(&'static str, &'static str)],
+    /// (título da nota, texto) — dúvidas comuns, erros, avisos
+    pub notes: &'static [(&'static str, &'static str)],
+    /// bloco de código/terminal (vazio = nenhum)
+    pub code: &'static str,
+    /// (rótulo, URL)
+    pub links: &'static [(&'static str, &'static str)],
+}
+
+fn help_open_id(help: &Help) -> egui::Id {
+    egui::Id::unique(("help-open", help.title))
+}
+
+/// Ícone "?" clicável. Abre o modal com a ajuda; o estado fica na memória do egui.
+pub fn help_icon(ui: &mut Ui, help: &Help) {
+    let id = help_open_id(help);
+    let mut open = ui.ctx().data(|d| d.get_temp::<bool>(id)).unwrap_or(false);
+    let p = palette(ui.visuals().dark_mode);
+    let r = ui
+        .add(
+            egui::Button::new(RichText::new("?").font(semibold(12.0)).color(p.accent))
+                .corner_radius(10.0)
+                .min_size(egui::vec2(20.0, 20.0))
+                .stroke(egui::Stroke::new(1.0, p.accent)),
+        )
+        .on_hover_text("Ajuda e passo a passo");
+    if r.clicked() {
+        open = true;
+    }
+    if open && help_modal(ui.ctx(), help) {
+        open = false;
+    }
+    ui.ctx().data_mut(|d| d.insert_temp(id, open));
+}
+
+/// Modal da ajuda; devolve `true` quando o usuário fechou.
+fn help_modal(ctx: &egui::Context, help: &Help) -> bool {
+    let mut close = false;
+    let screen = ctx.content_rect();
+    let width = (screen.width() - 48.0).clamp(280.0, 620.0);
+    let max_h = (screen.height() - 160.0).max(160.0);
+    let m = egui::Modal::new(egui::Id::unique(("help-modal", help.title))).show(ctx, |ui| {
+        ui.set_width(width);
+        let dark = ui.visuals().dark_mode;
+        let accent = Tone::Info.color(dark);
+        ui.horizontal(|ui| {
+            ui.label(RichText::new(help.title).font(semibold(18.0)));
+            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                if ui.small_button("✕").on_hover_text("Fechar").clicked() {
+                    close = true;
+                }
+            });
+        });
+        ui.add_space(6.0);
+        egui::ScrollArea::vertical()
+            .id_salt(("help-scroll", help.title))
+            .max_height(max_h)
+            .auto_shrink([false, true])
+            .show(ui, |ui| {
+                ui.set_width(ui.available_width() - 8.0);
+                if !help.intro.is_empty() {
+                    ui.add(egui::Label::new(RichText::new(help.intro).size(13.5)).wrap());
+                    ui.add_space(8.0);
+                }
+                for (i, (title, body)) in help.steps.iter().enumerate() {
+                    ui.horizontal_top(|ui| {
+                        let (rect, _) =
+                            ui.allocate_exact_size(egui::vec2(22.0, 22.0), egui::Sense::hover());
+                        ui.painter().circle_filled(rect.center(), 11.0, accent);
+                        ui.painter().text(
+                            rect.center(),
+                            egui::Align2::CENTER_CENTER,
+                            (i + 1).to_string(),
+                            semibold(12.0),
+                            Color32::WHITE,
+                        );
+                        ui.add_space(4.0);
+                        ui.vertical(|ui| {
+                            ui.set_width(ui.available_width());
+                            ui.label(RichText::new(*title).font(semibold(14.0)));
+                            ui.add(egui::Label::new(RichText::new(*body).weak()).wrap());
+                        });
+                    });
+                    ui.add_space(8.0);
+                }
+                if !help.code.is_empty() {
+                    ui.horizontal(|ui| {
+                        ui.label(RichText::new("No terminal").font(semibold(13.0)));
+                        if ui.small_button("Copiar").clicked() {
+                            ui.ctx().copy_text(help.code.to_string());
+                        }
+                    });
+                    mono(ui, help.code);
+                    ui.add_space(8.0);
+                }
+                if !help.notes.is_empty() {
+                    if !help.steps.is_empty() || !help.code.is_empty() {
+                        ui.separator();
+                        ui.add_space(4.0);
+                    }
+                    for (title, body) in help.notes {
+                        ui.label(RichText::new(*title).font(semibold(13.5)));
+                        ui.add(egui::Label::new(RichText::new(*body).weak()).wrap());
+                        ui.add_space(8.0);
+                    }
+                }
+                if !help.links.is_empty() {
+                    ui.separator();
+                    ui.add_space(4.0);
+                    ui.label(RichText::new("Links").font(semibold(13.0)));
+                    for (label, url) in help.links {
+                        ui.horizontal_wrapped(|ui| {
+                            ui.hyperlink_to(*label, *url).on_hover_text(*url);
+                            if ui.small_button("copiar").clicked() {
+                                ui.ctx().copy_text(url.to_string());
+                            }
+                        });
+                    }
+                    ui.add_space(4.0);
+                }
+            });
+        ui.add_space(10.0);
+        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+            if primary_button(ui, "Fechar").clicked() {
+                close = true;
+            }
+        });
+    });
+    close || m.should_close()
+}
+
+/// Cartão de seção com ícone "?" ao lado do título.
+pub fn section_help(ui: &mut Ui, title: &str, help: Option<&Help>, add: impl FnOnce(&mut Ui)) {
+    ui.add_space(8.0);
+    let p = palette(ui.visuals().dark_mode);
+    egui::Frame::new()
+        .fill(p.card)
+        .stroke(egui::Stroke::new(1.0, p.border))
+        .corner_radius(10.0)
+        .inner_margin(egui::Margin::symmetric(18, 14))
+        .show(ui, |ui| {
+            ui.set_width(ui.available_width());
+            ui.horizontal(|ui| {
+                ui.label(RichText::new(title).font(semibold(15.0)));
+                if let Some(h) = help {
+                    ui.add_space(2.0);
+                    help_icon(ui, h);
+                }
+            });
+            ui.add_space(8.0);
+            add(ui);
+        });
+}
+
+/// Título de página com descrição curta e ícone "?" para a ajuda completa.
+pub fn heading_help(ui: &mut Ui, title: &str, description: Option<&str>, help: &Help) {
+    ui.add_space(4.0);
+    ui.horizontal(|ui| {
+        ui.label(RichText::new(title).font(semibold(21.0)));
+        ui.add_space(2.0);
+        help_icon(ui, help);
+    });
+    if let Some(d) = description {
+        ui.add(egui::Label::new(RichText::new(d).weak().size(13.0)).wrap());
+    }
+    ui.add_space(2.0);
 }

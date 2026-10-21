@@ -2,6 +2,7 @@
 //! (configuração e seleção de agendas) e Gmail (configuração).
 
 use super::SettingsState;
+use crate::help;
 use crate::pages::Cx;
 use crate::service::{j, Loader, Task};
 use crate::ui::{self, SecretAction, SecretField, Tone};
@@ -226,60 +227,42 @@ impl GooglePage {
             .as_deref()
             .is_some_and(|c| !c.trim().is_empty());
 
-        ui::section(ui, "Conta Google (OAuth do próprio usuário)", |ui| {
-            ui.label(egui::RichText::new("O will-ia não embute credenciais do Google: você cria um cliente OAuth no seu próprio projeto. Passo a passo (console.cloud.google.com):").weak());
-            ui.add_space(4.0);
-            egui::CollapsingHeader::new("Passo a passo para criar o cliente OAuth").default_open(!client_id_saved).show(ui, |ui| {
-                let step = |ui: &mut egui::Ui, n: &str, title: &str, body: &str| {
-                    ui.horizontal_top(|ui| {
-                        ui.label(egui::RichText::new(n).strong().color(Tone::Info.color(true)));
-                        ui.vertical(|ui| {
-                            ui.label(egui::RichText::new(title).strong());
-                            ui.add(egui::Label::new(egui::RichText::new(body).weak().small()).wrap());
-                        });
-                    });
+        ui::section_help(
+            ui,
+            "Conta Google (OAuth do próprio usuário)",
+            Some(&help::GOOGLE_OAUTH),
+            |ui| {
+                if !client_id_saved {
+                    ui.label(egui::RichText::new("Ainda sem credenciais? O ícone ? no título tem o passo a passo no Google Cloud.").weak().small());
                     ui.add_space(4.0);
-                };
-                step(ui, "1", "Projeto", "No topo do console, selecione ou crie um projeto (ex.: \"will-ia\").");
-                step(ui, "2", "Ativar as APIs", "Menu › APIs e serviços › Biblioteca. Procure e ative \"Google Calendar API\" e \"Gmail API\".");
-                step(ui, "3", "Tela de consentimento OAuth", "APIs e serviços › Tela de permissão OAuth (ou \"Google Auth Platform › Branding\"). Tipo de usuário: Externo. Preencha nome do app e e-mails de suporte. Em \"Público-alvo\" (Test users) adicione o seu próprio e-mail do Google.");
-                step(ui, "4", "Publicar o app", "Ainda na tela de consentimento, clique em \"Publicar aplicativo\". Em modo Teste o Google expira o refresh token em 7 dias e você teria de reautorizar toda semana. Não é preciso enviar para verificação: use normalmente com o aviso de \"app não verificado\" (clique em Avançado › Acessar).");
-                step(ui, "5", "Criar o cliente", "APIs e serviços › Credenciais › Criar credenciais › ID do cliente OAuth. Tipo de aplicativo: **App para computador** (Desktop app). Dê um nome e clique em Criar.");
-                step(ui, "6", "Copiar e colar aqui", "Na janela que abre, copie o \"ID do cliente\" (termina em .apps.googleusercontent.com) e a \"Chave secreta do cliente\" (começa com GOCSPX-). Cole nos campos abaixo e salve.");
-                step(ui, "7", "Conectar", "Clique em \"Conectar conta\" mais abaixo, escolha os escopos e autorize no navegador. A conta aparece na lista ao concluir.");
-                ui.add_space(4.0);
-                ui.label(egui::RichText::new("Erro \"redirect_uri_mismatch\" ao autorizar?").strong());
-                ui.add(egui::Label::new(egui::RichText::new("Significa que o cliente foi criado como \"Aplicativo da Web\" em vez de \"App para computador\". Só o tipo computador aceita o redirecionamento http://127.0.0.1 com porta aleatória sem cadastro. Resolva de um dos dois jeitos: crie um cliente novo do tipo App para computador (recomendado), ou fixe uma porta abaixo e cadastre exatamente a URI mostrada em \"URIs de redirecionamento autorizados\" do cliente Web.").weak().small()).wrap());
-            });
-            ui.add_space(6.0);
-
-            ui::field(
-                ui,
-                "client_id",
-                Some("Termina em .apps.googleusercontent.com"),
-                |ui| {
-                    ui::optional_text(
-                        ui,
-                        &mut st.draft.google.client_id,
-                        "xxxx.apps.googleusercontent.com",
-                    );
-                },
-            );
-            let mut action = SecretAction::None;
-            ui::field(
-                ui,
-                "client_secret",
-                Some("Vai para o cofre de segredos; nunca para o banco ou logs."),
-                |ui| {
-                    action = self.client_secret.ui(ui, secret_present, "GOCSPX-…");
-                },
-            );
-            match action {
-                SecretAction::Save(v) => st.set_secret(cx.svc, &secret_key, v),
-                SecretAction::Delete => st.delete_secret(cx.svc, &secret_key),
-                SecretAction::None => {}
-            }
-            ui::field(
+                }
+                ui::field(
+                    ui,
+                    "client_id",
+                    Some("Termina em .apps.googleusercontent.com"),
+                    |ui| {
+                        ui::optional_text(
+                            ui,
+                            &mut st.draft.google.client_id,
+                            "xxxx.apps.googleusercontent.com",
+                        );
+                    },
+                );
+                let mut action = SecretAction::None;
+                ui::field(
+                    ui,
+                    "client_secret",
+                    Some("Vai para o cofre de segredos; nunca para o banco ou logs."),
+                    |ui| {
+                        action = self.client_secret.ui(ui, secret_present, "GOCSPX-…");
+                    },
+                );
+                match action {
+                    SecretAction::Save(v) => st.set_secret(cx.svc, &secret_key, v),
+                    SecretAction::Delete => st.delete_secret(cx.svc, &secret_key),
+                    SecretAction::None => {}
+                }
+                ui::field(
                 ui,
                 "Porta do callback",
                 Some("Vazio = aleatória (cliente App para computador). Fixe só se usar um cliente Web e cadastre a URI ao lado no Google."),
@@ -301,182 +284,183 @@ impl GooglePage {
                     });
                 },
             );
-            st.save_bar(ui, cx.svc, "google");
+                st.save_bar(ui, cx.svc, "google");
 
-            ui.add_space(10.0);
-            ui.separator();
-            ui.label(egui::RichText::new("Contas conectadas").strong());
-            ui.add_space(4.0);
-            if let Some(e) = &self.accounts.error {
-                ui::error_text(ui, e);
-            }
-            let list = self
-                .accounts
-                .data
-                .as_ref()
-                .and_then(|v| v.as_array())
-                .cloned()
-                .unwrap_or_default();
-            if list.is_empty() {
-                if self.accounts.loading() {
-                    ui::busy(ui, "carregando contas…");
-                } else {
-                    ui.label(egui::RichText::new("Nenhuma conta conectada.").weak());
+                ui.add_space(10.0);
+                ui.separator();
+                ui.label(egui::RichText::new("Contas conectadas").strong());
+                ui.add_space(4.0);
+                if let Some(e) = &self.accounts.error {
+                    ui::error_text(ui, e);
                 }
-            }
-            for a in &list {
-                let id = ui::s(a, "id");
-                let email = ui::s(a, "email");
-                let status = ui::s(a, "status");
-                egui::Frame::new()
-                    .inner_margin(egui::Margin::symmetric(0, 4))
-                    .show(ui, |ui| {
-                        ui.horizontal_wrapped(|ui| {
-                            ui.label(egui::RichText::new(&email).strong());
-                            let (label, tone) = account_status(&status);
-                            ui::badge(ui, label, tone);
-                            for sc in scope_labels(a) {
-                                ui::badge(ui, &sc, Tone::Info);
-                            }
+                let list = self
+                    .accounts
+                    .data
+                    .as_ref()
+                    .and_then(|v| v.as_array())
+                    .cloned()
+                    .unwrap_or_default();
+                if list.is_empty() {
+                    if self.accounts.loading() {
+                        ui::busy(ui, "carregando contas…");
+                    } else {
+                        ui.label(egui::RichText::new("Nenhuma conta conectada.").weak());
+                    }
+                }
+                for a in &list {
+                    let id = ui::s(a, "id");
+                    let email = ui::s(a, "email");
+                    let status = ui::s(a, "status");
+                    egui::Frame::new()
+                        .inner_margin(egui::Margin::symmetric(0, 4))
+                        .show(ui, |ui| {
+                            ui.horizontal_wrapped(|ui| {
+                                ui.label(egui::RichText::new(&email).strong());
+                                let (label, tone) = account_status(&status);
+                                ui::badge(ui, label, tone);
+                                for sc in scope_labels(a) {
+                                    ui::badge(ui, &sc, Tone::Info);
+                                }
+                            });
+                            ui.horizontal_wrapped(|ui| {
+                                let connected = ui::fmt_dt(&a["connected_at"]);
+                                if !connected.is_empty() {
+                                    ui.label(
+                                        egui::RichText::new(format!("conectada em {connected}"))
+                                            .weak()
+                                            .small(),
+                                    );
+                                }
+                                let used = ui::fmt_dt(&a["last_used_at"]);
+                                if !used.is_empty() {
+                                    ui.label(
+                                        egui::RichText::new(format!("· último uso {used}"))
+                                            .weak()
+                                            .small(),
+                                    );
+                                }
+                                ui.label(egui::RichText::new(format!("· id {id}")).weak().small());
+                            });
+                            ui.horizontal(|ui| {
+                                let reauthorizing =
+                                    self.reauth_task.as_ref().is_some_and(|(i, _)| i == &id);
+                                if reauthorizing {
+                                    ui.spinner();
+                                }
+                                if ui
+                                    .add_enabled(!reauthorizing, egui::Button::new("Reautorizar"))
+                                    .clicked()
+                                {
+                                    let id2 = id.clone();
+                                    self.reauth_task = Some((
+                                        id.clone(),
+                                        cx.svc.call(move |s| async move {
+                                            j(api::google_reauthorize(State(s), Path(id2)).await)
+                                        }),
+                                    ));
+                                }
+                                if ui
+                                    .add_enabled(
+                                        self.disconnect_task.is_none(),
+                                        egui::Button::new("Desconectar"),
+                                    )
+                                    .clicked()
+                                {
+                                    self.confirm_disconnect = Some((id.clone(), email.clone()));
+                                }
+                            });
                         });
-                        ui.horizontal_wrapped(|ui| {
-                            let connected = ui::fmt_dt(&a["connected_at"]);
-                            if !connected.is_empty() {
-                                ui.label(
-                                    egui::RichText::new(format!("conectada em {connected}"))
-                                        .weak()
-                                        .small(),
-                                );
-                            }
-                            let used = ui::fmt_dt(&a["last_used_at"]);
-                            if !used.is_empty() {
-                                ui.label(
-                                    egui::RichText::new(format!("· último uso {used}"))
-                                        .weak()
-                                        .small(),
-                                );
-                            }
-                            ui.label(egui::RichText::new(format!("· id {id}")).weak().small());
-                        });
-                        ui.horizontal(|ui| {
-                            let reauthorizing =
-                                self.reauth_task.as_ref().is_some_and(|(i, _)| i == &id);
-                            if reauthorizing {
-                                ui.spinner();
-                            }
-                            if ui
-                                .add_enabled(!reauthorizing, egui::Button::new("Reautorizar"))
-                                .clicked()
-                            {
-                                let id2 = id.clone();
-                                self.reauth_task = Some((
-                                    id.clone(),
-                                    cx.svc.call(move |s| async move {
-                                        j(api::google_reauthorize(State(s), Path(id2)).await)
-                                    }),
-                                ));
-                            }
-                            if ui
-                                .add_enabled(
-                                    self.disconnect_task.is_none(),
-                                    egui::Button::new("Desconectar"),
-                                )
-                                .clicked()
-                            {
-                                self.confirm_disconnect = Some((id.clone(), email.clone()));
-                            }
-                        });
-                    });
-            }
+                }
 
-            ui.add_space(8.0);
-            let can_connect = client_id_saved && secret_present;
-            if !can_connect {
-                ui.label(
+                ui.add_space(8.0);
+                let can_connect = client_id_saved && secret_present;
+                if !can_connect {
+                    ui.label(
                     egui::RichText::new(
                         "Salve o client_id e o client_secret acima para poder conectar uma conta.",
                     )
                     .weak()
                     .small(),
                 );
-            }
-            if !self.show_connect {
-                if ui
-                    .add_enabled(
-                        can_connect,
-                        egui::Button::new(
-                            egui::RichText::new("Conectar conta").color(egui::Color32::WHITE),
-                        )
-                        .fill(Tone::Info.color(true)),
-                    )
-                    .clicked()
-                {
-                    self.show_connect = true;
                 }
-            } else {
-                ui.label(
-                    egui::RichText::new(
-                        "Escopos a solicitar (podem ser ampliados depois com Reautorizar):",
-                    )
-                    .small(),
-                );
-                for (i, (_, label)) in SCOPE_OPTIONS.iter().enumerate() {
-                    ui.checkbox(&mut self.connect_scopes[i], *label);
-                }
-                ui.horizontal(|ui| {
-                    let any = self.connect_scopes.iter().any(|b| *b);
-                    let connecting = self.connect_task.is_some();
+                if !self.show_connect {
                     if ui
                         .add_enabled(
-                            can_connect && any && !connecting,
-                            egui::Button::new("Abrir navegador para autorizar"),
+                            can_connect,
+                            egui::Button::new(
+                                egui::RichText::new("Conectar conta").color(egui::Color32::WHITE),
+                            )
+                            .fill(Tone::Info.color(true)),
                         )
                         .clicked()
                     {
-                        let scopes: Vec<String> = SCOPE_OPTIONS
-                            .iter()
-                            .zip(self.connect_scopes.iter())
-                            .filter(|(_, on)| **on)
-                            .map(|((k, _), _)| k.to_string())
-                            .collect();
-                        self.connect_task = Some(cx.svc.call(move |s| async move {
-                            j(api::google_connect(
-                                State(s),
-                                Some(Json(api::ConnectBody {
-                                    scopes: Some(scopes),
-                                    open_browser: Some(true),
-                                })),
+                        self.show_connect = true;
+                    }
+                } else {
+                    ui.label(
+                        egui::RichText::new(
+                            "Escopos a solicitar (podem ser ampliados depois com Reautorizar):",
+                        )
+                        .small(),
+                    );
+                    for (i, (_, label)) in SCOPE_OPTIONS.iter().enumerate() {
+                        ui.checkbox(&mut self.connect_scopes[i], *label);
+                    }
+                    ui.horizontal(|ui| {
+                        let any = self.connect_scopes.iter().any(|b| *b);
+                        let connecting = self.connect_task.is_some();
+                        if ui
+                            .add_enabled(
+                                can_connect && any && !connecting,
+                                egui::Button::new("Abrir navegador para autorizar"),
                             )
-                            .await)
-                        }));
-                    }
-                    if ui.button("Cancelar").clicked() {
-                        self.show_connect = false;
-                    }
-                    if connecting {
-                        ui.spinner();
-                    }
-                });
-            }
+                            .clicked()
+                        {
+                            let scopes: Vec<String> = SCOPE_OPTIONS
+                                .iter()
+                                .zip(self.connect_scopes.iter())
+                                .filter(|(_, on)| **on)
+                                .map(|((k, _), _)| k.to_string())
+                                .collect();
+                            self.connect_task = Some(cx.svc.call(move |s| async move {
+                                j(api::google_connect(
+                                    State(s),
+                                    Some(Json(api::ConnectBody {
+                                        scopes: Some(scopes),
+                                        open_browser: Some(true),
+                                    })),
+                                )
+                                .await)
+                            }));
+                        }
+                        if ui.button("Cancelar").clicked() {
+                            self.show_connect = false;
+                        }
+                        if connecting {
+                            ui.spinner();
+                        }
+                    });
+                }
 
-            if let Some(url) = self.auth_url.clone() {
-                ui.add_space(6.0);
-                ui.label(egui::RichText::new("Autorize no navegador; a conta aparece aqui ao concluir. Se o navegador não abriu, use a URL abaixo:").small());
-                ui::mono(ui, &url);
-                ui.horizontal(|ui| {
-                    if ui.button("copiar URL").clicked() {
-                        ui.ctx().copy_text(url.clone());
-                        cx.toasts.info("URL copiada.");
-                    }
-                    if ui.button("abrir no navegador").clicked() {
-                        ui.ctx().open_url(egui::OpenUrl::new_tab(&url));
-                    }
-                    if ui.button("fechar").clicked() {
-                        self.auth_url = None;
-                    }
-                });
-            }
-        });
+                if let Some(url) = self.auth_url.clone() {
+                    ui.add_space(6.0);
+                    ui.label(egui::RichText::new("Autorize no navegador; a conta aparece aqui ao concluir. Se o navegador não abriu, use a URL abaixo:").small());
+                    ui::mono(ui, &url);
+                    ui.horizontal(|ui| {
+                        if ui.button("copiar URL").clicked() {
+                            ui.ctx().copy_text(url.clone());
+                            cx.toasts.info("URL copiada.");
+                        }
+                        if ui.button("abrir no navegador").clicked() {
+                            ui.ctx().open_url(egui::OpenUrl::new_tab(&url));
+                        }
+                        if ui.button("fechar").clicked() {
+                            self.auth_url = None;
+                        }
+                    });
+                }
+            },
+        );
 
         if let Some((id, email)) = self.confirm_disconnect.clone() {
             let c = ui::Confirm {
@@ -500,7 +484,7 @@ impl GooglePage {
     // ---------- 2. Agenda ----------
 
     fn calendar_section(&mut self, ui: &mut egui::Ui, cx: &mut Cx, st: &mut SettingsState) {
-        ui::section(ui, "Agenda", |ui| {
+        ui::section_help(ui, "Agenda", Some(&help::GOOGLE_CALENDAR), |ui| {
             let c = &mut st.draft.calendar;
             ui::field(
                 ui,
@@ -557,7 +541,6 @@ impl GooglePage {
                     ui.spinner();
                 }
             });
-            ui.label(egui::RichText::new("Marque as agendas que o agente pode consultar; a padrão recebe os eventos criados sem agenda explícita.").weak().small());
             if let Some(e) = &self.calendars.error {
                 ui::error_text(ui, e);
             }
@@ -675,7 +658,7 @@ impl GooglePage {
             .and_then(|v| v.as_array())
             .cloned()
             .unwrap_or_default();
-        ui::section(ui, "Gmail", |ui| {
+        ui::section_help(ui, "Gmail", Some(&help::GOOGLE_GMAIL), |ui| {
             let g = &mut st.draft.gmail;
             ui::field(ui, "Habilitar", Some("Ferramentas gmail_* para os agentes. E-mails recebidos são dados, nunca gatilhos."), |ui| {
                 ui::toggle(ui, &mut g.enabled);

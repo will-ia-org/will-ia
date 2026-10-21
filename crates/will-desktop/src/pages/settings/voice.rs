@@ -2,6 +2,7 @@
 //! transcrições) e configuração da OpenAI Realtime.
 
 use super::SettingsState;
+use crate::help;
 use crate::pages::Cx;
 use crate::service::{j, Loader};
 use crate::ui::{self, SecretAction, SecretField, Tone};
@@ -59,7 +60,7 @@ impl VoicePage {
         ui::heading(ui, "Voz (OpenAI Realtime)", Some("Conversa por voz pelo microfone e alto-falante deste computador; tarefas longas vão para o cérebro via ask_brain."));
 
         // ---- painel da sessão ----
-        ui::section(ui, "Sessão de voz", |ui| {
+        ui::section_help(ui, "Sessão de voz", Some(&help::VOICE_SESSION), |ui| {
             let v = &mut *cx.voice;
             ui.horizontal(|ui| {
                 let enabled = st.saved.realtime.enabled;
@@ -190,23 +191,6 @@ impl VoicePage {
                 {
                     v.commit(cx.svc);
                 }
-                if v.ptt_mode {
-                    ui.label(
-                        egui::RichText::new(
-                            "Modo push-to-talk: o microfone só abre segurando o botão ou o atalho.",
-                        )
-                        .weak()
-                        .small(),
-                    );
-                } else {
-                    ui.label(
-                        egui::RichText::new(
-                            "Modo alternar: microfone aberto; o servidor detecta o fim da fala.",
-                        )
-                        .weak()
-                        .small(),
-                    );
-                }
             });
             ui.add_space(6.0);
             ui.label(egui::RichText::new("Transcrições").strong());
@@ -273,7 +257,7 @@ impl VoicePage {
         });
 
         // ---- configuração ----
-        ui::section(ui, "Configuração", |ui| {
+        ui::section_help(ui, "Configuração", Some(&help::VOICE_CONFIG), |ui| {
             let r = &mut st.draft.realtime;
             ui::field(ui, "Habilitar", None, |ui| {
                 ui::toggle(ui, &mut r.enabled);
@@ -437,11 +421,11 @@ impl VoicePage {
                 |ui| ui::optional_u32(ui, &mut r.daily_minutes_limit, "sem limite"),
             );
         });
-        ui::section(
+        ui::section_help(
             ui,
             "Preços para estimativa (USD por 1 milhão de tokens)",
+            Some(&help::VOICE_PRICING),
             |ui| {
-                ui.label(egui::RichText::new("Padrões do gpt-realtime. A OpenAI não devolve o valor em dinheiro; o app calcula a partir dos tokens informados em cada resposta.").weak().small());
                 let p = &mut st.draft.realtime.pricing;
                 egui::Grid::new("pricing")
                     .num_columns(4)

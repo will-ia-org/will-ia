@@ -2,6 +2,7 @@
 //! configuração do módulo (allowlists, destino padrão, áudio, anexos).
 
 use super::SettingsState;
+use crate::help;
 use crate::pages::Cx;
 use crate::service::{j, Loader, Task};
 use crate::ui::{self, SecretAction, SecretField, Tone};
@@ -74,7 +75,7 @@ impl TelegramPage {
 
     pub fn ui(&mut self, ui: &mut egui::Ui, cx: &mut Cx, st: &mut SettingsState) {
         self.poll(cx);
-        ui::heading(ui, "Telegram", Some("Deny-by-default: só chats E usuários na allowlist conversam; fora disso só /start responde. Descubra IDs mandando /start ao bot e lendo o log."));
+        ui::heading_help(ui, "Telegram", Some("Supergrupo com tópicos: 1 tópico = 1 thread. Deny-by-default: só chats E usuários na allowlist conversam."), &help::TELEGRAM);
 
         // ---- bot ----
         ui::section(ui, "Bot", |ui| {
@@ -129,7 +130,7 @@ impl TelegramPage {
             if !st.secret_present("telegram_bot_token") {
                 ui.label(
                     egui::RichText::new(
-                        "Crie o bot com o @BotFather e cole o token na configuração abaixo.",
+                        "Sem token ainda? O ícone ? no título tem o passo a passo (BotFather, grupo, IDs).",
                     )
                     .weak()
                     .small(),

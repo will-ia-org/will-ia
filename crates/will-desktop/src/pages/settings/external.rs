@@ -3,6 +3,7 @@
 //! Segredos de env/headers ficam no cofre e entram como `${WILL_MCP_<NOME>_<CHAVE>}`.
 
 use super::SettingsState;
+use crate::help;
 use crate::pages::{Cx, Nav, SettingsSection};
 use crate::service::{j, Loader, Task};
 use crate::ui::{self, Tone};
@@ -332,7 +333,7 @@ impl ExternalPage {
 
     pub fn ui(&mut self, ui: &mut egui::Ui, cx: &mut Cx, _st: &mut SettingsState) {
         self.poll(cx);
-        ui::heading(ui, "MCPs externos", Some("Os servidores daqui + o will_ia são escritos em <kb>/.mcp.json; segredos entram como ${WILL_MCP_<NOME>_<CHAVE>} injetados no processo, nunca em texto puro."));
+        ui::heading_help(ui, "MCPs externos", Some("Servidores MCP de terceiros para os agentes; gravados com o will_ia em <kb>/.mcp.json, segredos só por variável de ambiente."), &help::EXTERNAL_MCP);
 
         // ---- barra de ações ----
         ui.horizontal_wrapped(|ui| {
@@ -359,7 +360,13 @@ impl ExternalPage {
 
         if self.show_import_json {
             ui::section(ui, "Importar JSON", |ui| {
-                ui.label(egui::RichText::new("Cole um bloco {\"mcpServers\": {...}} (o formato que os READMEs publicam). Valores literais em env/headers são importados como texto; troque por segredos no editor depois.").weak().small());
+                ui.label(
+                    egui::RichText::new(
+                        "Cole o bloco {\"mcpServers\": {...}} publicado no README do servidor.",
+                    )
+                    .weak()
+                    .small(),
+                );
                 ui::lines_editor(ui, &mut self.import_json_buf, 8);
                 ui.horizontal(|ui| {
                     let ok = !self.import_json_buf.trim().is_empty() && self.import_task.is_none();
@@ -591,7 +598,7 @@ impl ExternalPage {
         };
         let saving = self.save_task.is_some();
         let mut action: Option<bool> = None; // Some(true) = salvar, Some(false) = cancelar
-        ui::section(ui, &title, |ui| {
+        ui::section_help(ui, &title, Some(&help::EXTERNAL_EDITOR), |ui| {
             ui::field(ui, "Nome", Some("Letras, números, _ e -. Vira a chave em mcpServers e o prefixo das variáveis de segredo."), |ui| {
                 ui.add_enabled_ui(ed.is_new, |ui| {
                     ui::text_input(ui, &mut ed.name, "ex.: github");
@@ -638,14 +645,12 @@ impl ExternalPage {
                     ui::text_input(ui, &mut ed.cwd, "opcional");
                 });
                 ui.label(egui::RichText::new("Variáveis de ambiente").strong());
-                ui.label(egui::RichText::new("Marque 'segredo' para tokens: o valor vai para o cofre e o processo recebe ${WILL_MCP_<NOME>_<CHAVE>}.").weak().small());
                 kv_editor(ui, "ext-env", &ed.name, &mut ed.env);
             } else {
                 ui::field(ui, "URL", Some("Endpoint do servidor remoto."), |ui| {
                     ui::text_input(ui, &mut ed.url, "https://mcp.exemplo.com/mcp");
                 });
                 ui.label(egui::RichText::new("Headers HTTP").strong());
-                ui.label(egui::RichText::new("Ex.: Authorization = Bearer <token>. Marque 'segredo' para o valor ficar no cofre.").weak().small());
                 kv_editor(ui, "ext-headers", &ed.name, &mut ed.headers);
             }
             ui.add_space(6.0);

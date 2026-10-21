@@ -2,6 +2,7 @@
 //! por ferramenta (auto / confirmar / desligada) e chamadas recentes.
 
 use super::SettingsState;
+use crate::help;
 use crate::pages::Cx;
 use crate::service::{j, Loader, Task};
 use crate::ui::{self, Tone};
@@ -164,7 +165,7 @@ impl McpPage {
         ui::field(
             ui,
             "Token para scripts",
-            Some("Fixo entre reinicializações; use em chamadas HTTP de fora das threads com o header Authorization: Bearer <token>. Chamadas com ele não têm thread de origem."),
+            Some("Fixo entre reinicializações, para scripts e chamadas HTTP de fora das threads."),
             |ui| {
                 if let Some(e) = &self.script_token.error {
                     ui::error_text(ui, e);
@@ -222,9 +223,11 @@ impl McpPage {
                 });
                 if !ui::b(v, "active") {
                     ui.label(
-                        egui::RichText::new("O servidor MCP está desligado: o token só vale com ele no ar.")
-                            .small()
-                            .weak(),
+                        egui::RichText::new(
+                            "O servidor MCP está desligado: o token só vale com ele no ar.",
+                        )
+                        .small()
+                        .weak(),
                     );
                 }
             },
@@ -249,7 +252,7 @@ impl McpPage {
         ui::heading(ui, "Servidor MCP", Some("Servidor local (Streamable HTTP em 127.0.0.1) que expõe as ferramentas do will-ia aos agentes. Bearer efêmero por processo; cada chamada sabe de qual thread veio."));
 
         // ---- servidor ----
-        ui::section(ui, "Servidor", |ui| {
+        ui::section_help(ui, "Servidor", Some(&help::MCP_SERVER), |ui| {
             let status = cx
                 .snap
                 .modules
@@ -296,98 +299,100 @@ impl McpPage {
         });
 
         // ---- ferramentas ----
-        ui::section(ui, "Ferramentas e políticas", |ui| {
-            ui.horizontal(|ui| {
-                ui.label(egui::RichText::new("auto = executa direto · confirmar = pede aprovação (UI, notificação ou Telegram) · desligada = não é exposta ao agente.").weak().small());
-            });
-            ui.horizontal(|ui| {
-                if ui.button("Atualizar").clicked() {
-                    self.tools.loaded_at = None;
+        ui::section_help(
+            ui,
+            "Ferramentas e políticas",
+            Some(&help::MCP_TOOLS),
+            |ui| {
+                ui.horizontal(|ui| {
+                    if ui.button("Atualizar").clicked() {
+                        self.tools.loaded_at = None;
+                    }
+                    if self.tools.loading() {
+                        ui.spinner();
+                    }
+                    if let Some((n, _)) = &self.policy_task {
+                        ui.label(
+                            egui::RichText::new(format!("aplicando política de {n}…"))
+                                .weak()
+                                .small(),
+                        );
+                    }
+                });
+                if let Some(e) = &self.tools.error {
+                    ui::error_text(ui, e);
                 }
-                if self.tools.loading() {
-                    ui.spinner();
+                let list = self
+                    .tools
+                    .data
+                    .as_ref()
+                    .and_then(|v| v.as_array())
+                    .cloned()
+                    .unwrap_or_default();
+                if list.is_empty() && !self.tools.loading() {
+                    ui.label(egui::RichText::new("Nenhuma ferramenta registrada.").weak());
                 }
-                if let Some((n, _)) = &self.policy_task {
-                    ui.label(
-                        egui::RichText::new(format!("aplicando política de {n}…"))
-                            .weak()
-                            .small(),
-                    );
+                let mut by_family: BTreeMap<String, Vec<&Value>> = BTreeMap::new();
+                for t in &list {
+                    by_family.entry(ui::s(t, "family")).or_default().push(t);
                 }
-            });
-            if let Some(e) = &self.tools.error {
-                ui::error_text(ui, e);
-            }
-            let list = self
-                .tools
-                .data
-                .as_ref()
-                .and_then(|v| v.as_array())
-                .cloned()
-                .unwrap_or_default();
-            if list.is_empty() && !self.tools.loading() {
-                ui.label(egui::RichText::new("Nenhuma ferramenta registrada.").weak());
-            }
-            let mut by_family: BTreeMap<String, Vec<&Value>> = BTreeMap::new();
-            for t in &list {
-                by_family.entry(ui::s(t, "family")).or_default().push(t);
-            }
-            let mut change: Option<(String, String)> = None;
-            for (family, tools) in &by_family {
-                ui.add_space(6.0);
-                ui.label(egui::RichText::new(family_label(family)).strong());
-                egui::Grid::new(format!("mcp-tools-{family}"))
-                    .num_columns(4)
-                    .striped(true)
-                    .spacing([14.0, 6.0])
-                    .show(ui, |ui| {
-                        for t in tools {
-                            let name = ui::s(t, "name");
-                            let available = ui::b(t, "available");
-                            let default_policy = ui::s(t, "default_policy");
-                            let overridden = ui::b(t, "overridden");
-                            let policy = ui::s(t, "policy");
-                            let desc = ui::s(t, "description");
-                            let default_label =
-                                format!("padrão ({})", policy_label(&default_policy));
-                            let opts: [(&str, &str); 4] = [
-                                ("default", default_label.as_str()),
-                                ("auto", "automático"),
-                                ("confirm", "confirmar"),
-                                ("off", "desligada"),
-                            ];
-                            let mut v = if overridden {
-                                policy.clone()
-                            } else {
-                                "default".to_string()
-                            };
-                            let busy = self.policy_task.is_some();
-                            ui.monospace(&name);
-                            if available {
-                                ui::badge(ui, "disponível", Tone::Success);
-                            } else {
-                                ui::badge(ui, "indisponível", Tone::Neutral);
-                            }
-                            ui.add_enabled_ui(!busy, |ui| {
-                                if ui::select(ui, &format!("pol-{name}"), &mut v, &opts) {
-                                    change = Some((name.clone(), v.clone()));
+                let mut change: Option<(String, String)> = None;
+                for (family, tools) in &by_family {
+                    ui.add_space(6.0);
+                    ui.label(egui::RichText::new(family_label(family)).strong());
+                    egui::Grid::new(format!("mcp-tools-{family}"))
+                        .num_columns(4)
+                        .striped(true)
+                        .spacing([14.0, 6.0])
+                        .show(ui, |ui| {
+                            for t in tools {
+                                let name = ui::s(t, "name");
+                                let available = ui::b(t, "available");
+                                let default_policy = ui::s(t, "default_policy");
+                                let overridden = ui::b(t, "overridden");
+                                let policy = ui::s(t, "policy");
+                                let desc = ui::s(t, "description");
+                                let default_label =
+                                    format!("padrão ({})", policy_label(&default_policy));
+                                let opts: [(&str, &str); 4] = [
+                                    ("default", default_label.as_str()),
+                                    ("auto", "automático"),
+                                    ("confirm", "confirmar"),
+                                    ("off", "desligada"),
+                                ];
+                                let mut v = if overridden {
+                                    policy.clone()
+                                } else {
+                                    "default".to_string()
+                                };
+                                let busy = self.policy_task.is_some();
+                                ui.monospace(&name);
+                                if available {
+                                    ui::badge(ui, "disponível", Tone::Success);
+                                } else {
+                                    ui::badge(ui, "indisponível", Tone::Neutral);
                                 }
-                            });
-                            ui.add(
-                                egui::Label::new(
-                                    egui::RichText::new(truncate(&desc, 160)).weak().small(),
+                                ui.add_enabled_ui(!busy, |ui| {
+                                    if ui::select(ui, &format!("pol-{name}"), &mut v, &opts) {
+                                        change = Some((name.clone(), v.clone()));
+                                    }
+                                });
+                                ui.add(
+                                    egui::Label::new(
+                                        egui::RichText::new(truncate(&desc, 160)).weak().small(),
+                                    )
+                                    .truncate(),
                                 )
-                                .truncate(),
-                            )
-                            .on_hover_text(&desc);
-                            ui.end_row();
-                        }
-                    });
-            }
-            if let Some((name, v)) = change {
-                self.set_policy(cx, st, &name, &v);
-            }
-        });
+                                .on_hover_text(&desc);
+                                ui.end_row();
+                            }
+                        });
+                }
+                if let Some((name, v)) = change {
+                    self.set_policy(cx, st, &name, &v);
+                }
+            },
+        );
 
         // ---- chamadas ----
         ui::section(ui, "Chamadas recentes", |ui| {

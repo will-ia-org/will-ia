@@ -1,6 +1,7 @@
 //! Seção Base de conhecimento: pasta (diálogo nativo), status, esqueleto, .mcp.json.
 
 use super::SettingsState;
+use crate::help;
 use crate::pages::Cx;
 use crate::service::{j, Loader, Task};
 use crate::ui;
@@ -55,7 +56,7 @@ impl KbPage {
             }
         }
 
-        ui::heading(ui, "Base de conhecimento", Some("Pasta onde o Claude Code roda (CLAUDE.md, agentes, tools/, .mcp.json). O serviço só cria o esqueleto; não roda git nela."));
+        ui::heading_help(ui, "Base de conhecimento", Some("Pasta onde o Claude Code roda (CLAUDE.md, agentes, tools/, .mcp.json). O serviço só cria o esqueleto; não roda git nela."), &help::KB);
 
         ui::section(ui, "Pasta", |ui| {
             let kb = &mut st.draft.kb;
