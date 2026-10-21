@@ -63,11 +63,11 @@ Instruções padrão da persona (editáveis):
 
 | Função | Uso |
 |---|---|
-| `ask_brain { prompt, new_thread?, thread? }` | Delega ao cérebro. `thread` (id/prefixo ou título) continua um assunto existente; `new_thread` começa do zero; sem ambos, segue na thread de voz atual. |
+| `ask_brain { prompt, new_thread?, thread?, title? }` | Delega ao cérebro. `thread` (id/prefixo ou título) continua um assunto existente; `new_thread` começa do zero, com `title` (2 a 5 palavras) proposto pela voz; sem ambos, segue na thread de voz atual. Thread criada sem título recebe como assunto o primeiro pedido (`derive_title`, ~48 caracteres). |
 | `list_threads` | Lista as threads não arquivadas (id, título, origem, última atividade, trabalhando?) para a voz oferecer "continuar o assunto X". |
 | `brain_status` | Há tarefa em andamento? |
 
-As instruções da persona recebem um parágrafo fixo orientando a usar `list_threads` quando o usuário mencionar um assunto que pode já existir.
+As instruções da persona recebem um parágrafo fixo orientando a usar `list_threads` quando o usuário mencionar um assunto que pode já existir, e a nunca abrir threads com títulos genéricos ("Voz", "Conversa"): cada thread nova leva um `title` curto do assunto, para a lista de threads e a própria busca por título (`thread`) ficarem inequívocas. A resolução por título prefere o igual exato ao parcial; entre iguais, a mais recente. Na subida, threads antigas com título genérico são renomeadas pelo primeiro pedido.
 
 ## Custos
 

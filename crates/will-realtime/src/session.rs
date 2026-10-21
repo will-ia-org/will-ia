@@ -624,7 +624,12 @@ impl SessionRunner {
                     .mgr
                     .deps
                     .host
-                    .ask_brain(&args.prompt, args.new_thread, args.thread.as_deref())
+                    .ask_brain(
+                        &args.prompt,
+                        args.new_thread,
+                        args.thread.as_deref(),
+                        args.title.as_deref(),
+                    )
                     .await
                 {
                     Ok(task) => {

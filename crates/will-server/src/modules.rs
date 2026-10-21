@@ -12,6 +12,7 @@ pub async fn start_all(state: &Arc<AppState>) {
     start_mcp(state).await;
     register_core_tools(state);
     refresh_engine(state, false).await;
+    crate::orchestrator::retitle_placeholder_threads(state).await;
     let _ = crate::mcp_json::write(state).await;
     start_realtime(state).await;
     #[cfg(feature = "google")]

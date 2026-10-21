@@ -129,3 +129,94 @@ pub struct ThreadSummary {
     #[serde(default)]
     pub session_expired: bool,
 }
+
+/// Títulos genéricos dados na criação, substituídos pelo assunto na primeira
+/// mensagem (ver `derive_title`).
+pub fn is_placeholder_title(title: Option<&str>) -> bool {
+    match title.map(str::trim) {
+        None | Some("") => true,
+        Some(t) => matches!(
+            t.to_lowercase().as_str(),
+            "voz" | "nova conversa" | "nova thread"
+        ),
+    }
+}
+
+/// Deriva um título curto e legível do primeiro pedido de uma thread: primeira
+/// linha/frase, sem marcação, cortado em palavra inteira (máx. ~48 caracteres).
+pub fn derive_title(prompt: &str) -> String {
+    const MAX: usize = 48;
+    let first_line = prompt
+        .lines()
+        .map(str::trim)
+        .find(|l| !l.is_empty())
+        .unwrap_or("");
+    // remove marcação leve e espaços repetidos
+    let cleaned: String = first_line
+        .chars()
+        .filter(|c| !matches!(c, '#' | '*' | '`' | '>' | '_' | '"' | '“' | '”'))
+        .collect();
+    let mut words: Vec<&str> = cleaned.split_whitespace().collect();
+    // corta na primeira frase, se houver pontuação forte dentro do limite
+    if let Some(pos) = words.iter().position(|w| w.ends_with(['.', '?', '!', ';'])) {
+        let upto: usize = words[..=pos].iter().map(|w| w.chars().count() + 1).sum();
+        if upto <= MAX + 1 && pos >= 2 {
+            words.truncate(pos + 1);
+        }
+    }
+    let mut out = String::new();
+    for w in words {
+        let add = w.chars().count() + usize::from(!out.is_empty());
+        if out.chars().count() + add > MAX {
+            if !out.is_empty() {
+                out.push('…');
+            } else {
+                out = w.chars().take(MAX - 1).collect::<String>() + "…";
+            }
+            break;
+        }
+        if !out.is_empty() {
+            out.push(' ');
+        }
+        out.push_str(w);
+    }
+    let out = out
+        .trim_end_matches([',', ';', ':', '.'])
+        .trim()
+        .to_string();
+    if out.is_empty() {
+        return "Sem título".to_string();
+    }
+    let mut c = out.chars();
+    match c.next() {
+        Some(f) => f.to_uppercase().collect::<String>() + c.as_str(),
+        None => out,
+    }
+}
+
+#[cfg(test)]
+mod title_tests {
+    use super::*;
+
+    #[test]
+    fn placeholder_titles() {
+        assert!(is_placeholder_title(None));
+        assert!(is_placeholder_title(Some("  ")));
+        assert!(is_placeholder_title(Some("Voz")));
+        assert!(!is_placeholder_title(Some("Revisão dos docs")));
+    }
+
+    #[test]
+    fn derives_short_titles() {
+        assert_eq!(derive_title("liste meus arquivos"), "Liste meus arquivos");
+        assert_eq!(
+            derive_title("Quero que você revise o relatório de vendas. Depois mande por e-mail."),
+            "Quero que você revise o relatório de vendas"
+        );
+        let long = derive_title("preciso de um resumo bem detalhado de todas as reuniões da semana passada com o time de produto");
+        assert!(long.chars().count() <= 49, "{long}");
+        assert!(long.ends_with('…'));
+        assert_eq!(derive_title("# **oi**"), "Oi");
+        assert_eq!(derive_title("   \n  "), "Sem título");
+    }
+}

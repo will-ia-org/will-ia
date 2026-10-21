@@ -234,6 +234,17 @@ impl Storage {
         Ok(())
     }
 
+    /// Prompt do primeiro turno da thread (para derivar o título), se houver.
+    pub async fn first_turn_prompt(&self, thread_id: ThreadId) -> Result<Option<String>> {
+        let row: Option<(String,)> = sqlx::query_as(
+            "SELECT prompt FROM turns WHERE thread_id = ? ORDER BY started_at ASC LIMIT 1",
+        )
+        .bind(thread_id.to_string())
+        .fetch_optional(&self.pool)
+        .await?;
+        Ok(row.map(|r| r.0))
+    }
+
     pub async fn list_turns(&self, thread_id: ThreadId, limit: i64) -> Result<Vec<TurnRecord>> {
         let rows =
             sqlx::query("SELECT * FROM turns WHERE thread_id = ? ORDER BY started_at DESC LIMIT ?")

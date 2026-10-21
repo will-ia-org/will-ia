@@ -53,7 +53,8 @@ pub fn tools_spec() -> Value {
                 "properties": {
                     "prompt": { "type": "string", "description": "Pedido completo, em texto, para o cérebro." },
                     "new_thread": { "type": "boolean", "description": "true para começar uma conversa nova com o cérebro (contexto limpo)." },
-                    "thread": { "type": "string", "description": "Para continuar um assunto existente: id (ou prefixo) ou título de uma thread retornada por list_threads. Sem isto, usa a thread de voz atual." }
+                    "thread": { "type": "string", "description": "Para continuar um assunto existente: id (ou prefixo) ou título de uma thread retornada por list_threads. Sem isto, usa a thread de voz atual." },
+                    "title": { "type": "string", "description": "Título curto (2 a 5 palavras, em português) que identifica o assunto, derivado do pedido. Informe sempre que new_thread for true." }
                 },
                 "required": ["prompt"]
             }
@@ -76,7 +77,7 @@ pub fn tools_spec() -> Value {
 /// Instruções da persona + orientação fixa sobre as ferramentas (threads).
 pub fn instructions_with_tools(settings: &RealtimeSettings) -> String {
     format!(
-        "{}\n\nFerramentas: `list_threads` lista os assuntos (threads) já abertos com o cérebro. Quando o usuário mencionar um assunto que pode já existir, ou pedir para continuar algo, chame `list_threads`, diga em uma frase quais assuntos existem (pelo título) e pergunte se quer continuar um deles ou começar um novo. Para continuar, chame `ask_brain` com `thread` igual ao título ou id escolhido; para começar do zero, `new_thread: true`. Sem indicação, `ask_brain` segue na thread atual.",
+        "{}\n\nFerramentas: `list_threads` lista os assuntos (threads) já abertos com o cérebro. Quando o usuário mencionar um assunto que pode já existir, ou pedir para continuar algo, chame `list_threads`, diga em uma frase quais assuntos existem (pelo título) e pergunte se quer continuar um deles ou começar um novo. Para continuar, chame `ask_brain` com `thread` igual ao título ou id escolhido; para começar do zero, `new_thread: true` junto com `title`, um título curto (2 a 5 palavras) que resuma o assunto, por exemplo \"Relatório de vendas\" ou \"Viagem a Recife\". Nunca use títulos genéricos como \"Voz\" ou \"Conversa\". Sem indicação, `ask_brain` segue na thread atual.",
         settings.instructions.trim()
     )
 }
@@ -329,6 +330,9 @@ pub struct AskBrainArgs {
     /// Thread existente (id/prefixo ou título) para continuar.
     #[serde(default)]
     pub thread: Option<String>,
+    /// Título curto proposto para uma thread nova.
+    #[serde(default)]
+    pub title: Option<String>,
 }
 
 /// Faz o parse dos argumentos (string JSON) de `ask_brain`.
@@ -453,6 +457,12 @@ mod tests {
         assert!(a.new_thread);
         let b = parse_ask_brain_args(r#"{"prompt":"oi"}"#).unwrap();
         assert!(!b.new_thread);
+        assert!(b.title.is_none());
+        let t = parse_ask_brain_args(
+            r#"{"prompt":"revise o relatório","new_thread":true,"title":"Relatório de vendas"}"#,
+        )
+        .unwrap();
+        assert_eq!(t.title.as_deref(), Some("Relatório de vendas"));
         // duplamente codificado
         let c = parse_ask_brain_args(r#""{\"prompt\":\"x\"}""#).unwrap();
         assert_eq!(c.prompt, "x");

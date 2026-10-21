@@ -56,12 +56,14 @@ pub struct BrainTask {
 pub trait BrainHost: Send + Sync {
     /// Envia o prompt ao cérebro e retorna imediatamente. `thread`: id (prefixo) ou
     /// título de uma thread existente para continuar nela; `new_thread`: começa uma
-    /// conversa nova; sem ambos, usa a thread de voz atual.
+    /// conversa nova; sem ambos, usa a thread de voz atual. `title`: título curto
+    /// proposto pela voz para uma thread nova (senão deriva do primeiro pedido).
     async fn ask_brain(
         &self,
         prompt: &str,
         new_thread: bool,
         thread: Option<&str>,
+        title: Option<&str>,
     ) -> Result<BrainTask, String>;
     /// Threads existentes (não arquivadas), mais recentes primeiro, para a voz
     /// oferecer "continuar o assunto X".

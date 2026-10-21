@@ -29,6 +29,7 @@ impl BrainHost for FakeBrain {
         prompt: &str,
         new_thread: bool,
         _thread: Option<&str>,
+        _title: Option<&str>,
     ) -> Result<BrainTask, String> {
         self.prompts.lock().push((prompt.to_string(), new_thread));
         let turn_id = TurnId::new();
@@ -379,7 +380,7 @@ async fn handoff_flow_against_mock_server() {
 
     // 11) Resultado do cérebro com a sessão fechada → Notification.
     let (_, turn2) = {
-        let t = brain.ask_brain("x", false, None).await.unwrap();
+        let t = brain.ask_brain("x", false, None, None).await.unwrap();
         (t.thread_id, t.turn_id)
     };
     // Pendência registrada manualmente não existe mais; simulamos nova delegação via sessão? Não:

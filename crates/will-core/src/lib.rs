@@ -22,7 +22,9 @@ pub use ids::{ApprovalId, MessageId, ThreadId, TurnId};
 pub use module::{Module, ModuleStatus};
 pub use paths::AppPaths;
 pub use settings::Settings;
-pub use thread::{Origin, OriginKind, ThreadStatus, ThreadSummary};
+pub use thread::{
+    derive_title, is_placeholder_title, Origin, OriginKind, ThreadStatus, ThreadSummary,
+};
 pub use tools::{ToolContext, ToolError, ToolOutput, ToolPolicy, ToolProvider, ToolSpec, WillTool};
 
 /// Eventos difundidos pelo serviço (UI, canais e módulos assinam).

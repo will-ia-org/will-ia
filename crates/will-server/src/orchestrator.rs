@@ -79,6 +79,21 @@ impl Host {
         {
             return Ok((*t).clone());
         }
+        // título exato (sem diferenciar maiúsculas) ganha da busca parcial; se
+        // houver mais de um exato (ex.: várias "Voz"), fica com o mais recente.
+        let mut exact: Vec<&&ThreadSummary> = live
+            .iter()
+            .filter(|t| {
+                t.title
+                    .as_deref()
+                    .map(|x| x.trim().to_lowercase() == q)
+                    .unwrap_or(false)
+            })
+            .collect();
+        if !exact.is_empty() {
+            exact.sort_by_key(|t| std::cmp::Reverse(t.last_activity_at));
+            return Ok((*exact[0]).clone());
+        }
         let by_title: Vec<&&ThreadSummary> = live
             .iter()
             .filter(|t| {
@@ -108,7 +123,14 @@ impl Host {
         }
     }
 
-    pub async fn voice_thread(&self, new_thread: bool) -> Result<ThreadSummary, String> {
+    /// Thread de voz atual, ou uma nova. `title` é o título proposto pela voz;
+    /// sem ele, a thread nasce sem título e recebe o assunto na primeira
+    /// mensagem (`send_message`).
+    pub async fn voice_thread(
+        &self,
+        new_thread: bool,
+        title: Option<&str>,
+    ) -> Result<ThreadSummary, String> {
         if !new_thread {
             let current = *self.state.voice_thread.read();
             if let Some(id) = current {
@@ -129,7 +151,10 @@ impl Host {
         let t = self
             .state
             .storage
-            .create_thread(&Origin::Realtime, Some("Voz"))
+            .create_thread(
+                &Origin::Realtime,
+                title.map(str::trim).filter(|t| !t.is_empty()),
+            )
             .await
             .map_err(|e| e.to_string())?;
         *self.state.voice_thread.write() = Some(t.id);
@@ -207,12 +232,32 @@ impl ThreadHost for Host {
         if self.active_token().await.is_none() {
             return Err("Nenhum token do Claude ativo. Cadastre e ative um token em Configurações → Motor Claude.".into());
         }
+        // Primeira mensagem de uma thread sem assunto: o título vira o pedido.
+        let first_message = self
+            .state
+            .storage
+            .first_turn_prompt(thread)
+            .await
+            .map(|p| p.is_none())
+            .unwrap_or(false);
         let turn_id = self
             .state
             .storage
             .start_turn(thread, text)
             .await
             .map_err(|e| e.to_string())?;
+        if first_message && will_core::is_placeholder_title(t.title.as_deref()) {
+            let title = will_core::derive_title(text);
+            if self
+                .state
+                .storage
+                .rename_thread(thread, &title)
+                .await
+                .is_ok()
+            {
+                emit_thread_updated(&self.state, thread).await;
+            }
+        }
         let env = self.thread_env_for(&t).await;
         self.state
             .engine
@@ -331,6 +376,7 @@ impl BrainHost for Host {
         prompt: &str,
         new_thread: bool,
         thread: Option<&str>,
+        title: Option<&str>,
     ) -> Result<BrainTask, String> {
         let t = match thread.map(str::trim).filter(|q| !q.is_empty()) {
             Some(q) => {
@@ -338,7 +384,7 @@ impl BrainHost for Host {
                 *self.state.voice_thread.write() = Some(found.id);
                 found
             }
-            None => self.voice_thread(new_thread).await?,
+            None => self.voice_thread(new_thread, title).await?,
         };
         let turn_id = self.send_message(t.id, prompt).await?;
         Ok(BrainTask {
@@ -361,6 +407,26 @@ impl BrainHost for Host {
     }
     fn subscribe(&self) -> broadcast::Receiver<Event> {
         self.state.bus.subscribe()
+    }
+}
+
+/// Dá assunto às threads antigas que ficaram com título genérico ("Voz", vazio)
+/// usando o primeiro pedido de cada uma. Roda na subida; é idempotente.
+pub async fn retitle_placeholder_threads(state: &AppState) {
+    let Ok(all) = state.storage.list_threads(true).await else {
+        return;
+    };
+    for t in all {
+        if !will_core::is_placeholder_title(t.title.as_deref()) {
+            continue;
+        }
+        let Ok(Some(prompt)) = state.storage.first_turn_prompt(t.id).await else {
+            continue;
+        };
+        let title = will_core::derive_title(&prompt);
+        if state.storage.rename_thread(t.id, &title).await.is_ok() {
+            tracing::info!(thread = %t.id, %title, "thread renomeada pelo primeiro pedido");
+        }
     }
 }
 
