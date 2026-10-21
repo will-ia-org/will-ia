@@ -17,7 +17,8 @@ pub struct TokenRegistry {
     by_thread: RwLock<HashMap<ThreadId, String>>,
 }
 
-fn random_token() -> String {
+/// Token aleatório de 32 bytes em hex.
+pub fn random_token() -> String {
     use rand::Rng;
     let mut b = [0u8; 32];
     rand::rng().fill_bytes(&mut b);
@@ -47,17 +48,29 @@ impl TokenRegistry {
         t
     }
 
+    /// Emite um token geral novo (não vinculado a thread).
     pub fn issue_generic(&self) -> String {
         let t = random_token();
+        self.register_generic(&t);
+        t
+    }
+
+    /// Registra um token geral já existente (ex.: o token fixo para scripts,
+    /// guardado no cofre de segredos e reaplicado a cada subida).
+    pub fn register_generic(&self, token: &str) {
         self.by_token.write().insert(
-            t.clone(),
+            token.to_string(),
             Caller {
                 thread_id: None,
                 origin: None,
                 generic: true,
             },
         );
-        t
+    }
+
+    /// Revoga todos os tokens gerais (rotação do token de scripts).
+    pub fn revoke_generic(&self) {
+        self.by_token.write().retain(|_, c| !c.generic);
     }
 
     pub fn revoke_thread(&self, thread_id: ThreadId) {
@@ -72,5 +85,22 @@ impl TokenRegistry {
 
     pub fn token_for(&self, thread_id: ThreadId) -> Option<String> {
         self.by_thread.read().get(&thread_id).cloned()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn generic_tokens_register_and_rotate() {
+        let reg = TokenRegistry::new();
+        reg.register_generic("abc");
+        let c = reg.lookup("abc").expect("registrado");
+        assert!(c.generic && c.thread_id.is_none());
+        let t = reg.issue(ThreadId::new(), Origin::Ui);
+        reg.revoke_generic();
+        assert!(reg.lookup("abc").is_none());
+        assert!(reg.lookup(&t).is_some(), "tokens de thread sobrevivem");
     }
 }

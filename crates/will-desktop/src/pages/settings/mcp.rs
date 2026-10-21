@@ -18,6 +18,11 @@ pub struct McpPage {
     tools: Loader<Value>,
     calls: Loader<Value>,
     policy_task: Option<(String, Task<Value>)>,
+    /// Token fixo para scripts (gerado e guardado no cofre pelo serviço).
+    script_token: Loader<Value>,
+    reveal_token: bool,
+    rotate_task: Option<Task<Value>>,
+    confirm_rotate: Option<ui::Confirm>,
 }
 
 fn policy_label(p: &str) -> &'static str {
@@ -53,7 +58,13 @@ impl McpPage {
     pub fn on_event(&mut self, ev: &Event) {
         match ev {
             Event::McpToolCalled { .. } => self.calls.loaded_at = None,
-            Event::SettingsChanged { section } if section == "mcp" => self.tools.loaded_at = None,
+            Event::SettingsChanged { section } if section == "mcp" => {
+                self.tools.loaded_at = None;
+                self.script_token.loaded_at = None;
+            }
+            Event::ModuleStatus { module, .. } if *module == Module::Mcp => {
+                self.script_token.loaded_at = None;
+            }
             _ => {}
         }
     }
@@ -71,9 +82,34 @@ impl McpPage {
         }));
     }
 
+    fn reload_script_token(&mut self, cx: &Cx) {
+        self.script_token.start(
+            cx.svc
+                .call(|s| async move { j(api::script_token(State(s)).await) }),
+        );
+    }
+
     fn poll(&mut self, cx: &mut Cx, st: &mut SettingsState) {
         if self.tools.stale(std::time::Duration::from_secs(120)) {
             self.reload_tools(cx);
+        }
+        if self.script_token.stale(std::time::Duration::from_secs(300)) {
+            self.reload_script_token(cx);
+        }
+        self.script_token.poll();
+        if let Some(t) = &self.rotate_task {
+            if let Some(r) = t.take() {
+                self.rotate_task = None;
+                match r {
+                    Ok(v) => {
+                        cx.toasts
+                            .success("Token regenerado. O anterior deixou de valer.");
+                        self.script_token.data = Some(v);
+                        self.reveal_token = false;
+                    }
+                    Err(e) => cx.toasts.error(format!("Regenerar token: {e}")),
+                }
+            }
         }
         if self.calls.stale(std::time::Duration::from_secs(30)) {
             self.reload_calls(cx);
@@ -122,6 +158,92 @@ impl McpPage {
         self.policy_task = Some((name.to_string(), t));
     }
 
+    /// Token fixo para chamar o MCP de fora das threads (scripts, cron, outros
+    /// programas). Fica no cofre de segredos e é reaplicado a cada subida.
+    fn script_token_ui(&mut self, ui: &mut egui::Ui, cx: &mut Cx) {
+        ui::field(
+            ui,
+            "Token para scripts",
+            Some("Fixo entre reinicializações; use em chamadas HTTP de fora das threads com o header Authorization: Bearer <token>. Chamadas com ele não têm thread de origem."),
+            |ui| {
+                if let Some(e) = &self.script_token.error {
+                    ui::error_text(ui, e);
+                    return;
+                }
+                let Some(v) = &self.script_token.data else {
+                    ui::busy(ui, "carregando…");
+                    return;
+                };
+                let token = ui::s(v, "token");
+                let masked = ui::s(v, "masked");
+                let url = ui::s(v, "url");
+                ui.horizontal_wrapped(|ui| {
+                    if self.reveal_token {
+                        ui::mono(ui, &token);
+                    } else {
+                        ui::mono(ui, &format!("••••••••••••{masked}"));
+                    }
+                    if ui
+                        .small_button(if self.reveal_token { "Ocultar" } else { "Mostrar" })
+                        .clicked()
+                    {
+                        self.reveal_token = !self.reveal_token;
+                    }
+                    if ui.small_button("Copiar").clicked() {
+                        ui.ctx().copy_text(token.clone());
+                        cx.toasts.success("Token copiado.");
+                    }
+                    if ui
+                        .small_button("Copiar como export")
+                        .on_hover_text("WILL_IA_MCP_URL e WILL_IA_MCP_TOKEN prontos para colar num shell")
+                        .clicked()
+                    {
+                        ui.ctx().copy_text(format!(
+                            "export WILL_IA_MCP_URL='{url}' WILL_IA_MCP_TOKEN='{token}'"
+                        ));
+                        cx.toasts.success("Variáveis copiadas.");
+                    }
+                    let busy = self.rotate_task.is_some();
+                    if ui
+                        .add_enabled(!busy, egui::Button::new("Regenerar").small())
+                        .clicked()
+                    {
+                        self.confirm_rotate = Some(ui::Confirm {
+                            title: "Regenerar token para scripts?".into(),
+                            body: "O token atual deixa de valer imediatamente. Scripts que o usam precisarão do novo valor.".into(),
+                            confirm_label: "Regenerar".into(),
+                            danger: true,
+                            tag: "mcp-rotate".into(),
+                        });
+                    }
+                    if busy {
+                        ui.spinner();
+                    }
+                });
+                if !ui::b(v, "active") {
+                    ui.label(
+                        egui::RichText::new("O servidor MCP está desligado: o token só vale com ele no ar.")
+                            .small()
+                            .weak(),
+                    );
+                }
+            },
+        );
+        if let Some(c) = &self.confirm_rotate {
+            match ui::confirm_modal(ui.ctx(), c) {
+                Some(true) => {
+                    self.confirm_rotate = None;
+                    self.rotate_task = Some(
+                        cx.svc
+                            .call(|s| async move { j(api::rotate_script_token(State(s)).await) }),
+                    );
+                }
+                Some(false) => self.confirm_rotate = None,
+                None => {}
+            }
+        }
+    }
+
     pub fn ui(&mut self, ui: &mut egui::Ui, cx: &mut Cx, st: &mut SettingsState) {
         self.poll(cx, st);
         ui::heading(ui, "Servidor MCP", Some("Servidor local (Streamable HTTP em 127.0.0.1) que expõe as ferramentas do will-ia aos agentes. Bearer efêmero por processo; cada chamada sabe de qual thread veio."));
@@ -147,6 +269,8 @@ impl McpPage {
                     ui::mono(ui, &url);
                 }
             });
+            ui.add_space(6.0);
+            self.script_token_ui(ui, cx);
             ui.add_space(6.0);
             let m = &mut st.draft.mcp;
             ui::field(

@@ -7,6 +7,32 @@ use std::time::Duration;
 use will_core::settings::{ConfigValue, ExternalMcpServer, ToolPolicySetting};
 use will_core::{ApprovalDecision, ApprovalId, ThreadHost, ToolPolicy};
 
+/// Token fixo para scripts fora das threads (o valor só sai pela API local da UI).
+pub async fn script_token(State(state): State<App>) -> ApiResult<Value> {
+    let enabled = state.settings().mcp.enabled;
+    let token = crate::modules::ensure_script_token(&state)
+        .await
+        .map_err(internal)?;
+    Ok(Json(script_token_json(&state, &token, enabled)))
+}
+
+pub async fn rotate_script_token(State(state): State<App>) -> ApiResult<Value> {
+    let enabled = state.settings().mcp.enabled;
+    let token = crate::modules::rotate_script_token(&state)
+        .await
+        .map_err(internal)?;
+    Ok(Json(script_token_json(&state, &token, enabled)))
+}
+
+fn script_token_json(state: &App, token: &str, enabled: bool) -> Value {
+    json!({
+        "token": token,
+        "masked": will_storage::secrets::mask(token),
+        "url": state.mcp_url.read().clone(),
+        "active": enabled && !state.mcp_url.read().is_empty(),
+    })
+}
+
 pub async fn tools(State(state): State<App>) -> ApiResult<Value> {
     Ok(Json(json!(state.registry.listing())))
 }

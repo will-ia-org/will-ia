@@ -67,6 +67,8 @@ Token local gerado na primeira execução, gravado em `<data_dir>/ui-session.tok
 ### MCP
 | Método | Rota | Descrição |
 |---|---|---|
+| GET | `/api/mcp/script-token` | `{ token, masked, url, active }` — token fixo para scripts fora das threads (gera e grava no cofre se não existir) |
+| POST | `/api/mcp/script-token/rotate` | gera outro; o anterior é revogado na hora |
 | GET | `/api/mcp/tools` | `[ { name, family, description, default_policy, policy, available } ]` |
 | PUT | `/api/mcp/tools/{name}/policy` | `{ policy: auto\|confirm\|off\|null }` |
 | GET | `/api/mcp/calls?limit` | log |

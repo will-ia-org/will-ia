@@ -94,6 +94,14 @@ Retorna caminho da KB, variáveis do contexto e lista de ferramentas em `tools/R
 
 Scripts Node/Python também podem chamar o MCP (é HTTP), usando `WILL_IA_MCP_URL` e o header `Authorization` disponível em `WILL_IA_MCP_TOKEN` no ambiente do processo. Isso permite, por exemplo, um script de monitoramento disparar um alerta no Telegram.
 
+### Token para scripts (fora das threads)
+
+Processos que **não** nasceram de uma thread (um terminal, um cron, outro programa) não têm `WILL_IA_MCP_TOKEN` no ambiente. Para eles existe um **token fixo**, gerado pelo serviço na primeira subida do servidor MCP e guardado no cofre de segredos (chave `mcp_script_token`, keyring ou arquivo 0600 em modo portátil). A cada subida ele é registrado de novo no `TokenRegistry` como chamador **geral** (`Caller.generic = true`, sem `thread_id`/`origin`).
+
+- UI: **Configurações › Servidor MCP › Token para scripts** — mostrar/ocultar, copiar, "copiar como export" (`WILL_IA_MCP_URL` + `WILL_IA_MCP_TOKEN` prontos para o shell) e **Regenerar** (o anterior deixa de valer na hora).
+- API local: `GET /api/mcp/script-token` e `POST /api/mcp/script-token/rotate` (ver [22](22-api-local.md)).
+- Chamadas com esse token não têm thread de origem: ferramentas que respondem "na thread atual" precisam do destino explícito; políticas e aprovações valem igual. O valor nunca entra em logs, settings ou `.mcp.json`; a URL do servidor muda a cada execução quando a porta é 0, por isso o "copiar como export" inclui a URL atual.
+
 ## Injeção no Claude Code
 
 Entrada `will_ia` no `<kb>/.mcp.json` gerado, com `Authorization: Bearer ${WILL_IA_MCP_TOKEN}` expandido por spawn. Ver [05 — Motor](05-motor-claude-code.md#configuração-mcp) e [21](21-mcps-externos.md). O engine valida no evento `system/init` que `mcp_servers[]` contém `will_ia` com `status: connected`; caso contrário registra aviso (o agente seguirá sem as ferramentas).

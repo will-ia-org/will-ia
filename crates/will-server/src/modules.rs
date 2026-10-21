@@ -118,6 +118,12 @@ pub async fn start_mcp(state: &Arc<AppState>) {
         Ok(srv) => {
             *state.mcp_url.write() = srv.url();
             *state.mcp.lock().await = Some(srv);
+            if let Err(e) = ensure_script_token(state).await {
+                tracing::warn!(error = %e, "token de scripts do MCP indisponível");
+                state
+                    .bus
+                    .log("warn", "mcp", format!("Token para scripts: {e}"));
+            }
             state.set_module_status(Module::Mcp, ModuleStatus::Running);
         }
         Err(e) => {
@@ -125,6 +131,44 @@ pub async fn start_mcp(state: &Arc<AppState>) {
             state.set_module_status(Module::Mcp, ModuleStatus::Error(e));
         }
     }
+}
+
+/// Chave, no cofre de segredos, do token fixo para scripts fora das threads.
+pub const SCRIPT_TOKEN_KEY: &str = "mcp_script_token";
+
+/// Garante que existe um token de scripts (gera e grava na primeira vez) e o
+/// registra no servidor MCP como chamador geral (sem thread).
+pub async fn ensure_script_token(state: &Arc<AppState>) -> Result<String, String> {
+    use secrecy::ExposeSecret;
+    let existing = state.secrets.get(SCRIPT_TOKEN_KEY).await?;
+    let token = match existing {
+        Some(t) if !t.expose_secret().trim().is_empty() => t.expose_secret().to_string(),
+        _ => {
+            let t = will_mcp::tokens::random_token();
+            state
+                .secrets
+                .set(SCRIPT_TOKEN_KEY, &SecretString::from(t.clone()))
+                .await?;
+            t
+        }
+    };
+    state.tokens.register_generic(&token);
+    Ok(token)
+}
+
+/// Troca o token de scripts: o antigo deixa de valer na hora.
+pub async fn rotate_script_token(state: &Arc<AppState>) -> Result<String, String> {
+    let t = will_mcp::tokens::random_token();
+    state
+        .secrets
+        .set(SCRIPT_TOKEN_KEY, &SecretString::from(t.clone()))
+        .await?;
+    state.tokens.revoke_generic();
+    state.tokens.register_generic(&t);
+    state
+        .bus
+        .log("info", "mcp", "Token para scripts regenerado.".to_string());
+    Ok(t)
 }
 
 fn register_core_tools(state: &Arc<AppState>) {
