@@ -87,9 +87,26 @@ pub struct TelegramModule {
     offset: AtomicI64,
 }
 
+/// Long polling do `getUpdates` (segundos). O cliente HTTP precisa de timeout
+/// maior que isto, senão toda espera sem mensagens vira "network error".
+const POLL_TIMEOUT_SECS: u32 = 25;
+
+/// Cliente HTTP do bot: padrões do teloxide (proxy via env, connect 5 s) com
+/// timeout total acima do long polling.
+fn bot_client() -> reqwest::Client {
+    teloxide::net::default_reqwest_settings()
+        .timeout(Duration::from_secs(u64::from(POLL_TIMEOUT_SECS) + 20))
+        .build()
+        .unwrap_or_else(|_| teloxide::net::client_from_env())
+}
+
+fn make_bot(token: &str) -> Bot {
+    Bot::with_client(token, bot_client())
+}
+
 /// Valida um token no `getMe` → `{id, username, first_name}`.
 pub async fn test_bot_token(token: &str) -> Result<serde_json::Value, String> {
-    let bot = Bot::new(token);
+    let bot = make_bot(token);
     let me = bot.get_me().await.map_err(|e| e.to_string())?;
     Ok(serde_json::json!({
         "id": me.user.id.0,
@@ -100,7 +117,7 @@ pub async fn test_bot_token(token: &str) -> Result<serde_json::Value, String> {
 
 impl TelegramModule {
     pub fn new(deps: TelegramDeps) -> Arc<Self> {
-        let bot = Bot::new(deps.bot_token.expose_secret());
+        let bot = make_bot(deps.bot_token.expose_secret());
         let sender = Arc::new(TelegramSender::new(bot.clone(), deps.settings.clone()));
         let openai = deps.openai_api_key.map(OpenAi::new);
         Arc::new(Self {
@@ -439,7 +456,7 @@ impl TelegramModule {
                 .bot
                 .get_updates()
                 .offset(offset as i32)
-                .timeout(30)
+                .timeout(POLL_TIMEOUT_SECS)
                 .allowed_updates(vec![AllowedUpdate::Message, AllowedUpdate::CallbackQuery]);
             let res = tokio::select! {
                 _ = cancel.cancelled() => break,
