@@ -216,7 +216,12 @@ impl ThreadHost for Host {
             .collect())
     }
 
-    async fn send_message(&self, thread: ThreadId, text: &str) -> Result<TurnId, String> {
+    async fn send_message_with(
+        &self,
+        thread: ThreadId,
+        text: &str,
+        attachments: &[will_core::Attachment],
+    ) -> Result<TurnId, String> {
         let t = self
             .state
             .storage
@@ -243,11 +248,13 @@ impl ThreadHost for Host {
         let turn_id = self
             .state
             .storage
-            .start_turn(thread, text)
+            .start_turn(thread, text, attachments)
             .await
             .map_err(|e| e.to_string())?;
         if first_message && will_core::is_placeholder_title(t.title.as_deref()) {
-            let title = will_core::derive_title(text);
+            // título a partir do que o usuário escreveu, sem a nota de anexo
+            let (clean, _) = will_core::split_attachment_notes(text);
+            let title = will_core::derive_title(if clean.is_empty() { text } else { &clean });
             if self
                 .state
                 .storage

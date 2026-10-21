@@ -291,6 +291,16 @@ impl TelegramModule {
 
     /// Empurra 🧑 na pilha, `typing`, e escreve NA HORA no cérebro (mesmo mid-turn).
     pub(crate) async fn dispatch(&self, inc: &Incoming, text: &str) {
+        self.dispatch_with(inc, text, &[]).await
+    }
+
+    /// [`dispatch`](Self::dispatch) com os anexos que acompanham a mensagem.
+    pub(crate) async fn dispatch_with(
+        &self,
+        inc: &Incoming,
+        text: &str,
+        attachments: &[will_core::Attachment],
+    ) {
         let conv = self.conv(&inc.key, inc.chat_id, inc.topic_id).await;
         let mut busy = conv.in_progress();
         conv.push_user(text, inc.message_id).await;
@@ -317,7 +327,7 @@ impl TelegramModule {
             }
         }
 
-        let mut result = self.host.send_message(tid, text).await;
+        let mut result = self.host.send_message_with(tid, text, attachments).await;
         if result.is_err() {
             // a thread pode ter sido apagada pela UI: refaz o vínculo uma vez
             self.unbind_key(&inc.key);
@@ -325,7 +335,7 @@ impl TelegramModule {
                 .thread_for(&inc.key, inc.chat_id, inc.topic_id, Some(&title))
                 .await
             {
-                result = self.host.send_message(t2, text).await;
+                result = self.host.send_message_with(t2, text, attachments).await;
             }
         }
         if let Err(e) = result {
@@ -462,21 +472,18 @@ impl TelegramModule {
             .await;
         }
 
-        let mime = if file.mime.is_empty() {
-            "tipo desconhecido"
-        } else {
-            file.mime.as_str()
+        let att = will_core::Attachment {
+            name: file.name.clone(),
+            mime: file.mime.clone(),
+            path: dest.display().to_string(),
+            size: u64::from(file.size),
         };
         let mut prompt = String::new();
         if !caption.is_empty() {
             prompt.push_str(&caption);
             prompt.push_str("\n\n");
         }
-        prompt.push_str(&format!(
-            "[O usuário enviou um arquivo pelo Telegram: \"{}\" ({mime}), salvo em: {}. Leia/analise conforme o pedido acima; se não houver pedido específico, descreva o conteúdo de forma útil.]",
-            file.name,
-            dest.display()
-        ));
-        self.dispatch(&inc, &prompt).await;
+        prompt.push_str(&will_core::attachment_note(&att));
+        self.dispatch_with(&inc, &prompt, &[att]).await;
     }
 }

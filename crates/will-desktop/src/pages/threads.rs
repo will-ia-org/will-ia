@@ -679,14 +679,7 @@ impl ThreadsPage {
                             };
                             let started = turn_dt(t, "started_at");
                             ui.push_id(ui::s(t, "id"), |ui| {
-                                user_bubble(
-                                    ui,
-                                    pal,
-                                    toasts,
-                                    &ui::s(t, "prompt"),
-                                    started.as_ref(),
-                                    pos,
-                                );
+                                user_bubble(ui, pal, toasts, t, started.as_ref(), pos);
                             });
                         }
                         let text = ui::s(turn, "text");
@@ -855,12 +848,24 @@ fn user_bubble(
     ui: &mut egui::Ui,
     pal: &ui::Palette,
     toasts: &mut ui::Toasts,
-    text: &str,
+    turn: &Value,
     started: Option<&chrono::DateTime<chrono::Utc>>,
     pos: GroupPos,
 ) {
-    let raw = text;
-    let shown = ui::clean_emoji(text);
+    // `prompt_display` vem sem a nota de anexo que o canal acrescenta para o
+    // cérebro; os anexos chegam estruturados em `attachments`.
+    let text = turn
+        .get("prompt_display")
+        .and_then(|v| v.as_str())
+        .map(str::to_string)
+        .unwrap_or_else(|| ui::s(turn, "prompt"));
+    let atts: Vec<will_core::Attachment> = turn
+        .get("attachments")
+        .cloned()
+        .and_then(|v| serde_json::from_value(v).ok())
+        .unwrap_or_default();
+    let raw = text.as_str();
+    let shown = ui::clean_emoji(&text);
     let dark = ui.visuals().dark_mode;
     let fill = pal.accent.linear_multiply(if dark { 0.28 } else { 0.14 });
     // Cantos: num grupo, o lado direito fica "colado" entre os balões.
@@ -886,11 +891,16 @@ fn user_bubble(
             .show(ui, |ui| {
                 ui.set_max_width(ui.available_width() * 0.72);
                 ui.vertical(|ui| {
-                    ui.add(
-                        egui::Label::new(egui::RichText::new(&shown).color(pal.text))
-                            .wrap()
-                            .selectable(true),
-                    );
+                    if !shown.trim().is_empty() {
+                        ui.add(
+                            egui::Label::new(egui::RichText::new(&shown).color(pal.text))
+                                .wrap()
+                                .selectable(true),
+                        );
+                    }
+                    for a in &atts {
+                        attachment_view(ui, pal, toasts, a);
+                    }
                     ui.add_space(2.0);
                     // rodapé: uma linha, discreto (copiar + tempo relativo).
                     // Num grupo, só o último balão mostra a hora; os outros
@@ -915,6 +925,96 @@ fn user_bubble(
             });
     });
     ui.add_space(if last { 6.0 } else { 2.0 });
+}
+
+/// Tamanho legível de um arquivo.
+fn fmt_size(bytes: u64) -> String {
+    const KB: f64 = 1024.0;
+    let b = bytes as f64;
+    if bytes == 0 {
+        String::new()
+    } else if b < KB {
+        format!("{bytes} B")
+    } else if b < KB * KB {
+        format!("{:.0} KB", b / KB)
+    } else {
+        format!("{:.1} MB", b / KB / KB)
+    }
+}
+
+/// Anexo dentro do balão do usuário: miniatura clicável para imagens, chip com
+/// nome e tamanho para os demais. O clique abre o arquivo no app padrão.
+fn attachment_view(
+    ui: &mut egui::Ui,
+    pal: &ui::Palette,
+    toasts: &mut ui::Toasts,
+    a: &will_core::Attachment,
+) {
+    let path = std::path::Path::new(&a.path);
+    let exists = path.is_file();
+    let size = fmt_size(a.size);
+    let mut caption = a.name.clone();
+    if !size.is_empty() {
+        caption.push_str(" · ");
+        caption.push_str(&size);
+    }
+    if !exists {
+        caption.push_str(" · ");
+        caption.push_str(tr("arquivo não encontrado"));
+    }
+    ui.add_space(4.0);
+    const THUMB: egui::Vec2 = egui::vec2(320.0, 240.0);
+    // Miniatura só quando a imagem já decodificou: o tamanho vem do arquivo
+    // (não do espaço disponível, que varia dentro do balão) e é limitado a THUMB.
+    let thumb = (a.is_image() && exists)
+        .then(|| {
+            let img = egui::Image::new(format!("file://{}", a.path));
+            match img.load_for_size(ui.ctx(), THUMB) {
+                Ok(egui::load::TexturePoll::Ready { .. }) => Some(Some(img)),
+                Ok(egui::load::TexturePoll::Pending { .. }) => Some(None),
+                Err(_) => None,
+            }
+        })
+        .flatten();
+    let clicked = if let Some(img) = thumb {
+        let r = match img {
+            Some(img) => ui
+                .add(
+                    img.fit_to_original_size(1.0)
+                        .max_size(THUMB)
+                        .corner_radius(8.0)
+                        .sense(egui::Sense::click()),
+                )
+                .on_hover_text(format!("{caption}\n{}", tr("clique para abrir"))),
+            None => {
+                ui.ctx()
+                    .request_repaint_after(std::time::Duration::from_millis(100));
+                ui.add(egui::Spinner::new().size(18.0))
+            }
+        };
+        ui.label(
+            egui::RichText::new(&caption)
+                .size(11.0)
+                .color(pal.text_weak),
+        );
+        r.clicked()
+    } else {
+        let label = format!("{} {caption}", tr("anexo:"));
+        ui.add_enabled(
+            exists,
+            egui::Button::new(egui::RichText::new(label).size(12.0).color(pal.text))
+                .fill(pal.card.linear_multiply(0.6))
+                .stroke(egui::Stroke::new(1.0, pal.border))
+                .corner_radius(8.0),
+        )
+        .on_hover_text(&a.path)
+        .clicked()
+    };
+    if clicked {
+        if let Err(e) = will_platform::open_path(path) {
+            toasts.error(trf("não consegui abrir o arquivo: {}", &[&e]));
+        }
+    }
 }
 
 fn assistant_card(

@@ -23,7 +23,8 @@ pub use module::{Module, ModuleStatus};
 pub use paths::AppPaths;
 pub use settings::Settings;
 pub use thread::{
-    derive_title, is_placeholder_title, Origin, OriginKind, ThreadStatus, ThreadSummary,
+    attachment_note, derive_title, is_placeholder_title, split_attachment_notes, Attachment,
+    Origin, OriginKind, ThreadStatus, ThreadSummary,
 };
 pub use tools::{ToolContext, ToolError, ToolOutput, ToolPolicy, ToolProvider, ToolSpec, WillTool};
 

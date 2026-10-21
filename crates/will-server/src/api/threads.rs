@@ -65,8 +65,12 @@ pub async fn turns(
                 .then(|| r.result_text.as_deref().and_then(merged_parent))
                 .flatten();
             let text = if merged { None } else { r.result_text.clone() };
+            // `prompt_display`: sem as notas de anexo; `attachments`: os gravados
+            // no turno ou, em turnos antigos, os recuperados da própria nota.
+            let (prompt_display, legacy) = will_core::split_attachment_notes(&r.prompt);
+            let attachments = if r.attachments.is_empty() { legacy } else { r.attachments.clone() };
             json!({
-                "id": r.id, "thread_id": r.thread_id, "prompt": r.prompt, "started_at": r.started_at, "finished_at": r.finished_at,
+                "id": r.id, "thread_id": r.thread_id, "prompt": r.prompt, "prompt_display": prompt_display, "attachments": attachments, "started_at": r.started_at, "finished_at": r.finished_at,
                 "result": text.as_ref().map(|t| json!({"text": t, "is_error": r.is_error, "cost_usd": r.cost_usd, "duration_ms": r.duration_ms, "model": r.model})),
                 "text": text, "is_error": r.is_error, "error_kind": r.error_kind, "merged_into": merged_into, "cost_usd": r.cost_usd, "duration_ms": r.duration_ms, "model": r.model,
                 "error": if r.is_error { text.clone() } else { None },

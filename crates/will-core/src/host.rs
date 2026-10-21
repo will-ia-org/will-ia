@@ -1,7 +1,7 @@
 //! Contratos pelos quais canais e módulos falam com o orquestrador (implementado em will-server).
 
 use crate::ids::{ApprovalId, ThreadId, TurnId};
-use crate::thread::{Origin, ThreadSummary};
+use crate::thread::{Attachment, Origin, ThreadSummary};
 use crate::{ApprovalDecision, Event};
 use std::sync::Arc;
 use tokio::sync::broadcast;
@@ -27,7 +27,17 @@ pub trait ThreadHost: Send + Sync {
     async fn get_thread(&self, thread: ThreadId) -> Result<ThreadSummary, String>;
     async fn list_threads(&self) -> Result<Vec<ThreadSummary>, String>;
     /// Escreve a mensagem no stdin do processo da thread imediatamente (inclusive mid-turn).
-    async fn send_message(&self, thread: ThreadId, text: &str) -> Result<TurnId, String>;
+    async fn send_message(&self, thread: ThreadId, text: &str) -> Result<TurnId, String> {
+        self.send_message_with(thread, text, &[]).await
+    }
+    /// Igual a [`send_message`](Self::send_message), registrando os anexos que
+    /// acompanham a mensagem (o `text` já deve conter a nota para o cérebro).
+    async fn send_message_with(
+        &self,
+        thread: ThreadId,
+        text: &str,
+        attachments: &[Attachment],
+    ) -> Result<TurnId, String>;
     /// Mata o processo mantendo a sessão (volta com --resume).
     async fn restart_thread(&self, thread: ThreadId) -> Result<(), String>;
     /// Mata o processo e esquece a sessão (começa do zero).

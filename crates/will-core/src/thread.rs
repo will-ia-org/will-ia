@@ -144,6 +144,78 @@ pub fn is_placeholder_title(title: Option<&str>) -> bool {
 
 /// Deriva um título curto e legível do primeiro pedido de uma thread: primeira
 /// linha/frase, sem marcação, cortado em palavra inteira (máx. ~48 caracteres).
+/// Arquivo que acompanha uma mensagem do usuário (anexo do Telegram, por ora).
+/// O caminho é local à máquina do serviço; a UI mostra miniatura/chip e abre o arquivo.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Attachment {
+    pub name: String,
+    pub mime: String,
+    pub path: String,
+    #[serde(default)]
+    pub size: u64,
+}
+
+impl Attachment {
+    pub fn is_image(&self) -> bool {
+        self.mime.starts_with("image/")
+    }
+}
+
+const ATTACHMENT_NOTE_PREFIX: &str = "[O usuário enviou um arquivo pelo Telegram: \"";
+
+/// Nota que o canal acrescenta ao prompt para o cérebro saber onde está o arquivo.
+pub fn attachment_note(a: &Attachment) -> String {
+    let mime = if a.mime.is_empty() {
+        "tipo desconhecido"
+    } else {
+        a.mime.as_str()
+    };
+    format!(
+        "{ATTACHMENT_NOTE_PREFIX}{}\" ({mime}), salvo em: {}. Leia/analise conforme o pedido acima; se não houver pedido específico, descreva o conteúdo de forma útil.]",
+        a.name, a.path
+    )
+}
+
+/// Separa o texto "humano" do prompt das notas de anexo (formato de
+/// [`attachment_note`]); também recupera anexos de turnos antigos, gravados só
+/// na nota. Devolve o texto limpo e os anexos encontrados.
+pub fn split_attachment_notes(prompt: &str) -> (String, Vec<Attachment>) {
+    let mut text = String::new();
+    let mut atts = Vec::new();
+    let mut rest = prompt;
+    while let Some(start) = rest.find(ATTACHMENT_NOTE_PREFIX) {
+        let Some(end_rel) = rest[start..].find(']') else {
+            break;
+        };
+        let note = &rest[start + ATTACHMENT_NOTE_PREFIX.len()..start + end_rel];
+        text.push_str(&rest[..start]);
+        rest = &rest[start + end_rel + 1..];
+        let Some((name, after)) = note.split_once("\" (") else {
+            continue;
+        };
+        let Some((mime, after)) = after.split_once("), salvo em: ") else {
+            continue;
+        };
+        let path = after
+            .split_once(". Leia/analise")
+            .map(|(p, _)| p)
+            .unwrap_or(after)
+            .trim();
+        atts.push(Attachment {
+            name: name.to_string(),
+            mime: if mime == "tipo desconhecido" {
+                String::new()
+            } else {
+                mime.to_string()
+            },
+            path: path.to_string(),
+            size: 0,
+        });
+    }
+    text.push_str(rest);
+    (text.trim().to_string(), atts)
+}
+
 pub fn derive_title(prompt: &str) -> String {
     const MAX: usize = 48;
     let first_line = prompt
@@ -218,5 +290,38 @@ mod title_tests {
         assert!(long.ends_with('…'));
         assert_eq!(derive_title("# **oi**"), "Oi");
         assert_eq!(derive_title("   \n  "), "Sem título");
+    }
+}
+
+#[cfg(test)]
+mod attachment_tests {
+    use super::*;
+
+    #[test]
+    fn note_roundtrip_and_legacy() {
+        let a = Attachment {
+            name: "foto-1.jpg".into(),
+            mime: "image/jpeg".into(),
+            path: "/kb/inbox/telegram/-100-1-foto-1.jpg".into(),
+            size: 0,
+        };
+        let prompt = format!("o que é isso ?\n\n{}", attachment_note(&a));
+        let (text, atts) = split_attachment_notes(&prompt);
+        assert_eq!(text, "o que é isso ?");
+        assert_eq!(atts, vec![a]);
+        // sem nota: texto intacto, sem anexos
+        let (text, atts) = split_attachment_notes("oi [x] tchau");
+        assert_eq!(text, "oi [x] tchau");
+        assert!(atts.is_empty());
+        // mime desconhecido vira vazio
+        let b = Attachment {
+            name: "arq".into(),
+            mime: String::new(),
+            path: "/p/arq".into(),
+            size: 0,
+        };
+        let (_, atts) = split_attachment_notes(&attachment_note(&b));
+        assert_eq!(atts[0].mime, "");
+        assert_eq!(atts[0].path, "/p/arq");
     }
 }

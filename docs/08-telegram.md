@@ -32,7 +32,7 @@ Long polling com `getUpdates(offset, timeout=30, allowed_updates=["message","cal
 2. Ignorar eventos de serviço do fórum (`forum_topic_created/edited/closed/reopened`).
 3. Calcular thread key; extrair texto (`text` ou `caption`) e anexo.
 4. Allowlist (chat **e** usuário). Reprovado → só `/start`.
-5. Anexo → baixar para `<kb>/inbox/telegram/<chat>-<msg>-<nome-sanitizado>`; voice note → transcrever (OpenAI) e tratar como texto, ecoando "🎙️ _transcrição_" no tópico; demais arquivos → prompt com caminho e pedido da legenda.
+5. Anexo → baixar para `<kb>/inbox/telegram/<chat>-<msg>-<nome-sanitizado>`; voice note → transcrever (OpenAI) e tratar como texto, ecoando "🎙️ _transcrição_" no tópico; demais arquivos → prompt com caminho e pedido da legenda (nota gerada por `will_core::attachment_note`) e o anexo estruturado (`will_core::Attachment`) gravado no turno via `ThreadHost::send_message_with`, para a UI mostrar miniatura/chip.
 6. Comando builtin → tratar. Comando do repo (`.claude/commands/*.md` da KB) → traduzir `_`→`-` e repassar ao Claude.
 7. **Dispatch**: empurra 🧑 na pilha, `sendChatAction(typing)`, e escreve **na hora** no stdin do processo da thread (`Engine::send`). Mensagens durante um turno em andamento seguem o mesmo caminho e aparecem na pilha; não há espera.
 

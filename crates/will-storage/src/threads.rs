@@ -1,6 +1,6 @@
 use crate::{fmt, now, parse_dt, Result, Storage, StorageError};
 use sqlx::Row;
-use will_core::{Origin, ThreadId, ThreadStatus, ThreadSummary, TurnId, TurnResult};
+use will_core::{Attachment, Origin, ThreadId, ThreadStatus, ThreadSummary, TurnId, TurnResult};
 
 #[derive(Debug, Clone, serde::Serialize)]
 pub struct TurnRecord {
@@ -15,6 +15,7 @@ pub struct TurnRecord {
     pub cost_usd: Option<f64>,
     pub duration_ms: Option<i64>,
     pub model: Option<String>,
+    pub attachments: Vec<Attachment>,
 }
 
 #[derive(Debug, Clone, serde::Serialize)]
@@ -183,15 +184,28 @@ impl Storage {
 
     // ----- turns -----
 
-    pub async fn start_turn(&self, thread_id: ThreadId, prompt: &str) -> Result<TurnId> {
+    pub async fn start_turn(
+        &self,
+        thread_id: ThreadId,
+        prompt: &str,
+        attachments: &[Attachment],
+    ) -> Result<TurnId> {
         let id = TurnId::new();
-        sqlx::query("INSERT INTO turns (id, thread_id, started_at, prompt) VALUES (?, ?, ?, ?)")
-            .bind(id.to_string())
-            .bind(thread_id.to_string())
-            .bind(fmt(now()))
-            .bind(prompt)
-            .execute(&self.pool)
-            .await?;
+        let atts = if attachments.is_empty() {
+            None
+        } else {
+            Some(serde_json::to_string(attachments).unwrap_or_default())
+        };
+        sqlx::query(
+            "INSERT INTO turns (id, thread_id, started_at, prompt, attachments_json) VALUES (?, ?, ?, ?, ?)",
+        )
+        .bind(id.to_string())
+        .bind(thread_id.to_string())
+        .bind(fmt(now()))
+        .bind(prompt)
+        .bind(atts)
+        .execute(&self.pool)
+        .await?;
         Ok(id)
     }
 
@@ -269,6 +283,10 @@ impl Storage {
                 cost_usd: r.get("cost_usd"),
                 duration_ms: r.get("duration_ms"),
                 model: r.get("model"),
+                attachments: r
+                    .get::<Option<String>, _>("attachments_json")
+                    .and_then(|s| serde_json::from_str(&s).ok())
+                    .unwrap_or_default(),
             });
         }
         out.reverse();

@@ -40,7 +40,7 @@ rfd.workspace = true
 global-hotkey.workspace = true
 auto-launch = "0.5"
 qrcode.workspace = true
-image = { version = "0.25", default-features = false, features = ["png"] }
+image = { version = "0.25", default-features = false, features = ["png", "jpeg", "webp", "gif"] }
 
 [target.'cfg(target_os = "linux")'.dependencies]
 ksni.workspace = true
