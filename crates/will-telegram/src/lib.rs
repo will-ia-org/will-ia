@@ -91,17 +91,16 @@ pub struct TelegramModule {
 /// maior que isto, senão toda espera sem mensagens vira "network error".
 const POLL_TIMEOUT_SECS: u32 = 25;
 
-/// Cliente HTTP do bot: padrões do teloxide (proxy via env, connect 5 s) com
-/// timeout total acima do long polling.
-fn bot_client() -> reqwest::Client {
-    teloxide::net::default_reqwest_settings()
+/// Bot com os padrões do teloxide (proxy via env, connect 5 s) mas timeout total
+/// acima do long polling. Em caso de falha ao construir o cliente, usa o padrão.
+fn make_bot(token: &str) -> Bot {
+    match teloxide::net::default_reqwest_settings()
         .timeout(Duration::from_secs(u64::from(POLL_TIMEOUT_SECS) + 20))
         .build()
-        .unwrap_or_else(|_| teloxide::net::client_from_env())
-}
-
-fn make_bot(token: &str) -> Bot {
-    Bot::with_client(token, bot_client())
+    {
+        Ok(client) => Bot::with_client(token, client),
+        Err(_) => Bot::new(token),
+    }
 }
 
 /// Valida um token no `getMe` → `{id, username, first_name}`.
