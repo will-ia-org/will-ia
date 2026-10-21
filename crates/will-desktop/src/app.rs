@@ -686,12 +686,27 @@ impl eframe::App for WillApp {
 
         let mut requested_nav: Option<Nav> = None;
         egui::CentralPanel::default().show(ui, |ui| {
+            if self.nav == Nav::Threads {
+                // Threads ocupa a janela exatamente (cabeçalho e caixa de
+                // entrada fixos); só o histórico do chat rola, dentro da página.
+                ui.set_clip_rect(ui.max_rect());
+                ui.add_space(4.0);
+                let mut cx = Cx {
+                    svc: &self.svc,
+                    snap: &self.snap,
+                    toasts: &mut self.toasts,
+                    voice: &mut self.voice,
+                    go: &mut requested_nav,
+                };
+                self.pages.ui(ui, self.nav, &mut cx);
+                return;
+            }
             egui::ScrollArea::vertical()
                 .id_salt(("page", self.nav))
                 .auto_shrink([false, false])
                 .show(ui, |ui| {
                     let full = ui.available_width();
-                    let max_w = if matches!(self.nav, Nav::Threads | Nav::Logs) {
+                    let max_w = if matches!(self.nav, Nav::Logs) {
                         full
                     } else {
                         full.min(ui::CONTENT_MAX_WIDTH)

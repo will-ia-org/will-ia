@@ -38,6 +38,9 @@ pub struct ThreadsPage {
     confirm_reset: Option<ThreadId>,
     show_archived: bool,
     focus_input: bool,
+    /// Altura medida do bloco de entrada no quadro anterior (define quanto
+    /// sobra para o histórico sem a página rolar).
+    bottom_h: f32,
     md_cache: egui_commonmark::CommonMarkCache,
 }
 
@@ -324,7 +327,7 @@ impl ThreadsPage {
                             ui.label(egui::RichText::new("Selecione uma thread ou crie uma nova.").weak().size(16.0));
                         });
                     }
-                    Some(t) => self.chat_ui(ui, cx, &t, avail_h),
+                    Some(t) => self.chat_ui(ui, cx, &t),
                 }
             });
         });
@@ -371,7 +374,7 @@ impl ThreadsPage {
         }
     }
 
-    fn chat_ui(&mut self, ui: &mut egui::Ui, cx: &mut Cx, t: &ThreadSummary, avail_h: f32) {
+    fn chat_ui(&mut self, ui: &mut egui::Ui, cx: &mut Cx, t: &ThreadSummary) {
         // cabeçalho
         ui.horizontal(|ui| {
             match &mut self.rename_buf {
@@ -456,9 +459,14 @@ impl ThreadsPage {
         });
         ui.separator();
 
-        // histórico + ao vivo
-        let input_h = 78.0;
-        let hist_h = (avail_h - input_h - 96.0).max(120.0);
+        // histórico + ao vivo: usa exatamente o que sobra acima da caixa de
+        // entrada (altura medida no quadro anterior), sem estourar a janela.
+        let bottom_h = if self.bottom_h > 0.0 {
+            self.bottom_h
+        } else {
+            84.0
+        };
+        let hist_h = (ui.available_height() - bottom_h - 8.0).max(120.0);
         let loading = self.turns.loading() && self.turns.data.is_none();
         let turns_err = self.turns.error.clone();
         let turns = self
@@ -491,38 +499,42 @@ impl ThreadsPage {
                     ui::error_text(ui, e);
                 }
                 for turn in &turns {
-                    let prompt = ui::s(turn, "prompt");
-                    let when = turn.get("started_at").map(ui::fmt_dt).unwrap_or_default();
-                    if !prompt.is_empty() {
-                        user_bubble(ui, pal, &prompt, &when);
-                    }
-                    let text = ui::s(turn, "text");
-                    let is_err = ui::b(turn, "is_error");
-                    let res = turn
-                        .get("result")
-                        .cloned()
-                        .unwrap_or(serde_json::Value::Null);
-                    if is_err {
-                        let msg = if text.is_empty() {
-                            ui::s(turn, "error_kind")
-                        } else {
-                            text.clone()
-                        };
-                        error_card(ui, pal, &msg);
-                    } else if !text.is_empty() {
-                        assistant_card(
-                            ui,
-                            pal,
-                            &mut self.md_cache,
-                            &text,
-                            &res,
-                            turn.get("finished_at").map(ui::fmt_dt).unwrap_or_default(),
-                        );
-                    } else if turn.get("finished_at").map(|f| f.is_null()).unwrap_or(true)
-                        && !has_live
-                    {
-                        ui.label(egui::RichText::new("aguardando resposta…").weak().small());
-                    }
+                    // Escopo de id por turno: respostas com o mesmo Markdown
+                    // (tabelas, blocos de código) não colidem entre si.
+                    ui.push_id(ui::s(turn, "id"), |ui| {
+                        let prompt = ui::s(turn, "prompt");
+                        let when = turn.get("started_at").map(ui::fmt_dt).unwrap_or_default();
+                        if !prompt.is_empty() {
+                            user_bubble(ui, pal, &prompt, &when);
+                        }
+                        let text = ui::s(turn, "text");
+                        let is_err = ui::b(turn, "is_error");
+                        let res = turn
+                            .get("result")
+                            .cloned()
+                            .unwrap_or(serde_json::Value::Null);
+                        if is_err {
+                            let msg = if text.is_empty() {
+                                ui::s(turn, "error_kind")
+                            } else {
+                                text.clone()
+                            };
+                            error_card(ui, pal, &msg);
+                        } else if !text.is_empty() {
+                            assistant_card(
+                                ui,
+                                pal,
+                                &mut self.md_cache,
+                                &text,
+                                &res,
+                                turn.get("finished_at").map(ui::fmt_dt).unwrap_or_default(),
+                            );
+                        } else if turn.get("finished_at").map(|f| f.is_null()).unwrap_or(true)
+                            && !has_live
+                        {
+                            ui.label(egui::RichText::new("aguardando resposta…").weak().small());
+                        }
+                    });
                 }
                 for n in &notes {
                     ui.horizontal(|ui| {
@@ -533,27 +545,30 @@ impl ThreadsPage {
                 if let Some((items, text, started)) = &live {
                     ui.ctx()
                         .request_repaint_after(std::time::Duration::from_millis(120));
-                    live_card(ui, pal, &mut self.md_cache, items, text, *started);
+                    ui.push_id(("live", t.id), |ui| {
+                        live_card(ui, pal, &mut self.md_cache, items, text, *started);
+                    });
                 }
                 ui.add_space(8.0);
             });
 
         // entrada: caixa de texto com o botão Enviar na mesma linha
-        ui.add_space(6.0);
         let mut send_now = false;
         let busy = self.send_task.is_some();
         let pal2 = ui::palette(ui.visuals().dark_mode);
-        egui::Frame::new()
-            .fill(pal2.card)
-            .stroke(egui::Stroke::new(1.0, pal2.border))
-            .corner_radius(10.0)
-            .inner_margin(egui::Margin::symmetric(8, 6))
-            .show(ui, |ui| {
-                ui.set_width(ui.available_width());
-                ui.horizontal(|ui| {
-                    let btn_w = 92.0;
-                    let text_w = (ui.available_width() - btn_w - 12.0).max(120.0);
-                    let r = ui.add_sized(
+        let bottom = ui.scope(|ui| {
+            ui.add_space(6.0);
+            egui::Frame::new()
+                .fill(pal2.card)
+                .stroke(egui::Stroke::new(1.0, pal2.border))
+                .corner_radius(10.0)
+                .inner_margin(egui::Margin::symmetric(8, 6))
+                .show(ui, |ui| {
+                    ui.set_width(ui.available_width());
+                    ui.horizontal(|ui| {
+                        let btn_w = 92.0;
+                        let text_w = (ui.available_width() - btn_w - 12.0).max(120.0);
+                        let r = ui.add_sized(
                         [text_w, 54.0],
                         egui::TextEdit::multiline(&mut self.input)
                             .frame(egui::Frame::NONE)
@@ -564,33 +579,35 @@ impl ThreadsPage {
                                 "Mensagem para o Claude. Ctrl+Enter envia."
                             }),
                     );
-                    if self.focus_input {
-                        r.request_focus();
-                        self.focus_input = false;
-                    }
-                    if r.has_focus()
-                        && ui.input(|i| i.key_pressed(egui::Key::Enter) && i.modifiers.command)
-                    {
-                        send_now = true;
-                    }
-                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                        let can = !busy && !self.input.trim().is_empty();
-                        let b = egui::Button::new(
-                            egui::RichText::new(if busy { "…" } else { "Enviar" })
-                                .color(egui::Color32::WHITE),
-                        )
-                        .fill(if can {
-                            pal2.accent
-                        } else {
-                            pal2.accent.linear_multiply(0.45)
-                        })
-                        .min_size(egui::vec2(btn_w - 8.0, 34.0));
-                        if ui.add_enabled(can, b).clicked() {
+                        if self.focus_input {
+                            r.request_focus();
+                            self.focus_input = false;
+                        }
+                        if r.has_focus()
+                            && ui.input(|i| i.key_pressed(egui::Key::Enter) && i.modifiers.command)
+                        {
                             send_now = true;
                         }
+                        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                            let can = !busy && !self.input.trim().is_empty();
+                            let b = egui::Button::new(
+                                egui::RichText::new(if busy { "…" } else { "Enviar" })
+                                    .color(egui::Color32::WHITE),
+                            )
+                            .fill(if can {
+                                pal2.accent
+                            } else {
+                                pal2.accent.linear_multiply(0.45)
+                            })
+                            .min_size(egui::vec2(btn_w - 8.0, 34.0));
+                            if ui.add_enabled(can, b).clicked() {
+                                send_now = true;
+                            }
+                        });
                     });
                 });
-            });
+        });
+        self.bottom_h = bottom.response.rect.height();
         if send_now {
             self.send(cx);
         }
@@ -600,9 +617,9 @@ impl ThreadsPage {
 /// Renderiza Markdown (a IA responde em Markdown).
 fn md(ui: &mut egui::Ui, cache: &mut egui_commonmark::CommonMarkCache, text: &str) {
     let text = ui::clean_emoji(text);
-    egui_commonmark::CommonMarkViewer::new()
-        .max_image_width(Some(640))
-        .show(ui, cache, &text);
+    // Sem `max_image_width`: o viewer usa a largura disponível como teto, então
+    // blocos de código e imagens nunca alargam o balão além do chat.
+    egui_commonmark::CommonMarkViewer::new().show(ui, cache, &text);
 }
 
 fn user_bubble(ui: &mut egui::Ui, pal: &ui::Palette, text: &str, when: &str) {
