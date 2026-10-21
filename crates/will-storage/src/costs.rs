@@ -133,10 +133,13 @@ impl Storage {
 
     pub async fn ai_cost_summary(&self, source: Option<&str>) -> Result<CostSummary> {
         let now = now();
-        let today_start = now
+        // "Hoje" no fuso local do usuário (o banco guarda UTC): às 21h em UTC-3 a
+        // meia-noite UTC já virou o dia seguinte e zeraria o total indevidamente.
+        let today_start = chrono::Local::now()
             .date_naive()
             .and_hms_opt(0, 0, 0)
-            .map(|d| d.and_utc())
+            .and_then(|d| d.and_local_timezone(chrono::Local).single())
+            .map(|d| d.with_timezone(&chrono::Utc))
             .unwrap_or(now);
         let today = self.buckets_since(Some(today_start), source).await?;
         let last_7d = self
