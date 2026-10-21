@@ -5,6 +5,7 @@ pub mod api;
 pub mod app;
 pub mod engine_cfg;
 pub mod kb;
+pub mod kb_profile;
 pub mod logging;
 pub mod mcp_json;
 pub mod modules;

@@ -90,7 +90,10 @@ pub fn scaffold(kb: &Path) -> Result<Vec<String>, String> {
     std::fs::create_dir_all(kb).map_err(|e| e.to_string())?;
     let mut created = vec![];
     let files: Vec<(PathBuf, String)> = vec![
-        (kb.join("CLAUDE.md"), CLAUDE_MD.to_string()),
+        (
+            kb.join("CLAUDE.md"),
+            format!("{CLAUDE_MD}\n{CLAUDE_MD_PROFILE_SECTION}"),
+        ),
         (kb.join(".claude/settings.json"), "{\n  \"permissions\": {\n    \"allow\": [],\n    \"deny\": []\n  }\n}\n".into()),
         (kb.join(".claude/agents/pesquisador.md"), AGENT_PESQUISADOR.into()),
         (kb.join(".claude/agents/bibliotecario.md"), AGENT_BIBLIOTECARIO.into()),
@@ -104,6 +107,29 @@ pub fn scaffold(kb: &Path) -> Result<Vec<String>, String> {
         (kb.join("tools/requirements.txt"), "# dependências Python dos scripts em tools/\n".into()),
         (kb.join(".gitignore"), ".claude/settings.local.json\ninbox/\nnode_modules/\n__pycache__/\n*.log\n".into()),
     ];
+    let files = files.into_iter().chain(
+        crate::kb_profile::profile_files()
+            .into_iter()
+            .map(|(rel, content)| (kb.join(rel), content)),
+    );
+    // CLAUDE.md já existente e anterior ao perfil da pessoa: acrescenta a seção
+    // ao final, uma vez só (não reescreve nada do que o usuário já tem).
+    let claude_md = kb.join("CLAUDE.md");
+    if let Ok(existing) = std::fs::read_to_string(&claude_md) {
+        if !existing.contains("knowledge/pessoa") {
+            let sep = if existing.ends_with('\n') {
+                "\n"
+            } else {
+                "\n\n"
+            };
+            std::fs::write(
+                &claude_md,
+                format!("{existing}{sep}{CLAUDE_MD_PROFILE_SECTION}"),
+            )
+            .map_err(|e| format!("CLAUDE.md: {e}"))?;
+            created.push("CLAUDE.md (seção \"Perfil da pessoa\" acrescentada)".into());
+        }
+    }
     for (p, c) in files {
         if write_if_missing(&p, &c).map_err(|e| format!("{}: {e}", p.display()))? {
             created.push(
@@ -116,6 +142,26 @@ pub fn scaffold(kb: &Path) -> Result<Vec<String>, String> {
     }
     Ok(created)
 }
+
+/// Seção do `CLAUDE.md` sobre o perfil da pessoa. Em bases criadas antes dela
+/// existir, `scaffold` acrescenta a seção ao final do arquivo (uma vez só).
+pub const CLAUDE_MD_PROFILE_SECTION: &str = r#"## Perfil da pessoa: conhecimento que cresce organicamente
+- `knowledge/pessoa/` guarda o perfil de quem você atende (identidade, família, saúde, trabalho, finanças,
+  casa, gostos, tecnologia, objetivos, contatos), em pastas e arquivos de nomes longos e descritivos.
+  Consulte antes de responder qualquer coisa sobre a pessoa.
+- As lacunas `__preencher__` são preenchidas ao longo do tempo, com o que a pessoa
+  disser espontaneamente, com o que aparecer em anexos, e-mails e mensagens que ela pediu para você ler,
+  e com inferências seguras (marcadas como inferência). Troque o marcador pelo valor e anote origem e
+  data entre parênteses; atualize `updated`, `completude` e o "Histórico de atualizações" do arquivo.
+- NÃO seja insistente: nunca faça questionário nem diga que "precisa" de dados. No máximo UMA pergunta
+  leve por conversa, só quando encaixar naturalmente no assunto (ao marcar um médico, perguntar o plano;
+  ao falar de um aniversário, confirmar a data). Se a pessoa não responder, deixe para outra hora.
+- Priorize o que destrava tarefas (endereços, contatos, horários, preferências) antes de curiosidades.
+- Quando surgir um tema que não cabe em nenhum arquivo, crie um novo seguindo o mesmo padrão (pasta
+  numerada e nome longo em kebab-case, frontmatter, lacunas) e registre-o em `knowledge/pessoa/README.md`.
+- Nunca registre senhas, PINs, números completos de cartão ou códigos de segurança; dados sensíveis
+  (saúde, documentos, finanças) só quando a própria pessoa fornecer, e só nesta pasta.
+"#;
 
 pub const CLAUDE_MD: &str = r#"# Base de Conhecimento
 
@@ -137,6 +183,9 @@ cada turno com uma resposta final clara.
 
 ## Mapa da base
 - `knowledge/` — conhecimento curado. Antes de responder sobre um tema, procure aqui.
+- `knowledge/pessoa/` — perfil de quem você atende (identidade, família, saúde, trabalho, finanças,
+  casa, gostos, tecnologia, objetivos, contatos), em pastas e arquivos de nomes longos e descritivos,
+  com lacunas `__preencher__`. Consulte antes de responder qualquer coisa sobre a pessoa.
 - `inbox/` — material bruto (anexos do Telegram/WhatsApp/Gmail, transcrições). Ao processar, mova o
   resultado para `knowledge/`.
 - `journal/` — registro diário (um arquivo `YYYY-MM-DD.md` por dia, seções por thread).
@@ -169,6 +218,9 @@ tools: Read, Write, Edit, Glob, Grep
 ---
 Você mantém a base organizada: processa `inbox/`, atualiza `knowledge/` sem duplicar temas,
 garante frontmatter (`title`, `updated`, `tags`) e índices por pasta. Releia antes de editar.
+Em `knowledge/pessoa/`, preencha lacunas `__preencher__` com fatos já confirmados em conversas e
+anexos (anotando origem e data), recalcule `completude` e mantenha o índice do `README.md`;
+nunca invente valores nem pergunte nada ao usuário por conta própria.
 "#;
 const AGENT_FERRAMENTEIRO: &str = r#"---
 name: ferramenteiro

@@ -25,7 +25,8 @@ Gerado pelo botão "Criar estrutura" nas configurações, apenas para arquivos/p
 │   │   └── ferramenteiro.md
 │   └── commands/             # slash commands reutilizáveis (opcional)
 ├── knowledge/                # conhecimento curado, organizado por tema
-│   └── README.md
+│   ├── README.md
+│   └── pessoa/               # perfil da pessoa: 10 áreas, arquivos com lacunas __preencher__ (ver abaixo)
 ├── inbox/                    # entradas brutas: anexos do Telegram, transcrições, rascunhos
 ├── journal/                  # registro cronológico (um arquivo por dia) — opcional
 ├── tools/                    # scripts interpretados criados pelos agentes
@@ -34,6 +35,19 @@ Gerado pelo botão "Criar estrutura" nas configurações, apenas para arquivos/p
 │   └── requirements.txt      # deps Python (se houver)
 └── .gitignore                # sugerido, caso o usuário decida versionar depois
 ```
+
+## Perfil da pessoa (`knowledge/pessoa/`)
+
+O esqueleto inclui uma árvore sobre a vida de quem usa o assistente, gerada por dados em `crates/will-server/src/kb_profile.rs` (10 áreas, ~30 arquivos). Convenções:
+
+- **Nomes longos e descritivos em kebab-case**, pastas numeradas: um `ls` já diz o que há em cada arquivo (ex.: `06-casa-e-rotina/enderecos-residencia-trabalho-e-outros.md`).
+- Cada arquivo tem frontmatter (`title`, `updated`, `tags`, `completude: preenchidos/total`), seções com campos `- Campo: __preencher__`, "Notas e contexto" e "Histórico de atualizações".
+- **Captura orgânica**: o cérebro preenche lacunas com o que a pessoa diz espontaneamente, com anexos/e-mails que ela pediu para ler e com inferências seguras (marcadas). Troca o marcador pelo valor anotando origem e data.
+- **Sem ser chato**: nunca questionário; no máximo uma pergunta leve por conversa, só quando encaixar no assunto; prioriza o que destrava tarefas.
+- **Cresce**: temas novos viram arquivos/pastas no mesmo padrão, registrados em `knowledge/pessoa/README.md`.
+- **Limites**: nunca senhas, PINs, cartões completos ou códigos; dados sensíveis (saúde, documentos, finanças) só fornecidos pela própria pessoa, e só nessa pasta.
+
+Áreas: `01-identidade-e-dados-pessoais`, `02-familia-e-relacionamentos`, `03-saude-e-bem-estar`, `04-trabalho-e-carreira`, `05-financas-e-patrimonio`, `06-casa-e-rotina`, `07-preferencias-e-gostos`, `08-tecnologia-e-ferramentas`, `09-objetivos-e-projetos-pessoais`, `10-contatos-uteis-e-emergencias`. As regras correspondentes entram no `CLAUDE.md` gerado (seção "Perfil da pessoa") e no subagente `bibliotecario`.
 
 ## CLAUDE.md da base de conhecimento (modelo)
 
