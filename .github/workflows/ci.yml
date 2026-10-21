@@ -3,11 +3,19 @@ name: CI
 on:
   push:
     branches: [main]
+    paths-ignore: ["docs/**", "*.md", "packaging/**"]
   pull_request:
+    paths-ignore: ["docs/**", "*.md", "packaging/**"]
+
+# Um push novo cancela o run anterior do mesmo branch.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
 
 env:
   CARGO_TERM_COLOR: always
   RUSTFLAGS: -D warnings
+  CARGO_INCREMENTAL: 0
 
 jobs:
   lint-test:
@@ -29,9 +37,10 @@ jobs:
           cargo build -p will-desktop -p fake-claude
           scripts/smoke.sh
 
-  build:
-    name: build (${{ matrix.name }})
-    needs: lint-test
+  check:
+    # Só checagem de tipos/compilação (sem link, sem LTO): pega os erros
+    # específicos de cada SO em poucos minutos. O build completo é do release.yml.
+    name: check (${{ matrix.name }})
     strategy:
       fail-fast: false
       matrix:
@@ -45,4 +54,4 @@ jobs:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
-      - run: cargo build --release -p will-desktop
+      - run: cargo check -p will-desktop --all-targets

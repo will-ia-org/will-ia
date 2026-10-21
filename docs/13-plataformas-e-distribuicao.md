@@ -89,7 +89,7 @@ Arquivos planejados em `packaging/`:
 
 ## CI/CD (GitHub Actions)
 
-- `.github/workflows/ci.yml`: a cada push/PR em `main`: `cargo fmt --check`, `clippy -D warnings`, `cargo test --workspace` e o smoke headless (`scripts/smoke.sh`) no Linux; build de release no Windows e no macOS (arm64).
+- `.github/workflows/ci.yml`: a cada push/PR em `main` (ignora mudanças só em docs): `cargo fmt --check`, `clippy -D warnings`, `cargo test --workspace` e o smoke headless no Linux; `cargo check` no Windows e no macOS em paralelo. Um push novo cancela o run anterior.
 - `.github/workflows/release.yml`: em tag `v*` (ou manual), matriz em paralelo:
 
 | Job | Runner | Target | Artefatos |
