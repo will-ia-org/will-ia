@@ -191,7 +191,7 @@ impl SettingsState {
                 .add_enabled(
                     dirty && !self.saving(),
                     egui::Button::new(egui::RichText::new("Salvar").color(egui::Color32::WHITE))
-                        .fill(egui::Color32::from_rgb(60, 120, 220)),
+                        .fill(ui::palette(ui.visuals().dark_mode).accent),
                 )
                 .clicked()
             {

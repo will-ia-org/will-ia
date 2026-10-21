@@ -8,35 +8,140 @@ use std::time::{Duration, Instant};
 pub const CONTENT_MAX_WIDTH: f32 = 1040.0;
 pub const LABEL_WIDTH: f32 = 230.0;
 
-/// Estilo global: tipografia maior, controles com altura uniforme, cantos suaves.
+/// Paleta do app (escuro e claro).
+pub struct Palette {
+    pub window: Color32,
+    pub panel: Color32,
+    pub card: Color32,
+    pub card_alt: Color32,
+    pub border: Color32,
+    pub text: Color32,
+    pub text_weak: Color32,
+    pub accent: Color32,
+    pub titlebar: Color32,
+}
+
+pub const DARK: Palette = Palette {
+    window: Color32::from_rgb(17, 20, 26),
+    panel: Color32::from_rgb(21, 25, 33),
+    card: Color32::from_rgb(27, 32, 41),
+    card_alt: Color32::from_rgb(33, 39, 50),
+    border: Color32::from_rgb(40, 46, 58),
+    text: Color32::from_rgb(226, 230, 237),
+    text_weak: Color32::from_rgb(142, 150, 166),
+    accent: Color32::from_rgb(79, 140, 255),
+    titlebar: Color32::from_rgb(14, 17, 22),
+};
+
+pub const LIGHT: Palette = Palette {
+    window: Color32::from_rgb(244, 246, 250),
+    panel: Color32::from_rgb(250, 251, 253),
+    card: Color32::from_rgb(255, 255, 255),
+    card_alt: Color32::from_rgb(243, 245, 249),
+    border: Color32::from_rgb(222, 227, 236),
+    text: Color32::from_rgb(31, 36, 48),
+    text_weak: Color32::from_rgb(106, 114, 130),
+    accent: Color32::from_rgb(47, 112, 230),
+    titlebar: Color32::from_rgb(236, 239, 245),
+};
+
+pub fn palette(dark: bool) -> &'static Palette {
+    if dark {
+        &DARK
+    } else {
+        &LIGHT
+    }
+}
+
+/// Famílias extras registradas em `install_fonts`.
+pub const FONT_MEDIUM: &str = "inter-medium";
+pub const FONT_SEMIBOLD: &str = "inter-semibold";
+
+/// Fonte Inter embutida (OFL) como proporcional padrão, com as fontes do egui
+/// como reserva para símbolos e emoji.
+pub fn install_fonts(ctx: &egui::Context) {
+    use egui::epaint::text::{FontData, FontDefinitions, FontFamily};
+    let mut fonts = FontDefinitions::default();
+    fonts.font_data.insert(
+        "inter".into(),
+        std::sync::Arc::new(FontData::from_static(include_bytes!(
+            "../assets/fonts/Inter-Regular.ttf"
+        ))),
+    );
+    fonts.font_data.insert(
+        FONT_MEDIUM.into(),
+        std::sync::Arc::new(FontData::from_static(include_bytes!(
+            "../assets/fonts/Inter-Medium.ttf"
+        ))),
+    );
+    fonts.font_data.insert(
+        FONT_SEMIBOLD.into(),
+        std::sync::Arc::new(FontData::from_static(include_bytes!(
+            "../assets/fonts/Inter-SemiBold.ttf"
+        ))),
+    );
+    let fallback: Vec<String> = fonts
+        .families
+        .get(&FontFamily::Proportional)
+        .cloned()
+        .unwrap_or_default();
+    let mut prop = vec!["inter".to_string()];
+    prop.extend(fallback.iter().cloned());
+    fonts.families.insert(FontFamily::Proportional, prop);
+    for name in [FONT_MEDIUM, FONT_SEMIBOLD] {
+        let mut fam = vec![name.to_string()];
+        fam.extend(fallback.iter().cloned());
+        fonts.families.insert(FontFamily::Name(name.into()), fam);
+    }
+    ctx.set_fonts(fonts);
+}
+
+pub fn medium(size: f32) -> egui::FontId {
+    egui::FontId::new(size, egui::FontFamily::Name(FONT_MEDIUM.into()))
+}
+
+pub fn semibold(size: f32) -> egui::FontId {
+    egui::FontId::new(size, egui::FontFamily::Name(FONT_SEMIBOLD.into()))
+}
+
+/// Configura fontes, tamanhos e paleta (escuro e claro). Chamar uma vez na criação.
+pub fn setup(ctx: &egui::Context) {
+    install_fonts(ctx);
+    ctx.all_styles_mut(apply_style);
+    ctx.set_visuals_of(egui::Theme::Dark, visuals(true));
+    ctx.set_visuals_of(egui::Theme::Light, visuals(false));
+}
+
+/// Estilo global: tipografia, controles com altura uniforme, cantos suaves.
 pub fn apply_style(style: &mut egui::Style) {
     use egui::{FontFamily, FontId, TextStyle};
     style.text_styles = [
         (
             TextStyle::Small,
-            FontId::new(12.5, FontFamily::Proportional),
+            FontId::new(12.0, FontFamily::Proportional),
         ),
-        (TextStyle::Body, FontId::new(14.5, FontFamily::Proportional)),
+        (TextStyle::Body, FontId::new(14.0, FontFamily::Proportional)),
         (
             TextStyle::Button,
-            FontId::new(14.5, FontFamily::Proportional),
+            FontId::new(14.0, FontFamily::Name(FONT_MEDIUM.into())),
         ),
         (
             TextStyle::Heading,
-            FontId::new(22.0, FontFamily::Proportional),
+            FontId::new(20.0, FontFamily::Name(FONT_SEMIBOLD.into())),
         ),
         (
             TextStyle::Monospace,
-            FontId::new(13.5, FontFamily::Monospace),
+            FontId::new(13.0, FontFamily::Monospace),
         ),
     ]
     .into();
-    style.spacing.item_spacing = egui::vec2(10.0, 8.0);
-    style.spacing.button_padding = egui::vec2(14.0, 7.0);
-    style.spacing.interact_size = egui::vec2(40.0, 30.0);
-    style.spacing.combo_width = 280.0;
-    style.spacing.text_edit_width = 280.0;
-    style.spacing.indent = 18.0;
+    style.spacing.item_spacing = egui::vec2(8.0, 6.0);
+    style.spacing.button_padding = egui::vec2(12.0, 6.0);
+    style.spacing.interact_size = egui::vec2(36.0, 30.0);
+    style.spacing.combo_width = 260.0;
+    style.spacing.text_edit_width = 260.0;
+    style.spacing.indent = 16.0;
+    style.spacing.scroll = egui::style::ScrollStyle::thin();
     for w in [
         &mut style.visuals.widgets.noninteractive,
         &mut style.visuals.widgets.inactive,
@@ -44,10 +149,77 @@ pub fn apply_style(style: &mut egui::Style) {
         &mut style.visuals.widgets.active,
         &mut style.visuals.widgets.open,
     ] {
-        w.corner_radius = 7.0.into();
+        w.corner_radius = 6.0.into();
     }
     style.visuals.window_corner_radius = 10.0.into();
     style.visuals.menu_corner_radius = 8.0.into();
+}
+
+fn visuals(dark: bool) -> egui::Visuals {
+    let p = palette(dark);
+    let mut v = if dark {
+        egui::Visuals::dark()
+    } else {
+        egui::Visuals::light()
+    };
+    v.panel_fill = p.panel;
+    v.window_fill = p.card;
+    v.extreme_bg_color = if dark {
+        Color32::from_rgb(12, 15, 20)
+    } else {
+        Color32::WHITE
+    };
+    v.faint_bg_color = p.card_alt;
+    v.code_bg_color = if dark {
+        Color32::from_rgb(12, 15, 20)
+    } else {
+        Color32::from_rgb(238, 241, 246)
+    };
+    v.window_stroke = egui::Stroke::new(1.0, p.border);
+    v.override_text_color = Some(p.text);
+    v.hyperlink_color = p.accent;
+    v.selection.bg_fill = p.accent.linear_multiply(if dark { 0.45 } else { 0.30 });
+    v.selection.stroke = egui::Stroke::new(1.0, p.accent);
+    let w = &mut v.widgets;
+    w.noninteractive.bg_fill = p.card;
+    w.noninteractive.weak_bg_fill = p.card;
+    w.noninteractive.bg_stroke = egui::Stroke::new(1.0, p.border);
+    w.noninteractive.fg_stroke = egui::Stroke::new(1.0, p.text_weak);
+    w.inactive.bg_fill = if dark {
+        Color32::from_rgb(38, 44, 56)
+    } else {
+        Color32::from_rgb(234, 238, 245)
+    };
+    w.inactive.weak_bg_fill = if dark {
+        Color32::from_rgb(33, 39, 50)
+    } else {
+        Color32::from_rgb(240, 243, 248)
+    };
+    w.inactive.bg_stroke = egui::Stroke::new(1.0, p.border);
+    w.inactive.fg_stroke = egui::Stroke::new(1.0, p.text);
+    w.hovered.bg_fill = if dark {
+        Color32::from_rgb(48, 55, 70)
+    } else {
+        Color32::from_rgb(226, 231, 240)
+    };
+    w.hovered.weak_bg_fill = w.hovered.bg_fill;
+    w.hovered.bg_stroke = egui::Stroke::new(1.0, p.accent.linear_multiply(0.7));
+    w.hovered.fg_stroke = egui::Stroke::new(1.0, p.text);
+    w.active.bg_fill = p.accent.linear_multiply(0.6);
+    w.active.weak_bg_fill = w.active.bg_fill;
+    w.active.bg_stroke = egui::Stroke::new(1.0, p.accent);
+    w.active.fg_stroke = egui::Stroke::new(1.0, Color32::WHITE);
+    w.open.bg_fill = w.inactive.bg_fill;
+    w.open.weak_bg_fill = w.inactive.weak_bg_fill;
+    w.open.bg_stroke = egui::Stroke::new(1.0, p.accent.linear_multiply(0.7));
+    v.popup_shadow = egui::epaint::Shadow {
+        offset: [0, 4],
+        blur: 16,
+        spread: 0,
+        color: Color32::from_black_alpha(if dark { 120 } else { 40 }),
+    };
+    v.window_shadow = v.popup_shadow;
+    v
 }
 
 /// Item do menu lateral: linha inteira clicável, com destaque quando selecionado.
@@ -57,29 +229,40 @@ pub fn nav_item(
     label: &str,
     dot_tone: Option<Tone>,
 ) -> egui::Response {
-    let h = 34.0;
+    let h = 32.0;
     let (rect, resp) =
         ui.allocate_exact_size(egui::vec2(ui.available_width(), h), egui::Sense::click());
     let dark = ui.visuals().dark_mode;
+    let p = palette(dark);
     let fill = if selected {
-        Color32::from_rgb(60, 120, 220).linear_multiply(if dark { 0.35 } else { 0.18 })
+        p.accent.linear_multiply(if dark { 0.26 } else { 0.14 })
     } else if resp.hovered() {
-        ui.visuals().widgets.hovered.bg_fill.linear_multiply(0.6)
+        p.card_alt
     } else {
         Color32::TRANSPARENT
     };
-    ui.painter().rect_filled(rect, 7.0, fill);
-    let text_color = if selected {
-        ui.visuals().strong_text_color()
+    ui.painter().rect_filled(rect, 6.0, fill);
+    if selected {
+        ui.painter().rect_filled(
+            egui::Rect::from_min_size(
+                egui::pos2(rect.left(), rect.top() + 8.0),
+                egui::vec2(3.0, rect.height() - 16.0),
+            ),
+            2.0,
+            p.accent,
+        );
+    }
+    let font = if selected {
+        medium(14.0)
     } else {
-        ui.visuals().text_color()
+        egui::FontId::proportional(14.0)
     };
     ui.painter().text(
-        egui::pos2(rect.left() + 12.0, rect.center().y),
+        egui::pos2(rect.left() + 14.0, rect.center().y),
         egui::Align2::LEFT_CENTER,
         label,
-        egui::FontId::proportional(15.0),
-        text_color,
+        font,
+        p.text,
     );
     if let Some(t) = dot_tone {
         ui.painter().circle_filled(
@@ -184,7 +367,7 @@ pub fn toggle(ui: &mut Ui, on: &mut bool) -> egui::Response {
     let t = ui.ctx().animate_bool_responsive(resp.id, *on);
     let visuals = ui.style().interact_selectable(&resp, *on);
     let bg = if *on {
-        Color32::from_rgb(60, 120, 220)
+        palette(ui.visuals().dark_mode).accent
     } else {
         visuals.bg_fill
     };
@@ -197,39 +380,26 @@ pub fn toggle(ui: &mut Ui, on: &mut bool) -> egui::Response {
 }
 
 pub fn heading(ui: &mut Ui, title: &str, description: Option<&str>) {
-    ui.add_space(6.0);
-    ui.label(RichText::new(title).strong().size(24.0));
-    if let Some(d) = description {
-        ui.add(egui::Label::new(RichText::new(d).weak()).wrap());
-    }
     ui.add_space(4.0);
+    ui.label(RichText::new(title).font(semibold(21.0)));
+    if let Some(d) = description {
+        ui.add(egui::Label::new(RichText::new(d).weak().size(13.0)).wrap());
+    }
+    ui.add_space(2.0);
 }
 
 pub fn section(ui: &mut Ui, title: &str, add: impl FnOnce(&mut Ui)) {
-    ui.add_space(10.0);
-    let dark = ui.visuals().dark_mode;
-    let fill = if dark {
-        Color32::from_rgb(32, 35, 44)
-    } else {
-        Color32::from_rgb(250, 250, 252)
-    };
-    let stroke = egui::Stroke::new(
-        1.0,
-        if dark {
-            Color32::from_rgb(52, 56, 68)
-        } else {
-            Color32::from_rgb(222, 225, 232)
-        },
-    );
+    ui.add_space(8.0);
+    let p = palette(ui.visuals().dark_mode);
     egui::Frame::new()
-        .fill(fill)
-        .stroke(stroke)
+        .fill(p.card)
+        .stroke(egui::Stroke::new(1.0, p.border))
         .corner_radius(10.0)
-        .inner_margin(egui::Margin::symmetric(18, 16))
+        .inner_margin(egui::Margin::symmetric(18, 14))
         .show(ui, |ui| {
             ui.set_width(ui.available_width());
-            ui.label(RichText::new(title).strong().size(16.5));
-            ui.add_space(10.0);
+            ui.label(RichText::new(title).font(semibold(15.0)));
+            ui.add_space(8.0);
             add(ui);
         });
 }
@@ -241,7 +411,7 @@ pub fn field(ui: &mut Ui, label: &str, hint: Option<&str>, add: impl FnOnce(&mut
             ui.set_width(LABEL_WIDTH);
             ui.set_max_width(LABEL_WIDTH);
             ui.add_space(5.0);
-            ui.label(RichText::new(label).strong());
+            ui.label(RichText::new(label).font(medium(14.0)));
             if let Some(h) = hint {
                 ui.add(egui::Label::new(RichText::new(h).weak().small()).wrap());
             }
@@ -394,7 +564,7 @@ pub fn parse_ids(s: &str) -> Vec<i64> {
 pub fn primary_button(ui: &mut Ui, text: &str) -> egui::Response {
     ui.add(
         egui::Button::new(RichText::new(text).color(Color32::WHITE))
-            .fill(Color32::from_rgb(60, 120, 220)),
+            .fill(palette(ui.visuals().dark_mode).accent),
     )
 }
 

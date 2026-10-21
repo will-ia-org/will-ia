@@ -83,7 +83,7 @@ impl WillApp {
     ) -> Self {
         svc.set_ctx(cc.egui_ctx.clone());
         egui_extras::install_image_loaders(&cc.egui_ctx);
-        cc.egui_ctx.all_styles_mut(crate::ui::apply_style);
+        crate::ui::setup(&cc.egui_ctx);
         let tray = Tray::new(&svc);
         let hotkeys = Hotkeys::new(&svc);
         let settings = svc.state.settings();
@@ -359,7 +359,7 @@ impl WillApp {
         ui.add_space(10.0);
         ui.horizontal(|ui| {
             ui.add_space(4.0);
-            ui.label(egui::RichText::new("will-ia").strong().size(22.0));
+            ui.label(egui::RichText::new("will-ia").font(ui::semibold(18.0)));
         });
         ui.add_space(12.0);
         egui::ScrollArea::vertical()
@@ -413,11 +413,7 @@ impl WillApp {
         let (rect, _) =
             ui.allocate_exact_size(egui::vec2(ui.available_width(), h), egui::Sense::hover());
         let dark = ui.visuals().dark_mode;
-        let bg = if dark {
-            egui::Color32::from_rgb(22, 24, 30)
-        } else {
-            egui::Color32::from_rgb(236, 238, 243)
-        };
+        let bg = ui::palette(dark).titlebar;
         ui.painter().rect_filled(rect, 0.0, bg);
         let maximized = ctx.input(|i| i.viewport().maximized.unwrap_or(false));
 
