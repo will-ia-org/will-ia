@@ -1053,12 +1053,31 @@ impl WhatsAppModule {
             let c = WaContact {
                 account_id: acc.id.clone(),
                 jid: m.sender_jid.clone(),
-                phone: phone_from_jid(&m.sender_jid),
+                phone: m
+                    .sender_phone
+                    .clone()
+                    .or_else(|| phone_from_jid(&m.sender_jid)),
                 name: None,
                 push_name: m.sender_name.clone(),
             };
             if let Err(e) = st.wa_upsert_contact(&c).await {
                 tracing::debug!("wa_upsert_contact: {e}");
+            }
+        }
+        // Chat 1:1 por LID com telefone conhecido (mensagem minha): grava o
+        // contato do chat para a busca por número achar este chat.
+        if m.from_me && !m.is_group && m.chat_jid.ends_with("@lid") {
+            if let Some(phone) = m.chat_phone.clone() {
+                let c = WaContact {
+                    account_id: acc.id.clone(),
+                    jid: m.chat_jid.clone(),
+                    phone: Some(phone),
+                    name: chat_name.clone(),
+                    push_name: None,
+                };
+                if let Err(e) = st.wa_upsert_contact(&c).await {
+                    tracing::debug!("wa_upsert_contact (chat lid): {e}");
+                }
             }
         }
         let msg = WaMessage {

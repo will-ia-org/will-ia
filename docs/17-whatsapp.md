@@ -38,6 +38,10 @@ O protocolo entrega mensagens em tempo real (e um history sync inicial), mas nã
 
 Sem o índice, só seria possível reagir a mensagens novas. Com ele, o agente consegue "resuma o que aconteceu no grupo X hoje".
 
+### LIDs (identidades novas do WhatsApp) e atualização do índice
+
+Desde 2025 o WhatsApp endereça contatos por **LID** (`<id>@lid`) em vez do telefone (`<n>@s.whatsapp.net`). O índice chaveia cada conversa pelo JID que o WhatsApp usa, então a conversa viva de um contato fica em `…@lid` e o chat `…@s.whatsapp.net` antigo para de receber mensagens. Para não parecer "histórico parado": (1) ao indexar, o telefone vindo de `sender_alt`/`recipient_alt` é gravado em `wa_contacts.phone` do JID LID; (2) `resolve_chat_id` com número ou JID de telefone prefere o chat LID do mesmo contato. O status por conta mostra **última mensagem indexada** e **mensagens nas últimas 24 h** (amarelo se a última tem mais de 24 h). A indexação é contínua enquanto o servidor está conectado; mensagens recebidas com o servidor fora chegam na reconexão (retomada offline da biblioteca).
+
 ## Ferramentas MCP
 
 Prefixo `whatsapp_`. Cada uma tem toggle e **política** (`auto` / `confirmar` / `desligada`, ver [09](09-servidor-mcp.md#políticas-de-aprovação)). **Todas** aceitam o parâmetro opcional `account` (id, rótulo ou telefone da conta).

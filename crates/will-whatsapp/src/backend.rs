@@ -26,6 +26,11 @@ pub struct IncomingMessage {
     pub quoted_id: Option<String>,
     pub is_group: bool,
     pub chat_name: Option<String>,
+    /// Telefone do remetente quando o JID é um LID (`…@lid`): vem do
+    /// `sender_alt` do WhatsApp. Permite achar o chat por número.
+    pub sender_phone: Option<String>,
+    /// Telefone do contato do chat 1:1 quando o chat é um LID.
+    pub chat_phone: Option<String>,
 }
 
 /// Eventos emitidos pelo backend para o módulo.

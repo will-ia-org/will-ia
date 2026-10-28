@@ -499,7 +499,26 @@ impl Storage {
             .fetch_one(&self.pool)
             .await?
             .get::<i64, _>("c");
-        Ok(serde_json::json!({"chats": chats, "messages": msgs, "contacts": contacts}))
+        let (last, recent) = self.wa_recency(account_id).await?;
+        Ok(
+            serde_json::json!({"chats": chats, "messages": msgs, "contacts": contacts, "last_message_at": last, "messages_24h": recent}),
+        )
+    }
+
+    /// Última mensagem indexada (fora de `status@broadcast`) e quantas chegaram
+    /// nas últimas 24 h: é o que mostra se o índice está acompanhando o celular.
+    pub async fn wa_recency(&self, account_id: &str) -> Result<(Option<String>, i64)> {
+        let r = sqlx::query(
+            "SELECT MAX(at) AS last, SUM(CASE WHEN at >= ? THEN 1 ELSE 0 END) AS recent FROM wa_messages WHERE account_id = ? AND chat_jid != 'status@broadcast'",
+        )
+        .bind(fmt(now() - chrono::Duration::hours(24)))
+        .bind(account_id)
+        .fetch_one(&self.pool)
+        .await?;
+        Ok((
+            r.get::<Option<String>, _>("last"),
+            r.get::<Option<i64>, _>("recent").unwrap_or(0),
+        ))
     }
 
     /// Estatísticas por conta: `[(account_id, {chats, messages, contacts})]`,
@@ -514,15 +533,16 @@ impl Storage {
         )
         .fetch_all(&self.pool)
         .await?;
-        Ok(rows
-            .iter()
-            .map(|r| {
-                (
-                    r.get::<String, _>("account_id"),
-                    serde_json::json!({"chats": r.get::<i64, _>("chats"), "messages": r.get::<i64, _>("messages"), "contacts": r.get::<i64, _>("contacts")}),
-                )
-            })
-            .collect())
+        let mut out = Vec::with_capacity(rows.len());
+        for r in rows.iter() {
+            let id: String = r.get("account_id");
+            let (last, recent) = self.wa_recency(&id).await?;
+            out.push((
+                id,
+                serde_json::json!({"chats": r.get::<i64, _>("chats"), "messages": r.get::<i64, _>("messages"), "contacts": r.get::<i64, _>("contacts"), "last_message_at": last, "messages_24h": recent}),
+            ));
+        }
+        Ok(out)
     }
 }
 

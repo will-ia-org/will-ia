@@ -205,6 +205,15 @@ impl WhatsAppPage {
                         }
                         let idx = &a["index"];
                         ui.label(egui::RichText::new(format!("{} chats · {} msgs", ui::i(idx, "chats"), ui::i(idx, "messages"))).small().weak());
+                        // Recência do índice: última mensagem e volume das últimas 24 h.
+                        let last = idx.get("last_message_at").and_then(|v| v.as_str()).and_then(|t| chrono::DateTime::parse_from_rfc3339(t).ok()).map(|d| d.with_timezone(&chrono::Utc));
+                        let recent = ui::i(idx, "messages_24h");
+                        let txt = match last {
+                            Some(d) => trf("última mensagem {} · {} nas últimas 24 h", &[&ui::fmt_relative(&d), &recent]),
+                            None => tr("nenhuma mensagem indexada").into(),
+                        };
+                        let stale = last.map(|d| (chrono::Utc::now() - d).num_hours() >= 24).unwrap_or(true);
+                        ui::badge(ui, &txt, if stale { ui::Tone::Warning } else { ui::Tone::Success });
                     });
                     ui.horizontal(|ui| {
                         let mut en = ui::b(a, "enabled");

@@ -394,10 +394,46 @@ pub(crate) async fn resolve_chat_id(
     raw: &str,
 ) -> Result<String, ToolError> {
     let raw = raw.trim();
+    let st = m.storage();
+    // WhatsApp migrou contatos para LIDs: a conversa viva de um número costuma
+    // estar em `<lid>@lid`, não em `<telefone>@s.whatsapp.net`. Para um JID de
+    // telefone ou um número cru, prefere o chat LID do mesmo contato quando existe.
+    let digits = if raw.contains('@') {
+        phone_from_jid(raw)
+    } else {
+        phone_digits(raw)
+    };
+    if let Some(ph) = digits {
+        if let Ok(contacts) = st.wa_search_contacts(&acc.id, Some(&ph), 20).await {
+            let mut lids: Vec<String> = contacts
+                .iter()
+                .filter(|c| c.jid.ends_with("@lid"))
+                .filter(|c| {
+                    c.phone
+                        .as_deref()
+                        .map(|p| p.ends_with(&ph) || ph.ends_with(p))
+                        .unwrap_or(false)
+                })
+                .map(|c| c.jid.clone())
+                .collect();
+            lids.dedup();
+            for jid in lids {
+                if let Ok(Some(_)) = st.wa_get_chat(&acc.id, &jid).await {
+                    return Ok(jid);
+                }
+            }
+        }
+        if raw.contains('@') {
+            return Ok(raw.to_string());
+        }
+        let jid = jid_from_phone(&ph);
+        if let Ok(Some(_)) = st.wa_get_chat(&acc.id, &jid).await {
+            return Ok(jid);
+        }
+    }
     if raw.contains('@') {
         return Ok(raw.to_string());
     }
-    let st = m.storage();
     let chats = st
         .wa_find_chat_by_name(&acc.id, raw)
         .await

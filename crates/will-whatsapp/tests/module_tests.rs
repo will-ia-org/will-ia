@@ -240,6 +240,8 @@ fn msg(
         media_ref: None,
         quoted_id: None,
         is_group: chat.ends_with("@g.us"),
+        sender_phone: None,
+        chat_phone: None,
         chat_name: if chat.ends_with("@g.us") {
             Some("Família".into())
         } else {

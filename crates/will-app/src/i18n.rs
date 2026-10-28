@@ -1007,6 +1007,8 @@ pub static TABLE: &[(&str, &str)] = &[
     ("Não entendi nada no áudio.", "Could not make out anything in the audio."),
     ("Transcrição falhou: {}", "Transcription failed: {}"),
     ("Gravação muito curta.", "Recording too short."),
+    ("última mensagem {} · {} nas últimas 24 h", "last message {} · {} in the last 24 h"),
+    ("nenhuma mensagem indexada", "no indexed message"),
     ("disponível só quando o servidor é esta máquina", "available only when the server is this machine"),
     ("Conexão com o servidor perdida: {}", "Connection to the server lost: {}"),
     ("Desconectado do servidor; tentando reconectar…", "Disconnected from the server; reconnecting…"),

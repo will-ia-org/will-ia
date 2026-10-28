@@ -661,6 +661,8 @@ impl Shared {
                     quoted_id: quoted_id(base),
                     is_group,
                     chat_name: name.clone(),
+                    sender_phone: None,
+                    chat_phone: None,
                 }));
             }
         }
@@ -703,6 +705,24 @@ fn convert(info: &MessageInfo, msg: &wa::Message) -> IncomingMessage {
         quoted_id: quoted_id(base),
         is_group: info.source.is_group,
         chat_name: None,
+        sender_phone: info
+            .source
+            .sender_alt
+            .as_ref()
+            .and_then(|j| phone_from_jid(&j.to_non_ad_string())),
+        chat_phone: if info.source.is_group {
+            None
+        } else if info.source.is_from_me {
+            info.source
+                .recipient_alt
+                .as_ref()
+                .and_then(|j| phone_from_jid(&j.to_non_ad_string()))
+        } else {
+            info.source
+                .sender_alt
+                .as_ref()
+                .and_then(|j| phone_from_jid(&j.to_non_ad_string()))
+        },
     }
 }
 
