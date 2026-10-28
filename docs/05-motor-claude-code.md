@@ -72,6 +72,7 @@ Variáveis de ambiente do processo filho:
 | `WILL_IA_ORIGIN` | `ui` / `telegram` / `realtime` |
 | `WILL_IA_MCP_URL` | URL do servidor MCP local (para scripts em `tools/`) |
 | `AGENT_BROWSER_CDP` | `http://127.0.0.1:<browser.listen_port>` (padrão 9223): proxy CDP do serviço, lido pelo CLI `agent-browser`; só quando o módulo Browser CDP está habilitado (`docs/25`) |
+| `AGENT_BROWSER_SCREENSHOT_DIR`, `AGENT_BROWSER_DOWNLOAD_PATH` | `<kb>/inbox/browser/`: capturas e downloads do `agent-browser` sem caminho explícito; só quando o módulo Browser CDP está ligado (`docs/25`). |
 
 ### Allowlist padrão (modo `acceptEdits`)
 

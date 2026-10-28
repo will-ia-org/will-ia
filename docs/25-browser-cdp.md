@@ -4,7 +4,7 @@ O braço do agente para navegar na web é o **agent-browser** ([vercel-labs/agen
 
 O will-ia **não** reimplementa navegação; ele garante que, em qualquer thread, "a porta sempre responde":
 
-- injeta `AGENT_BROWSER_CDP=http://127.0.0.1:<listen_port>` em todo processo `claude` (e, opcionalmente, `Bash(agent-browser:*)` na allowlist), então o agente não configura nada;
+- injeta `AGENT_BROWSER_CDP=http://127.0.0.1:<listen_port>` em todo processo `claude` (e, opcionalmente, `Bash(agent-browser:*)` na allowlist), então o agente não configura nada; injeta também `AGENT_BROWSER_SCREENSHOT_DIR` e `AGENT_BROWSER_DOWNLOAD_PATH` = `<kb>/inbox/browser/` (pasta criada ao subir o módulo), para capturas e downloads não caírem em `/tmp` nem na raiz da KB. A `SKILL.md` copiada para a KB ganha uma seção "Neste ambiente (will-ia)" com essas regras;
 - sobe um **proxy CDP local** em `127.0.0.1:9223` (padrão) que repassa ao navegador real em `127.0.0.1:9222`, reescrevendo as URLs de descoberta e registrando o tráfego;
 - se ninguém responde no upstream, o proxy **lança o navegador** (Chrome, Chromium, Brave, Edge ou o Chromium baixado pelo agent-browser) com depuração remota e perfil dedicado, espera ele responder e só então repassa;
 - oferece na UI a **instalação** do agent-browser, do Chromium e da skill na base de conhecimento, com testes de ponta a ponta.

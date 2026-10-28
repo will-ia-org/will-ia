@@ -88,6 +88,29 @@ pub async fn agent_browser_chrome(bin: &Path) -> Option<String> {
     (!p.is_empty() && Path::new(p).exists()).then(|| p.to_string())
 }
 
+/// Seção que o will-ia acrescenta ao final da SKILL.md copiada: o que já
+/// está configurado pelo serviço e onde guardar capturas/downloads.
+const WILL_IA_NOTES: &str = r#"
+
+## Neste ambiente (will-ia)
+
+- O CDP já está configurado pelo serviço (`AGENT_BROWSER_CDP`): **não** passe `--cdp`, `--auto-connect`
+  nem `--headed`, não rode `agent-browser install` e não tente subir um navegador. Se ninguém estiver
+  escutando, o will-ia sobe o navegador sozinho no primeiro comando (pode demorar alguns segundos).
+- Capturas de tela e downloads vão para `inbox/browser/` (já definido por `AGENT_BROWSER_SCREENSHOT_DIR`
+  e `AGENT_BROWSER_DOWNLOAD_PATH`). Prefira `agent-browser screenshot` **sem caminho**; se precisar
+  nomear o arquivo, use `inbox/browser/<nome>.png`. Nunca grave imagens na raiz da base de conhecimento.
+- Use `--if-changed` em capturas repetidas e `agent-browser close` ao terminar a tarefa.
+"#;
+
+fn append_will_ia_notes(skill: &Path) -> Result<(), String> {
+    let cur = std::fs::read_to_string(skill).map_err(|e| e.to_string())?;
+    if cur.contains("## Neste ambiente (will-ia)") {
+        return Ok(());
+    }
+    std::fs::write(skill, format!("{}{}", cur.trim_end(), WILL_IA_NOTES)).map_err(|e| e.to_string())
+}
+
 pub fn skill_path_in_kb(kb: &Path) -> PathBuf {
     kb.join(".claude")
         .join("skills")
@@ -308,6 +331,8 @@ impl Installer {
                         std::fs::create_dir_all(parent).map_err(|e| e.to_string())?;
                     }
                     std::fs::copy(&src, &dst).map_err(|e| format!("copiar skill: {e}"))?;
+                    append_will_ia_notes(&dst)?;
+                    let _ = std::fs::create_dir_all(kb.join("inbox").join("browser"));
                     self.bus.log(
                         "info",
                         "browser",

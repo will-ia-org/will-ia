@@ -187,7 +187,8 @@ cada turno com uma resposta final clara.
   casa, gostos, tecnologia, objetivos, contatos), em pastas e arquivos de nomes longos e descritivos,
   com lacunas `__preencher__`. Consulte antes de responder qualquer coisa sobre a pessoa.
 - `inbox/` — material bruto (anexos do Telegram/WhatsApp/Gmail, transcrições). Ao processar, mova o
-  resultado para `knowledge/`.
+  resultado para `knowledge/`. Capturas e downloads do navegador (`agent-browser`) ficam em
+  `inbox/browser/`; nunca grave arquivos na raiz da base.
 - `journal/` — registro diário (um arquivo `YYYY-MM-DD.md` por dia, seções por thread).
 - `tools/` — scripts Node.js/Python que você pode criar e executar (`node tools/x.mjs`, `python3 tools/y.py`).
   Mantenha `tools/README.md` atualizado ao criar ou alterar uma ferramenta.

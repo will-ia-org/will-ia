@@ -291,6 +291,12 @@ pub async fn refresh_engine(state: &Arc<AppState>, restart_live: bool) -> usize 
 /// Browser CDP: proxy em loopback + lançamento do navegador sob demanda.
 pub async fn start_browser(state: &Arc<AppState>) {
     let cfg = state.settings().browser;
+    // Pasta das capturas/downloads do agent-browser (dentro do inbox da KB).
+    if cfg.enabled {
+        if let Some(kb) = state.kb_path().filter(|p| p.is_dir()) {
+            let _ = std::fs::create_dir_all(kb.join("inbox").join("browser"));
+        }
+    }
     let existing = state.browser.read().clone();
     match existing {
         Some(m) => {

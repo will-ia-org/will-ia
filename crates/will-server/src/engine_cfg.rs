@@ -28,19 +28,30 @@ pub fn build(
     for (k, v) in external_env {
         env.insert(k.clone(), v.clone());
     }
-    // Browser CDP: o agent-browser fala com o proxy local sem flag nenhuma.
-    if settings.browser.enabled {
-        env.insert(
-            "AGENT_BROWSER_CDP".into(),
-            format!("http://127.0.0.1:{}", settings.browser.listen_port),
-        );
-    }
     let cwd = settings
         .kb
         .path
         .as_ref()
         .map(|p| paths.resolve_user_path(p))
         .unwrap_or_else(|| paths.data_dir.join("kb-nao-configurada"));
+    // Browser CDP: o agent-browser fala com o proxy local sem flag nenhuma, e
+    // capturas/downloads sem caminho explícito vão para `<kb>/inbox/browser/`
+    // em vez de /tmp ou da raiz da KB.
+    if settings.browser.enabled {
+        env.insert(
+            "AGENT_BROWSER_CDP".into(),
+            format!("http://127.0.0.1:{}", settings.browser.listen_port),
+        );
+        let media = cwd.join("inbox").join("browser");
+        env.insert(
+            "AGENT_BROWSER_SCREENSHOT_DIR".into(),
+            media.to_string_lossy().to_string(),
+        );
+        env.insert(
+            "AGENT_BROWSER_DOWNLOAD_PATH".into(),
+            media.to_string_lossy().to_string(),
+        );
+    }
     let mcp_config_path = Some(cwd.join(".mcp.json")).filter(|p| p.exists());
     let mut allowed = e.allowed_tools.clone();
     if settings.browser.enabled
