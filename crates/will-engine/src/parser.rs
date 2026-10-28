@@ -295,10 +295,44 @@ pub fn parse_line(line: &str) -> StreamLine {
                 stale_session: stale,
             }
         }
-        "rate_limit_event" => StreamLine::RateLimit {
-            detail: will_core::tools::truncate(&v.to_string(), 300),
-        },
+        "rate_limit_event" => rate_limit_line(&v),
         _ => StreamLine::Other,
+    }
+}
+
+/// `rate_limit_event` é informativo: o CLI (2.1.x) emite um a cada turno com
+/// `rate_limit_info.status = "allowed"` e a utilização da janela. Só é um
+/// problema quando o status não é `allowed`/`allowed_warning` (ex.: `rejected`).
+fn rate_limit_line(v: &Value) -> StreamLine {
+    let info = v.get("rate_limit_info").unwrap_or(v);
+    let status = info.get("status").and_then(|s| s.as_str()).unwrap_or("");
+    if status.is_empty() || status == "allowed" || status == "allowed_warning" {
+        return StreamLine::Other;
+    }
+    let window = info
+        .get("rateLimitType")
+        .and_then(|s| s.as_str())
+        .unwrap_or("?");
+    let util = info
+        .get("unifiedWindows")
+        .and_then(|w| w.get(window))
+        .and_then(|w| w.get("utilization"))
+        .and_then(|u| u.as_f64())
+        .map(|u| format!(", uso {:.0}%", u * 100.0))
+        .unwrap_or_default();
+    let resets = info
+        .get("resetsAt")
+        .and_then(|r| r.as_i64())
+        .and_then(|r| chrono::DateTime::from_timestamp(r, 0))
+        .map(|d| {
+            format!(
+                ", libera em {}",
+                d.with_timezone(&chrono::Local).format("%d/%m %H:%M")
+            )
+        })
+        .unwrap_or_default();
+    StreamLine::RateLimit {
+        detail: format!("janela {window}: {status}{util}{resets}"),
     }
 }
 
@@ -394,6 +428,23 @@ mod tests {
         assert!(matches!(parse_line(l), StreamLine::UserReplay { text } if text == "oi"));
         let l = r#"{"type":"user","message":{"role":"user","content":[{"type":"tool_result","content":"x"}]},"tool_use_result":{"stdout":"x","stderr":""}}"#;
         assert!(matches!(parse_line(l), StreamLine::ToolResult { .. }));
+    }
+
+    #[test]
+    fn rate_limit_event_allowed_is_informational() {
+        let l = r#"{"type":"rate_limit_event","rate_limit_info":{"isUsingOverage":false,"overageStatus":"rejected","rateLimitType":"five_hour","resetsAt":1793204400,"status":"allowed","unifiedWindows":{"five_hour":{"resetsAt":1793204400,"status":"allowed","utilization":0.18}}}}"#;
+        assert!(matches!(parse_line(l), StreamLine::Other));
+        let l = r#"{"type":"rate_limit_event","rate_limit_info":{"rateLimitType":"five_hour","resetsAt":1793204400,"status":"rejected","unifiedWindows":{"five_hour":{"status":"rejected","utilization":1.0}}}}"#;
+        match parse_line(l) {
+            StreamLine::RateLimit { detail } => {
+                assert!(
+                    detail.starts_with("janela five_hour: rejected, uso 100%"),
+                    "{detail}"
+                );
+                assert!(detail.contains("libera em"));
+            }
+            other => panic!("{other:?}"),
+        }
     }
 
     #[test]
