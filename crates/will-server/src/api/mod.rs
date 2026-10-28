@@ -4,6 +4,7 @@
 
 pub mod browser;
 pub mod engine;
+pub mod files;
 pub mod integrations;
 pub mod kb;
 pub mod mcp;
@@ -137,6 +138,12 @@ pub fn router(state: App) -> Router {
         .route("/kb/scaffold", post(kb::scaffold))
         .route("/kb/open", post(kb::open))
         .route("/kb/mcp-json", get(kb::mcp_json))
+        .route("/kb/browse", get(files::browse))
+        .route("/files", get(files::file))
+        .route(
+            "/uploads",
+            post(files::upload).layer(axum::extract::DefaultBodyLimit::max(files::UPLOAD_MAX)),
+        )
         .route("/mcp/script-token", get(mcp::script_token))
         .route("/mcp/script-token/rotate", post(mcp::rotate_script_token))
         .route("/mcp/tools", get(mcp::tools))

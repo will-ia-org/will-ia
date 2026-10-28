@@ -63,6 +63,9 @@ Token local gerado na primeira execução, gravado em `<data_dir>/ui-session.tok
 | POST | `/api/kb/scaffold` | cria esqueleto |
 | POST | `/api/kb/open` | abre no explorador |
 | GET | `/api/kb/mcp-json` | conteúdo gerado |
+| GET | `/api/kb/browse?path=` | Subpastas de um diretório do **servidor** (`{path, parent, home, writable, dangerous, dirs:[{name,path}]}`); sem `path` = home. Para o app escolher a KB sem diálogo local (etapa 2 de `docs/26`) |
+| GET | `/api/files?path=` | Conteúdo de um arquivo **dentro da KB** (miniaturas e download no app); fora da KB → 403; até 64 MiB |
+| POST | `/api/uploads?name=` | Corpo bruto do arquivo → `<kb>/inbox/ui/<carimbo>-<nome>`; devolve `{name, mime, path, size}`; o `path` entra direto em `POST /api/threads/{id}/messages` sem nova cópia; limite 64 MiB |
 
 ### MCP
 | Método | Rota | Descrição |

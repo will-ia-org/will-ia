@@ -320,6 +320,68 @@ impl Client {
     pub async fn kb_mcp_json(&self) -> ApiResult {
         self.get("kb/mcp-json").await
     }
+    /// Subpastas de um diretório do servidor (`None` = home). Para escolher a KB remotamente.
+    pub async fn kb_browse(&self, path: Option<&str>) -> ApiResult {
+        self.get_q(
+            "kb/browse",
+            &[("path", path.unwrap_or_default().to_string())],
+        )
+        .await
+    }
+
+    // ----- arquivos -----
+
+    /// Envia bytes para `<kb>/inbox/ui/` e devolve o anexo (`{name, mime, path, size}`).
+    pub async fn upload(&self, name: &str, bytes: Vec<u8>) -> ApiResult {
+        let url = format!(
+            "{}{}",
+            self.url("uploads"),
+            query_string(&[("name", name.to_string())])
+        );
+        Self::finish(
+            self.http
+                .post(url)
+                .bearer_auth(&self.token)
+                .header("content-type", "application/octet-stream")
+                .body(bytes)
+                .send()
+                .await,
+        )
+        .await
+    }
+
+    /// Conteúdo de um arquivo da KB do servidor (miniaturas, abrir/baixar).
+    pub async fn file_bytes(&self, path: &str) -> Result<(String, Vec<u8>), String> {
+        let url = format!(
+            "{}{}",
+            self.url("files"),
+            query_string(&[("path", path.to_string())])
+        );
+        let resp = self
+            .http
+            .get(url)
+            .bearer_auth(&self.token)
+            .send()
+            .await
+            .map_err(|e| transport_error(&e))?;
+        let status = resp.status();
+        let mime = resp
+            .headers()
+            .get("content-type")
+            .and_then(|v| v.to_str().ok())
+            .unwrap_or("application/octet-stream")
+            .to_string();
+        let bytes = resp.bytes().await.map_err(|e| e.to_string())?;
+        if !status.is_success() {
+            let text = String::from_utf8_lossy(&bytes).to_string();
+            let msg = serde_json::from_str::<Value>(&text)
+                .ok()
+                .and_then(|v| v.get("error").and_then(|e| e.as_str()).map(str::to_string))
+                .unwrap_or_else(|| format!("HTTP {status}"));
+            return Err(msg);
+        }
+        Ok((mime, bytes.to_vec()))
+    }
 
     // ----- MCP / aprovações -----
 

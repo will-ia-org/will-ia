@@ -4,11 +4,31 @@
 
 use super::Cx;
 use crate::i18n::{tr, trf};
-use crate::service::{Loader, Task};
+use crate::service::{Loader, Service, Task};
 use crate::ui::{self, Tone};
 use serde_json::Value;
 use std::collections::HashMap;
+use std::sync::Arc;
 use will_core::{EngineDelta, Event, ThreadId, ThreadStatus, ThreadSummary, TurnResult};
+
+/// Teto de um anexo enviado para um servidor remoto (`POST /api/uploads`).
+const UPLOAD_MAX_BYTES: u64 = 64 * 1024 * 1024;
+/// Acima disso não se baixa a imagem só para a miniatura (modo remoto).
+const THUMB_MAX_BYTES: u64 = 16 * 1024 * 1024;
+
+/// Anexos de um servidor remoto: os caminhos são de lá, então miniaturas e
+/// "abrir" passam por `GET /api/files`. Bytes baixados ficam em cache por
+/// caminho enquanto a página viver.
+#[derive(Default)]
+struct RemoteFiles {
+    cache: HashMap<String, Arc<[u8]>>,
+    /// Downloads de miniatura em voo, por caminho.
+    loading: HashMap<String, Task<(String, Vec<u8>)>>,
+    /// Caminhos cuja miniatura falhou (não tentar de novo a cada quadro).
+    failed: HashMap<String, String>,
+    /// Baixar + gravar em pasta temporária + abrir no app padrão.
+    opening: Vec<Task<()>>,
+}
 
 #[derive(Default)]
 struct LiveTurn {
@@ -42,6 +62,7 @@ pub struct ThreadsPage {
     /// sobra para o histórico sem a página rolar).
     bottom_h: f32,
     md_cache: egui_commonmark::CommonMarkCache,
+    remote: RemoteFiles,
 }
 
 fn origin_label(t: &ThreadSummary) -> String {
@@ -348,25 +369,98 @@ impl ThreadsPage {
                 }
             }
         }
+        // anexos remotos: miniaturas que chegaram e aberturas concluídas
+        let done: Vec<String> = self
+            .remote
+            .loading
+            .iter()
+            .filter(|(_, t)| !t.pending())
+            .map(|(k, _)| k.clone())
+            .collect();
+        for k in done {
+            let Some(t) = self.remote.loading.remove(&k) else {
+                continue;
+            };
+            match t.take() {
+                Some(Ok((_mime, bytes))) => {
+                    self.remote.cache.insert(k, Arc::from(bytes));
+                }
+                Some(Err(e)) => {
+                    self.remote.failed.insert(k, e);
+                }
+                None => {}
+            }
+        }
+        let mut open_errs = Vec::new();
+        self.remote.opening.retain(|t| match t.take() {
+            None => true,
+            Some(Ok(())) => false,
+            Some(Err(e)) => {
+                open_errs.push(e);
+                false
+            }
+        });
+        for e in open_errs {
+            cx.toasts
+                .error(trf("não consegui abrir o arquivo: {}", &[&e]));
+        }
     }
 
-    fn send(&mut self, cx: &Cx) {
+    fn send(&mut self, cx: &mut Cx) {
         let Some(id) = self.selected else { return };
         let text = self.input.trim().to_string();
         if (text.is_empty() && self.pending_files.is_empty()) || self.send_task.is_some() {
             return;
         }
+        let local = cx.snap.server_is_local;
+        if !local {
+            // Remoto: os bytes sobem pela API; recusa antes de mexer no estado.
+            let too_big = self.pending_files.iter().find(|p| {
+                std::fs::metadata(p)
+                    .map(|m| m.len() > UPLOAD_MAX_BYTES)
+                    .unwrap_or(false)
+            });
+            if let Some(p) = too_big {
+                let name = p.file_name().and_then(|n| n.to_str()).unwrap_or("arquivo");
+                cx.toasts.error(trf(
+                    "{} passa de 64 MiB; esse é o limite de envio para o servidor.",
+                    &[&name],
+                ));
+                return;
+            }
+        }
         self.input.clear();
-        let attachments: Vec<String> = self
-            .pending_files
-            .drain(..)
-            .map(|p| p.display().to_string())
-            .collect();
+        let files: Vec<std::path::PathBuf> = std::mem::take(&mut self.pending_files);
         let sid = id.to_string();
-        self.send_task = Some(
+        self.send_task = Some(if local {
+            // Loopback: o servidor lê os arquivos do mesmo disco.
+            let attachments: Vec<String> = files.iter().map(|p| p.display().to_string()).collect();
             cx.svc
-                .call(move |c| async move { c.send_message(&sid, &text, attachments).await }),
-        );
+                .call(move |c| async move { c.send_message(&sid, &text, attachments).await })
+        } else {
+            let no_path = tr("o servidor não devolveu o caminho do anexo").to_string();
+            cx.svc.call(move |c| async move {
+                let mut paths = Vec::with_capacity(files.len());
+                for p in files {
+                    let name = p
+                        .file_name()
+                        .and_then(|n| n.to_str())
+                        .unwrap_or("arquivo")
+                        .to_string();
+                    let bytes = tokio::fs::read(&p)
+                        .await
+                        .map_err(|e| format!("{}: {e}", p.display()))?;
+                    let v = c.upload(&name, bytes).await?;
+                    let path = v
+                        .get("path")
+                        .and_then(|x| x.as_str())
+                        .filter(|s| !s.is_empty())
+                        .ok_or_else(|| no_path.clone())?;
+                    paths.push(path.to_string());
+                }
+                c.send_message(&sid, &text, paths).await
+            })
+        });
         self.focus_input = true;
     }
 
@@ -636,9 +730,14 @@ impl ThreadsPage {
         let has_live = live.is_some();
         let dark = ui.visuals().dark_mode;
         let pal = ui::palette(dark);
-        // Anexos são caminhos do servidor: abrir/miniatura só em loopback.
-        let local = cx.snap.server_is_local;
-        let toasts = &mut *cx.toasts;
+        // Anexos são caminhos do servidor: em loopback a UI lê o disco; remoto,
+        // miniaturas e "abrir" passam por `GET /api/files`.
+        let mut acx = AttachCx {
+            toasts: &mut *cx.toasts,
+            svc: cx.svc,
+            remote: &mut self.remote,
+            local: cx.snap.server_is_local,
+        };
         egui::ScrollArea::vertical()
             .id_salt(("chat", t.id))
             .auto_shrink([false, false])
@@ -674,7 +773,7 @@ impl ThreadsPage {
                             };
                             let started = turn_dt(t, "started_at");
                             ui.push_id(ui::s(t, "id"), |ui| {
-                                user_bubble(ui, pal, toasts, t, started.as_ref(), pos, local);
+                                user_bubble(ui, pal, &mut acx, t, started.as_ref(), pos);
                             });
                         }
                         let text = ui::s(turn, "text");
@@ -687,7 +786,7 @@ impl ThreadsPage {
                             };
                             error_card(ui, pal, &msg);
                         } else if !text.is_empty() {
-                            assistant_card(ui, pal, &mut self.md_cache, toasts, &text, turn);
+                            assistant_card(ui, pal, &mut self.md_cache, acx.toasts, &text, turn);
                         } else if turn.get("finished_at").map(|f| f.is_null()).unwrap_or(true)
                             && !has_live
                         {
@@ -935,14 +1034,23 @@ enum GroupPos {
     Last,
 }
 
+/// O que um balão precisa para mostrar e abrir anexos: toasts, cliente da API,
+/// cache dos anexos remotos e se o servidor é esta máquina.
+struct AttachCx<'a> {
+    toasts: &'a mut ui::Toasts,
+    svc: &'a Arc<Service>,
+    remote: &'a mut RemoteFiles,
+    /// O servidor é esta máquina: os caminhos existem aqui (`file://`, abrir direto).
+    local: bool,
+}
+
 fn user_bubble(
     ui: &mut egui::Ui,
     pal: &ui::Palette,
-    toasts: &mut ui::Toasts,
+    acx: &mut AttachCx<'_>,
     turn: &Value,
     started: Option<&chrono::DateTime<chrono::Utc>>,
     pos: GroupPos,
-    local: bool,
 ) {
     // `prompt_display` vem sem a nota de anexo que o canal acrescenta para o
     // cérebro; os anexos chegam estruturados em `attachments`.
@@ -991,7 +1099,7 @@ fn user_bubble(
                         );
                     }
                     for a in &atts {
-                        attachment_view(ui, pal, toasts, a, local);
+                        attachment_view(ui, pal, acx, a);
                     }
                     ui.add_space(2.0);
                     // rodapé: uma linha, discreto (copiar + tempo relativo).
@@ -1007,7 +1115,7 @@ fn user_bubble(
                         };
                         if copy_button(ui, pal, &hover) {
                             ui.ctx().copy_text(raw.to_string());
-                            toasts.success(tr("Mensagem copiada."));
+                            acx.toasts.success(tr("Mensagem copiada."));
                         }
                         if last {
                             when_label(ui, pal, started);
@@ -1036,19 +1144,31 @@ fn fmt_size(bytes: u64) -> String {
 
 /// Anexo dentro do balão do usuário: miniatura clicável para imagens, chip com
 /// nome e tamanho para os demais. O clique abre o arquivo no app padrão.
-/// `local` = o servidor é esta máquina: só então o caminho existe aqui e dá
-/// para ler a miniatura ou abrir o arquivo (`docs/26`, etapa 2 traz a API).
+///
+/// Em loopback (`acx.local`) o caminho existe aqui: `file://` e abrir direto.
+/// Remoto, os bytes vêm de `GET /api/files` (`docs/26`): a miniatura é baixada
+/// uma vez por caminho e guardada em `acx.remote`; abrir baixa para uma pasta
+/// temporária do app e chama o app padrão.
 fn attachment_view(
     ui: &mut egui::Ui,
     pal: &ui::Palette,
-    toasts: &mut ui::Toasts,
+    acx: &mut AttachCx<'_>,
     a: &will_core::Attachment,
-    local: bool,
 ) {
+    let local = acx.local;
     let path = std::path::Path::new(&a.path);
-    // Remoto: não dá para conferir o disco do servidor; o chip fica clicável
-    // e o clique explica a limitação.
-    let exists = !local || path.is_file();
+    // Remoto: não dá para conferir o disco do servidor; só se sabe que o
+    // arquivo falta quando o download da miniatura falha.
+    let remote_err = if local {
+        None
+    } else {
+        acx.remote.failed.get(&a.path).cloned()
+    };
+    let exists = if local {
+        path.is_file()
+    } else {
+        remote_err.is_none()
+    };
     let size = fmt_size(a.size);
     let mut caption = a.name.clone();
     if !size.is_empty() {
@@ -1061,42 +1181,78 @@ fn attachment_view(
     }
     ui.add_space(4.0);
     const THUMB: egui::Vec2 = egui::vec2(320.0, 240.0);
+    // Fonte da miniatura: `Some(Some(img))` = há imagem para decodificar;
+    // `Some(None)` = ainda baixando do servidor; `None` = chip.
+    let source: Option<Option<egui::Image<'static>>> = if !a.is_image() || !exists {
+        None
+    } else if local {
+        Some(Some(egui::Image::new(format!("file://{}", a.path))))
+    } else if let Some(bytes) = acx.remote.cache.get(&a.path) {
+        Some(Some(egui::Image::from_bytes(
+            format!("bytes://{}", a.path),
+            bytes.clone(),
+        )))
+    } else if a.size > THUMB_MAX_BYTES {
+        None
+    } else {
+        if !acx.remote.loading.contains_key(&a.path) {
+            let p = a.path.clone();
+            acx.remote.loading.insert(
+                a.path.clone(),
+                acx.svc.call(move |c| async move { c.file_bytes(&p).await }),
+            );
+        }
+        Some(None)
+    };
     // Miniatura só quando a imagem já decodificou: o tamanho vem do arquivo
     // (não do espaço disponível, que varia dentro do balão) e é limitado a THUMB.
-    let thumb = (local && a.is_image() && exists)
-        .then(|| {
-            let img = egui::Image::new(format!("file://{}", a.path));
-            match img.load_for_size(ui.ctx(), THUMB) {
-                Ok(egui::load::TexturePoll::Ready { .. }) => Some(Some(img)),
-                Ok(egui::load::TexturePoll::Pending { .. }) => Some(None),
-                Err(_) => None,
-            }
-        })
-        .flatten();
+    let thumb = source.and_then(|s| match s {
+        None => Some(None),
+        Some(img) => match img.load_for_size(ui.ctx(), THUMB) {
+            Ok(egui::load::TexturePoll::Ready { .. }) => Some(Some(img)),
+            Ok(egui::load::TexturePoll::Pending { .. }) => Some(None),
+            Err(_) => None,
+        },
+    });
     let clicked = if let Some(img) = thumb {
-        let r = match img {
-            Some(img) => ui
-                .add(
-                    img.fit_to_original_size(1.0)
-                        .max_size(THUMB)
-                        .corner_radius(8.0)
-                        .sense(egui::Sense::click()),
-                )
-                .on_hover_text(format!("{caption}\n{}", tr("clique para abrir"))),
+        match img {
+            Some(img) => {
+                let r = ui
+                    .add(
+                        img.fit_to_original_size(1.0)
+                            .max_size(THUMB)
+                            .corner_radius(8.0)
+                            .sense(egui::Sense::click()),
+                    )
+                    .on_hover_text(format!("{caption}\n{}", tr("clique para abrir")));
+                ui.label(
+                    egui::RichText::new(&caption)
+                        .size(11.0)
+                        .color(pal.text_weak),
+                );
+                r.clicked()
+            }
             None => {
+                // Chip com spinner enquanto a imagem baixa/decodifica.
                 ui.ctx()
                     .request_repaint_after(std::time::Duration::from_millis(100));
-                ui.add(egui::Spinner::new().size(18.0))
+                ui.horizontal(|ui| {
+                    ui.add(egui::Spinner::new().size(14.0));
+                    ui.label(
+                        egui::RichText::new(&caption)
+                            .size(11.0)
+                            .color(pal.text_weak),
+                    );
+                });
+                false
             }
-        };
-        ui.label(
-            egui::RichText::new(&caption)
-                .size(11.0)
-                .color(pal.text_weak),
-        );
-        r.clicked()
+        }
     } else {
         let label = format!("{} {caption}", tr("anexo:"));
+        let hover = match &remote_err {
+            Some(e) => format!("{}\n{e}", a.path),
+            None => a.path.clone(),
+        };
         ui.add_enabled(
             exists,
             egui::Button::new(egui::RichText::new(label).size(12.0).color(pal.text))
@@ -1104,14 +1260,42 @@ fn attachment_view(
                 .stroke(egui::Stroke::new(1.0, pal.border))
                 .corner_radius(8.0),
         )
-        .on_hover_text(&a.path)
+        .on_hover_text(hover)
         .clicked()
     };
     if clicked {
-        if !local {
-            toasts.info(tr("disponível só quando o servidor é esta máquina"));
-        } else if let Err(e) = will_platform::open_path(path) {
-            toasts.error(trf("não consegui abrir o arquivo: {}", &[&e]));
+        if local {
+            if let Err(e) = will_platform::open_path(path) {
+                acx.toasts
+                    .error(trf("não consegui abrir o arquivo: {}", &[&e]));
+            }
+        } else {
+            // Baixa (ou reusa os bytes da miniatura), grava em
+            // <temp>/will-ia-app/<nome> e abre no app padrão.
+            let p = a.path.clone();
+            let name = std::path::Path::new(&a.name)
+                .file_name()
+                .and_then(|n| n.to_str())
+                .filter(|n| !n.is_empty())
+                .unwrap_or("anexo")
+                .to_string();
+            let cached = acx.remote.cache.get(&a.path).cloned();
+            acx.toasts.info(tr("Baixando o anexo…"));
+            acx.remote.opening.push(acx.svc.call(move |c| async move {
+                let bytes = match cached {
+                    Some(b) => b.to_vec(),
+                    None => c.file_bytes(&p).await?.1,
+                };
+                let dir = std::env::temp_dir().join("will-ia-app");
+                tokio::fs::create_dir_all(&dir)
+                    .await
+                    .map_err(|e| e.to_string())?;
+                let dest = dir.join(&name);
+                tokio::fs::write(&dest, bytes)
+                    .await
+                    .map_err(|e| e.to_string())?;
+                will_platform::open_path(&dest)
+            }));
         }
     }
 }

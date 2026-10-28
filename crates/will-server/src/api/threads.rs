@@ -124,6 +124,7 @@ fn sanitize_filename(name: &str) -> String {
 }
 
 /// Copia um arquivo escolhido na UI para `<kb>/inbox/ui/` e descreve o anexo.
+/// Arquivos que já estão em `<kb>/inbox/` (uploads do app) não são copiados.
 async fn stage_attachment(
     kb: &std::path::Path,
     src: &str,
@@ -141,6 +142,22 @@ async fn stage_attachment(
         .unwrap_or("arquivo")
         .to_string();
     let dir = kb.join("inbox").join("ui");
+    // Já está no inbox da KB (ex.: veio por `POST /api/uploads`): usa como está.
+    if let (Ok(canon), Ok(inbox)) = (
+        tokio::fs::canonicalize(src_path).await,
+        tokio::fs::canonicalize(kb.join("inbox")).await,
+    ) {
+        if canon.starts_with(&inbox) {
+            return Ok(will_core::Attachment {
+                mime: mime_guess::from_path(&canon)
+                    .first_or_octet_stream()
+                    .to_string(),
+                name,
+                path: canon.to_string_lossy().to_string(),
+                size: meta.len(),
+            });
+        }
+    }
     tokio::fs::create_dir_all(&dir)
         .await
         .map_err(|e| format!("criar pasta de anexos: {e}"))?;

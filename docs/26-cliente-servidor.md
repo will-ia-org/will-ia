@@ -1,6 +1,6 @@
 # 26 — Separação cliente/servidor (fase 5)
 
-**Status:** planejado em 2026-10-28, decisões fechadas com o usuário (ADR-0019). Nada implementado ainda; este documento é o mapa da fase.
+**Status:** decisões fechadas com o usuário em 2026-10-28 (ADR-0019). Etapa 1 concluída (crate `will-client`, UI como cliente HTTP/WS em loopback, ainda um binário); etapa 2 (uploads/arquivos/navegação) em andamento. Este documento é o mapa da fase.
 
 ## Objetivo
 
