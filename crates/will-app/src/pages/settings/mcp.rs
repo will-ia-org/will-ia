@@ -182,17 +182,17 @@ impl McpPage {
                         ui::mono(ui, &format!("••••••••••••{masked}"));
                     }
                     if ui
-                        .small_button(if self.reveal_token { tr("Ocultar") } else { tr("Mostrar") })
+                        .button(if self.reveal_token { tr("Ocultar") } else { tr("Mostrar") })
                         .clicked()
                     {
                         self.reveal_token = !self.reveal_token;
                     }
-                    if ui.small_button(tr("Copiar")).clicked() {
+                    if ui.button(tr("Copiar")).clicked() {
                         ui.ctx().copy_text(token.clone());
                         cx.toasts.success(tr("Token copiado."));
                     }
                     if ui
-                        .small_button(tr("Copiar como export"))
+                        .button(tr("Copiar como export"))
                         .on_hover_text(tr("WILL_IA_MCP_URL e WILL_IA_MCP_TOKEN prontos para colar num shell"))
                         .clicked()
                     {
@@ -203,7 +203,7 @@ impl McpPage {
                     }
                     let busy = self.rotate_task.is_some();
                     if ui
-                        .add_enabled(!busy, egui::Button::new(tr("Regenerar")).small())
+                        .add_enabled(!busy, egui::Button::new(tr("Regenerar")))
                         .clicked()
                     {
                         self.confirm_rotate = Some(ui::Confirm {

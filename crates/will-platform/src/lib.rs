@@ -54,12 +54,96 @@ pub fn open_url(url: &str) -> Result<(), String> {
 }
 
 /// Procura um executável no PATH (com extensões do Windows).
+/// Pastas onde ferramentas de desenvolvedor costumam morar e que ficam fora do
+/// `PATH` de um app aberto pelo Finder/launchd (macOS), pelo autostart ou por
+/// um serviço: Homebrew, MacPorts, nvm/volta/fnm, npm global, pyenv/asdf,
+/// cargo, instalação nativa do Claude Code, npm global do Windows.
+pub fn tool_dirs() -> Vec<PathBuf> {
+    let mut dirs: Vec<PathBuf> = vec![];
+    let home = std::env::var_os("HOME")
+        .or_else(|| std::env::var_os("USERPROFILE"))
+        .map(PathBuf::from);
+    if let Some(h) = &home {
+        // nvm: versões mais novas primeiro
+        if let Ok(rd) = std::fs::read_dir(h.join(".nvm/versions/node")) {
+            let mut v: Vec<PathBuf> = rd.flatten().map(|e| e.path().join("bin")).collect();
+            v.sort();
+            v.reverse();
+            dirs.extend(v);
+        }
+        for rel in [
+            ".volta/bin",
+            ".local/share/fnm/aliases/default/bin",
+            ".fnm/aliases/default/bin",
+            ".npm-global/bin",
+            ".npm/bin",
+            ".local/bin",
+            ".cargo/bin",
+            ".pyenv/shims",
+            ".asdf/shims",
+            ".claude/local",
+            ".bun/bin",
+            ".deno/bin",
+        ] {
+            dirs.push(h.join(rel));
+        }
+    }
+    #[cfg(target_os = "macos")]
+    {
+        dirs.push(PathBuf::from("/opt/homebrew/bin"));
+        dirs.push(PathBuf::from("/opt/homebrew/opt/node/bin"));
+        dirs.push(PathBuf::from("/opt/local/bin"));
+        dirs.push(PathBuf::from(
+            "/Library/Frameworks/Python.framework/Versions/Current/bin",
+        ));
+    }
+    #[cfg(windows)]
+    {
+        if let Some(a) = std::env::var_os("APPDATA") {
+            dirs.push(PathBuf::from(a).join("npm"));
+        }
+        if let Some(p) = std::env::var_os("ProgramFiles") {
+            dirs.push(PathBuf::from(&p).join("nodejs"));
+            dirs.push(PathBuf::from(&p).join("Git").join("cmd"));
+        }
+        if let Some(l) = std::env::var_os("LOCALAPPDATA") {
+            let l = PathBuf::from(l);
+            dirs.push(l.join("Programs").join("Python").join("Launcher"));
+            if let Ok(rd) = std::fs::read_dir(l.join("Programs").join("Python")) {
+                for e in rd.flatten() {
+                    dirs.push(e.path());
+                }
+            }
+        }
+    }
+    dirs.push(PathBuf::from("/usr/local/bin"));
+    dirs.push(PathBuf::from("/snap/bin"));
+    dirs.retain(|d| d.is_dir());
+    dirs
+}
+
+/// `PATH` do processo + [`tool_dirs`] (sem duplicatas), para processos filhos
+/// (`claude`, `node`, `npm`) acharem as ferramentas mesmo quando o serviço foi
+/// aberto com `PATH` mínimo.
+pub fn augmented_path() -> std::ffi::OsString {
+    let mut parts: Vec<PathBuf> = std::env::var_os("PATH")
+        .map(|p| std::env::split_paths(&p).collect())
+        .unwrap_or_default();
+    for d in tool_dirs() {
+        if !parts.iter().any(|p| p == &d) {
+            parts.push(d);
+        }
+    }
+    std::env::join_paths(parts).unwrap_or_else(|_| std::env::var_os("PATH").unwrap_or_default())
+}
+
+/// Procura um executável no `PATH` e, depois, nas pastas de [`tool_dirs`]
+/// (Homebrew, nvm, npm global…). Aceita caminho absoluto.
 pub fn which(bin: &str) -> Option<PathBuf> {
     let p = Path::new(bin);
     if p.components().count() > 1 {
         return p.exists().then(|| p.to_path_buf());
     }
-    let path = std::env::var_os("PATH")?;
     let exts: Vec<String> = if cfg!(windows) {
         std::env::var("PATHEXT")
             .unwrap_or(".EXE;.CMD;.BAT".into())
@@ -69,7 +153,11 @@ pub fn which(bin: &str) -> Option<PathBuf> {
     } else {
         vec![String::new()]
     };
-    for dir in std::env::split_paths(&path) {
+    let mut dirs: Vec<PathBuf> = std::env::var_os("PATH")
+        .map(|p| std::env::split_paths(&p).collect())
+        .unwrap_or_default();
+    dirs.extend(tool_dirs());
+    for dir in dirs {
         for ext in &exts {
             let cand = dir.join(format!("{bin}{ext}"));
             if cand.is_file() {
@@ -121,4 +209,39 @@ pub fn is_dangerous_kb(path: &Path) -> bool {
         }
     }
     false
+}
+
+#[cfg(test)]
+mod which_tests {
+    use super::*;
+
+    /// Simula o macOS: `PATH` mínimo e o Node instalado via nvm no HOME.
+    #[test]
+    #[cfg(unix)]
+    fn finds_tools_outside_path_via_tool_dirs() {
+        use std::os::unix::fs::PermissionsExt;
+        let home = std::env::temp_dir().join(format!("will-ia-which-{}", std::process::id()));
+        let bin = home.join(".nvm/versions/node/v24.0.0/bin");
+        std::fs::create_dir_all(&bin).unwrap();
+        let exe = bin.join("node-fake-xyz");
+        std::fs::write(&exe, "#!/bin/sh\necho v24\n").unwrap();
+        std::fs::set_permissions(&exe, std::fs::Permissions::from_mode(0o755)).unwrap();
+        let old_home = std::env::var_os("HOME");
+        let old_path = std::env::var_os("PATH");
+        std::env::set_var("HOME", &home);
+        std::env::set_var("PATH", "/usr/bin:/bin");
+        let found = which("node-fake-xyz");
+        let aug = augmented_path();
+        if let Some(h) = old_home {
+            std::env::set_var("HOME", h);
+        }
+        if let Some(p) = old_path {
+            std::env::set_var("PATH", p);
+        }
+        let _ = std::fs::remove_dir_all(&home);
+        assert_eq!(found, Some(exe));
+        assert!(aug
+            .to_string_lossy()
+            .contains(".nvm/versions/node/v24.0.0/bin"));
+    }
 }

@@ -1141,10 +1141,7 @@ impl BrowserPage {
                 );
                 ui::text_context_menu(&r);
                 if !self.traffic_filter.is_empty()
-                    && ui
-                        .small_button("×")
-                        .on_hover_text(tr("limpar filtro"))
-                        .clicked()
+                    && ui.button("×").on_hover_text(tr("limpar filtro")).clicked()
                 {
                     self.traffic_filter.clear();
                 }

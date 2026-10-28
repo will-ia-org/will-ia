@@ -364,10 +364,7 @@ impl LogsPage {
             );
             ui::text_context_menu(&resp);
             if !self.filter.is_empty()
-                && ui
-                    .small_button("×")
-                    .on_hover_text(tr("limpar filtro"))
-                    .clicked()
+                && ui.button("×").on_hover_text(tr("limpar filtro")).clicked()
             {
                 self.filter.clear();
             }

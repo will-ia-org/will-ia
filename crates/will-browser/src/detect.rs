@@ -98,56 +98,10 @@ pub fn detect_browsers(agent_browser_chrome: Option<&str>) -> Vec<BrowserCandida
     out
 }
 
-/// Diretórios extras onde ferramentas do Node costumam morar quando o app é
-/// iniciado fora do shell do usuário (nvm, volta, fnm, homebrew, npm global).
-fn node_dirs() -> Vec<PathBuf> {
-    let mut dirs = vec![];
-    if let Some(home) = std::env::var_os("HOME").or_else(|| std::env::var_os("USERPROFILE")) {
-        let home = PathBuf::from(home);
-        if let Ok(rd) = std::fs::read_dir(home.join(".nvm/versions/node")) {
-            let mut versions: Vec<PathBuf> = rd.flatten().map(|e| e.path().join("bin")).collect();
-            versions.sort();
-            versions.reverse(); // mais nova primeiro
-            dirs.extend(versions);
-        }
-        dirs.push(home.join(".volta/bin"));
-        dirs.push(home.join(".local/share/fnm/aliases/default/bin"));
-        dirs.push(home.join(".npm-global/bin"));
-        dirs.push(home.join(".local/bin"));
-    }
-    #[cfg(windows)]
-    {
-        if let Some(a) = std::env::var_os("APPDATA") {
-            dirs.push(PathBuf::from(a).join("npm"));
-        }
-        if let Some(p) = std::env::var_os("ProgramFiles") {
-            dirs.push(PathBuf::from(p).join("nodejs"));
-        }
-    }
-    dirs.push(PathBuf::from("/usr/local/bin"));
-    dirs.push(PathBuf::from("/opt/homebrew/bin"));
-    dirs
-}
-
-/// Procura `name` no PATH e nos diretórios do Node. No Windows tenta `.cmd`/`.exe`.
+/// Procura `name` no PATH e nas pastas de ferramentas conhecidas
+/// (`will_platform::tool_dirs`: nvm, volta, fnm, Homebrew, npm global do Windows…).
 pub fn find_node_tool(name: &str) -> Option<PathBuf> {
-    if let Some(p) = will_platform::which(name) {
-        return Some(p);
-    }
-    let exts: &[&str] = if cfg!(windows) {
-        &[".cmd", ".exe", ""]
-    } else {
-        &[""]
-    };
-    for d in node_dirs() {
-        for ext in exts {
-            let p = d.join(format!("{name}{ext}"));
-            if p.is_file() {
-                return Some(p);
-            }
-        }
-    }
-    None
+    will_platform::which(name)
 }
 
 /// PATH para processos filhos do Node: diretório da ferramenta na frente,
@@ -157,8 +111,6 @@ pub fn path_with(tool: &Path) -> std::ffi::OsString {
     if let Some(d) = tool.parent() {
         parts.push(d.to_path_buf());
     }
-    if let Some(p) = std::env::var_os("PATH") {
-        parts.extend(std::env::split_paths(&p));
-    }
+    parts.extend(std::env::split_paths(&will_platform::augmented_path()));
     std::env::join_paths(parts).unwrap_or_else(|_| std::env::var_os("PATH").unwrap_or_default())
 }

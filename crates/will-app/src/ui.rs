@@ -917,7 +917,7 @@ fn help_modal(ctx: &egui::Context, help: &Help) -> bool {
         ui.horizontal(|ui| {
             ui.label(RichText::new(tr(help.title)).font(semibold(18.0)));
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                if ui.small_button("✕").on_hover_text(tr("Fechar")).clicked() {
+                if ui.button("✕").on_hover_text(tr("Fechar")).clicked() {
                     close = true;
                 }
             });
@@ -957,7 +957,7 @@ fn help_modal(ctx: &egui::Context, help: &Help) -> bool {
                 if !help.code.is_empty() {
                     ui.horizontal(|ui| {
                         ui.label(RichText::new(tr("No terminal")).font(semibold(13.0)));
-                        if ui.small_button(tr("Copiar")).clicked() {
+                        if ui.button(tr("Copiar")).clicked() {
                             ui.ctx().copy_text(help.code.to_string());
                         }
                     });
@@ -982,7 +982,7 @@ fn help_modal(ctx: &egui::Context, help: &Help) -> bool {
                     for (label, url) in help.links {
                         ui.horizontal_wrapped(|ui| {
                             ui.hyperlink_to(tr(label), *url).on_hover_text(*url);
-                            if ui.small_button(tr("copiar")).clicked() {
+                            if ui.button(tr("copiar")).clicked() {
                                 ui.ctx().copy_text(url.to_string());
                             }
                         });

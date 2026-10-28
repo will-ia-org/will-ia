@@ -745,7 +745,7 @@ impl SchedulesPage {
                         ui::wrapped_text(ui, &shown);
                         if long {
                             let label = if expanded { tr("menos") } else { tr("mais…") };
-                            if ui.small_button(label).clicked() {
+                            if ui.button(label).clicked() {
                                 if expanded {
                                     self.expanded.remove(&id);
                                 } else {

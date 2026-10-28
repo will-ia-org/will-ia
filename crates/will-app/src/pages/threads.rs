@@ -493,10 +493,10 @@ impl ThreadsPage {
                 ui.set_min_height(avail_h);
                 ui.horizontal(|ui| {
                     ui.label(egui::RichText::new(tr("Threads")).font(ui::semibold(16.0)));
-                    if ui.add_enabled(self.create_task.is_none(), egui::Button::new(tr("+ Nova")).small()).clicked() {
+                    if ui.add_enabled(self.create_task.is_none(), egui::Button::new(tr("+ Nova"))).clicked() {
                         self.create_task = Some(cx.svc.call(|c| async move { c.create_thread(None).await }));
                     }
-                    if ui.add(egui::Button::new("↺").small()).on_hover_text(tr("Atualizar")).clicked() {
+                    if ui.add(egui::Button::new("↺")).on_hover_text(tr("Atualizar")).clicked() {
                         self.list.loaded_at = None;
                     }
                 });
@@ -669,7 +669,7 @@ impl ThreadsPage {
                     self.action(cx, t.id, "Reiniciar");
                 }
                 if ui
-                    .add_enabled(t.pending > 0, egui::Button::new(tr("interromper")).small())
+                    .add_enabled(t.pending > 0, egui::Button::new(tr("interromper")))
                     .clicked()
                 {
                     self.action(cx, t.id, "Interromper");

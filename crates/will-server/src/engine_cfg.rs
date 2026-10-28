@@ -16,6 +16,14 @@ pub fn build(
 ) -> EngineConfig {
     let e = &settings.engine;
     let mut env = will_engine::config::minimal_env();
+    // `claude` (script Node) e `node` precisam ser achados mesmo quando o
+    // serviço subiu com PATH mínimo (Finder/launchd, autostart, systemd).
+    env.insert(
+        "PATH".into(),
+        will_platform::augmented_path()
+            .to_string_lossy()
+            .to_string(),
+    );
     if let Some(t) = token {
         env.insert(
             "CLAUDE_CODE_OAUTH_TOKEN".into(),

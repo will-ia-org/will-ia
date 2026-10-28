@@ -87,7 +87,6 @@ impl SettingsSection {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum Nav {
-    Connect,
     Dashboard,
     Threads,
     Schedules,
@@ -103,10 +102,10 @@ pub enum Nav {
 impl Nav {
     /// `dashboard`, `threads`, `schedules`, `browser`, `approvals`, `logs`, `costs`,
     /// `users`, `general`, `engine`, `kb`, `voice`, `telegram`, `mcp`, `external`, `whatsapp`,
-    /// `google`, `scheduler`, `browser-settings`, `network`.
+    /// `google`, `scheduler`, `browser-settings`, `network`. A tela de entrada
+    /// (`connect`) não é uma página: aparece sozinha quando não há conexão.
     pub fn parse(s: &str) -> Option<Nav> {
         Some(match s {
-            "connect" => Nav::Connect,
             "dashboard" => Nav::Dashboard,
             "threads" => Nav::Threads,
             "schedules" => Nav::Schedules,
@@ -175,6 +174,8 @@ pub struct Cx<'a> {
 
 #[derive(Default)]
 pub struct Pages {
+    /// Tela de entrada (perfis/login); desenhada pelo app no lugar das páginas
+    /// quando não há conexão, e dona do modal de troca obrigatória de senha.
     pub connect: connect::ConnectPage,
     pub dashboard: dashboard::DashboardPage,
     pub threads: threads::ThreadsPage,
@@ -201,7 +202,6 @@ impl Pages {
 
     pub fn ui(&mut self, ui: &mut egui::Ui, nav: Nav, cx: &mut Cx) {
         match nav {
-            Nav::Connect => self.connect.ui(ui, cx),
             Nav::Dashboard => self.dashboard.ui(ui, cx),
             Nav::Threads => self.threads.ui(ui, cx),
             Nav::Schedules => self.schedules.ui(ui, cx),

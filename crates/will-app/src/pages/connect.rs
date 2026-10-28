@@ -1,11 +1,17 @@
-//! Página Conexão: a que servidor o app está ligado, quem está logado nele e
-//! os perfis salvos. Aparece sozinha quando não há servidor alcançável.
+//! Tela de entrada: aparece em tela cheia (sem menu lateral) sempre que o app
+//! não tem conexão com um servidor: sem perfil, perfil escolhido mas servidor
+//! fora do ar (com cartão "tentando reconectar"), ou depois de sair do perfil.
+//! Duas abas: **Perfis** (salvos + "Esta máquina") e **Novo perfil** (o
+//! formulário de login/perfil). Quando o WS de eventos conecta, o app sai
+//! desta tela sozinho.
 //!
 //! Login (`docs/26`, etapa 4): usuário + senha → `POST /api/auth/login` devolve
 //! um token de sessão, que fica no perfil (`profiles.json`) junto do nome da
 //! conta. O campo Token continua existindo para quem usa o token local da API
 //! (`will-ia info`). A troca obrigatória de senha do primeiro acesso é um modal
-//! desta página; o app navega para cá quando `principal.must_change_password`.
+//! desta página, mostrado pelo app sobre qualquer página ([`ConnectPage::password_gate`])
+//! enquanto `principal.must_change_password`. Sair do perfil fica no rodapé do
+//! menu lateral (app).
 //!
 //! TLS (`docs/26`, etapa 5): para `https://` o perfil guarda o certificado do
 //! servidor em PEM (`ca_pem`), fixado no estilo TOFU: "Buscar do servidor" lê a
@@ -17,7 +23,7 @@ use super::Cx;
 use crate::i18n::{tr, trf};
 use crate::profiles::{self, Profile, ProfilesFile};
 use crate::service::{Task, UiCommand};
-use crate::ui::{self, Tone};
+use crate::ui::{self, Confirm, Tone};
 use serde_json::{json, Value};
 use will_client::{pem_fingerprint, Client, TlsOptions};
 use will_core::Role;
@@ -26,10 +32,24 @@ use will_core::Role;
 const CLIENT_NAME: &str = "will-ia-app";
 /// Tamanho mínimo exigido na troca de senha (o servidor pode exigir mais).
 const MIN_PASSWORD_LEN: usize = 8;
+/// Largura do painel central da tela de entrada.
+const LANDING_WIDTH: f32 = 720.0;
+
+/// Abas da tela de entrada.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum LandingTab {
+    #[default]
+    Profiles,
+    /// Novo perfil / Entrar (o formulário).
+    Form,
+}
 
 pub struct ConnectPage {
     file: ProfilesFile,
     local: Option<Profile>,
+    pub tab: LandingTab,
+    /// Perfil aguardando confirmação de remoção (modal).
+    remove_pending: Option<Profile>,
     // formulário de perfil
     edit_id: Option<String>,
     name: String,
@@ -42,7 +62,6 @@ pub struct ConnectPage {
     /// Aceitar qualquer certificado (inseguro).
     insecure: bool,
     login_task: Option<Task<Value>>,
-    logout_task: Option<Task<Value>>,
     /// `GET /api/health` do servidor do formulário (Buscar do servidor).
     health_task: Option<Task<Value>>,
     fetched: Option<FetchedHealth>,
@@ -62,6 +81,8 @@ impl Default for ConnectPage {
         Self {
             file: profiles::load(),
             local: profiles::local_profile(),
+            tab: LandingTab::Profiles,
+            remove_pending: None,
             edit_id: None,
             name: String::new(),
             url: "http://".into(),
@@ -71,7 +92,6 @@ impl Default for ConnectPage {
             ca_pem: String::new(),
             insecure: false,
             login_task: None,
-            logout_task: None,
             health_task: None,
             fetched: None,
             pw_new: String::new(),
@@ -123,6 +143,13 @@ impl ConnectPage {
         self.ca_pem.clear();
         self.insecure = false;
         self.fetched = None;
+    }
+
+    /// Abre a aba do formulário já preenchida com o perfil (Entrar/Editar), ou
+    /// com um perfil sem token vindo do arranque.
+    pub fn open_login(&mut self, p: &Profile) {
+        self.load_form(p);
+        self.tab = LandingTab::Form;
     }
 
     fn load_form(&mut self, p: &Profile) {
@@ -290,28 +317,26 @@ impl ConnectPage {
             return;
         }
         self.clear_form();
+        self.tab = LandingTab::Profiles;
         profiles::remember_last(&p.id);
         cx.toasts.success(trf("Conectado como {}.", &[&username]));
         cx.svc.send_cmd(UiCommand::Connect(p));
     }
 
-    /// Sessão encerrada (ou falhou ao encerrar): esquece o token localmente e
-    /// reconecta sem ele, o que leva de volta a esta página.
-    fn finish_logout(&mut self, cx: &mut Cx, current: &Profile) {
-        let mut p = current.clone();
-        p.token.clear();
-        if let Some(saved) = self.file.profiles.iter_mut().find(|x| x.id == p.id) {
-            saved.token.clear();
-            if let Err(e) = profiles::save(&self.file) {
-                cx.toasts.error(e);
-            }
+    /// Conectar num perfil escolhido na lista.
+    fn connect_to(&mut self, cx: &mut Cx, p: Profile) {
+        if p.is_https() && !p.insecure && p.ca_pem.is_none() {
+            cx.toasts.info(tr(
+                "https:// sem certificado fixado: a conexão só funciona se o sistema confiar no certificado do servidor. Cole o PEM em \"TLS (https)\" ou marque o modo inseguro.",
+            ));
         }
-        self.load_form(&p);
-        cx.toasts.info(tr("Sessão encerrada."));
+        self.last_error = None;
+        self.tab = LandingTab::Profiles;
+        profiles::remember_last(&p.id);
         cx.svc.send_cmd(UiCommand::Connect(p));
     }
 
-    fn poll(&mut self, cx: &mut Cx, current: &Profile) {
+    fn poll(&mut self, cx: &mut Cx) {
         if let Some(t) = &self.login_task {
             if let Some(r) = t.take() {
                 self.login_task = None;
@@ -340,16 +365,10 @@ impl ConnectPage {
                 }
             }
         }
-        if let Some(t) = &self.logout_task {
-            if let Some(r) = t.take() {
-                self.logout_task = None;
-                if let Err(e) = r {
-                    cx.toasts
-                        .error(trf("O servidor não encerrou a sessão: {}", &[&e]));
-                }
-                self.finish_logout(cx, current);
-            }
-        }
+        self.poll_password(cx);
+    }
+
+    fn poll_password(&mut self, cx: &mut Cx) {
         if let Some(t) = &self.pw_task {
             if let Some(r) = t.take() {
                 self.pw_task = None;
@@ -364,6 +383,21 @@ impl ConnectPage {
                     Err(e) => cx.toasts.error(trf("Não alterou a senha: {}", &[&e])),
                 }
             }
+        }
+    }
+
+    /// Chamado pelo app a cada quadro enquanto conectado: mostra o modal de troca
+    /// obrigatória de senha sobre qualquer página, até o `principal` recarregar
+    /// sem `must_change_password`.
+    pub fn password_gate(&mut self, ctx: &egui::Context, cx: &mut Cx) {
+        self.poll_password(cx);
+        let must_change = cx
+            .snap
+            .principal
+            .as_ref()
+            .is_some_and(|p| p.must_change_password);
+        if must_change && !self.pw_done && cx.snap.connected {
+            self.password_modal(ctx, cx);
         }
     }
 
@@ -549,98 +583,56 @@ impl ConnectPage {
         }
     }
 
-    pub fn ui(&mut self, ui: &mut egui::Ui, cx: &mut Cx) {
-        let current = cx.svc.profile();
-        self.poll(cx, &current);
-
-        ui::heading(
-            ui,
-            tr("Conexão"),
-            Some(tr(
-                "O app é um cliente: escolha o servidor will-ia ao qual conectar.",
-            )),
-        );
-        let principal = cx.snap.principal.clone();
+    /// Cartão "tentando reconectar": há perfil escolhido mas o servidor não
+    /// responde. Cancelar desiste (o perfil continua salvo).
+    fn reconnect_card(&mut self, ui: &mut egui::Ui, cx: &mut Cx, current: &Profile) {
         ui::section(ui, tr("Servidor atual"), |ui| {
             ui.horizontal(|ui| {
-                ui::dot(
-                    ui,
-                    if cx.snap.connected {
-                        Tone::Success
-                    } else {
-                        Tone::Warning
-                    },
-                );
-                ui.label(egui::RichText::new(&current.name).strong());
-                ui::mono(ui, &current.url);
-                ui.label(
-                    egui::RichText::new(if cx.snap.connected {
-                        tr("conectado")
-                    } else {
-                        tr("sem conexão")
-                    })
-                    .weak(),
-                );
+                ui.spinner();
+                ui.label(trf(
+                    "Tentando reconectar em {} ({})…",
+                    &[&current.name, &current.url],
+                ));
             });
-            if let Some(p) = &principal {
-                ui.add_space(4.0);
-                ui.horizontal(|ui| {
-                    let who = if p.user_id.is_none() {
-                        tr("Token local da API").to_string()
-                    } else {
-                        p.username.clone()
-                    };
-                    ui.label(trf("Conta: {}", &[&who]));
-                    ui::badge(
-                        ui,
-                        role_label(p.role),
-                        if p.is_admin() {
-                            Tone::Info
-                        } else {
-                            Tone::Neutral
-                        },
-                    );
-                    if p.must_change_password {
-                        ui::badge(ui, tr("troca de senha pendente"), Tone::Warning);
-                    }
-                    // Só sessões de conta podem sair; o token local não é uma sessão.
-                    if p.user_id.is_some() {
-                        let busy = self.logout_task.as_ref().is_some_and(|t| t.pending());
-                        if ui
-                            .add_enabled(!busy, egui::Button::new(tr("Sair da conta")))
-                            .on_hover_text(tr(
-                                "Encerra a sessão no servidor e apaga o token deste perfil.",
-                            ))
-                            .clicked()
-                        {
-                            self.logout_task =
-                                Some(cx.svc.call(|c| async move { c.logout().await }));
-                        }
-                    }
-                });
-            }
             if let Some(e) = &self.last_error {
+                ui.add_space(4.0);
                 ui::error_text(ui, e);
             }
+            ui.add_space(8.0);
+            if ui
+                .button(tr("Cancelar"))
+                .on_hover_text(tr("Desiste de reconectar; o perfil continua salvo."))
+                .clicked()
+            {
+                cx.svc.disconnect();
+                self.last_error = None;
+            }
         });
+    }
 
+    /// Aba Perfis: "Esta máquina" + perfis salvos, com Conectar/Entrar,
+    /// Editar e Remover.
+    fn profiles_tab(&mut self, ui: &mut egui::Ui, cx: &mut Cx, current: &Profile) {
+        let mut connect: Option<Profile> = None;
+        let mut edit: Option<Profile> = None;
+        let local = self.local.clone();
+        let saved = self.file.profiles.clone();
         ui::section(ui, tr("Perfis"), |ui| {
-            let mut connect: Option<Profile> = None;
-            let mut remove: Option<String> = None;
-            let mut edit: Option<Profile> = None;
-            let local = self.local.clone();
             match &local {
                 Some(p) => {
                     ui.horizontal(|ui| {
                         ui::dot(ui, Tone::Info);
-                        ui.label(egui::RichText::new(tr("Esta máquina")).strong());
-                        ui::mono(ui, &p.url);
-                        if ui
-                            .add_enabled(current.id != p.id, egui::Button::new(tr("Conectar")))
-                            .clicked()
-                        {
-                            connect = Some(p.clone());
-                        }
+                        ui.vertical(|ui| {
+                            ui.label(egui::RichText::new(tr("Esta máquina")).strong());
+                            ui::mono(ui, &p.url);
+                        });
+                        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                            ui.add_enabled_ui(current.id != p.id, |ui| {
+                                if ui::primary_button(ui, tr("Conectar")).clicked() {
+                                    connect = Some(p.clone());
+                                }
+                            });
+                        });
                     });
                 }
                 None => {
@@ -652,7 +644,15 @@ impl ConnectPage {
                     );
                 }
             }
-            for p in self.file.profiles.clone() {
+            if saved.is_empty() {
+                ui.add_space(6.0);
+                ui.label(
+                    egui::RichText::new(tr("Nenhum perfil salvo. Crie um na aba \"Novo perfil\"."))
+                        .weak(),
+                );
+            }
+            for p in &saved {
+                ui.separator();
                 ui.horizontal(|ui| {
                     ui::dot(
                         ui,
@@ -662,51 +662,56 @@ impl ConnectPage {
                             Tone::Neutral
                         },
                     );
-                    ui.label(egui::RichText::new(&p.name).strong());
-                    ui::mono(ui, &p.url);
-                    if let Some(u) = &p.username {
-                        ui.label(egui::RichText::new(u).weak().small());
-                    }
-                    if p.token.is_empty() {
-                        // Sem token (nunca entrou ou saiu da conta): abre o
-                        // formulário para digitar a senha.
-                        if ui.button(tr("Entrar")).clicked() {
+                    ui.vertical(|ui| {
+                        ui.label(egui::RichText::new(&p.name).strong());
+                        ui.horizontal_wrapped(|ui| {
+                            ui::mono(ui, &p.url);
+                            if let Some(u) = &p.username {
+                                ui.label(egui::RichText::new(u).weak().small());
+                            }
+                            if p.token.is_empty() {
+                                ui.label(
+                                    egui::RichText::new(tr("sem token: entre com usuário e senha"))
+                                        .weak()
+                                        .small(),
+                                );
+                            }
+                        });
+                    });
+                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                        if ui::danger_button(ui, tr("Remover")).clicked() {
+                            self.remove_pending = Some(p.clone());
+                        }
+                        if ui.button(tr("Editar")).clicked() {
                             edit = Some(p.clone());
                         }
-                    } else if ui
-                        .add_enabled(current.id != p.id, egui::Button::new(tr("Conectar")))
-                        .clicked()
-                    {
-                        connect = Some(p.clone());
-                    }
-                    if ui.small_button(tr("Editar")).clicked() {
-                        edit = Some(p.clone());
-                    }
-                    if ui.small_button(tr("Remover")).clicked() {
-                        remove = Some(p.id.clone());
-                    }
+                        if p.token.is_empty() {
+                            // Sem token (nunca entrou ou saiu do perfil): abre o
+                            // formulário para digitar a senha.
+                            if ui::primary_button(ui, tr("Entrar")).clicked() {
+                                edit = Some(p.clone());
+                            }
+                        } else {
+                            ui.add_enabled_ui(current.id != p.id, |ui| {
+                                if ui::primary_button(ui, tr("Conectar")).clicked() {
+                                    connect = Some(p.clone());
+                                }
+                            });
+                        }
+                    });
                 });
             }
-            if let Some(p) = edit {
-                self.load_form(&p);
-            }
-            if let Some(id) = remove {
-                self.file.profiles.retain(|x| x.id != id);
-                if let Err(e) = profiles::save(&self.file) {
-                    cx.toasts.error(e);
-                }
-            }
-            if let Some(p) = connect {
-                if p.is_https() && !p.insecure && p.ca_pem.is_none() {
-                    cx.toasts.info(tr(
-                        "https:// sem certificado fixado: a conexão só funciona se o sistema confiar no certificado do servidor. Cole o PEM em \"TLS (https)\" ou marque o modo inseguro.",
-                    ));
-                }
-                profiles::remember_last(&p.id);
-                cx.svc.send_cmd(UiCommand::Connect(p));
-            }
         });
+        if let Some(p) = edit {
+            self.open_login(&p);
+        }
+        if let Some(p) = connect {
+            self.connect_to(cx, p);
+        }
+    }
 
+    /// Aba Novo perfil / Editar perfil: o formulário de login e de perfil.
+    fn form_tab(&mut self, ui: &mut egui::Ui, cx: &mut Cx) {
         let logging_in = self.login_task.as_ref().is_some_and(|t| t.pending());
         let mut do_login = false;
         ui::section(
@@ -759,12 +764,16 @@ impl ConnectPage {
                     }
                     if ui.button(tr("Salvar perfil")).clicked() {
                         match self.save_form() {
-                            Ok(()) => cx.toasts.success(tr("Perfil salvo.")),
+                            Ok(()) => {
+                                cx.toasts.success(tr("Perfil salvo."));
+                                self.tab = LandingTab::Profiles;
+                            }
                             Err(e) => cx.toasts.error(e),
                         }
                     }
-                    if self.edit_id.is_some() && ui.button(tr("Cancelar")).clicked() {
+                    if ui.button(tr("Cancelar")).clicked() {
                         self.clear_form();
+                        self.tab = LandingTab::Profiles;
                     }
                 });
                 ui.add_space(6.0);
@@ -791,11 +800,101 @@ impl ConnectPage {
         if do_login && !logging_in {
             self.start_login(cx);
         }
+    }
 
-        let must_change = principal.as_ref().is_some_and(|p| p.must_change_password);
-        if must_change && !self.pw_done && cx.snap.connected {
-            let ctx = ui.ctx().clone();
-            self.password_modal(&ctx, cx);
+    /// Modal de confirmação da remoção de um perfil salvo.
+    fn remove_modal(&mut self, ctx: &egui::Context, cx: &mut Cx) {
+        let Some(p) = self.remove_pending.clone() else {
+            return;
+        };
+        let c = Confirm {
+            title: tr("Remover perfil").into(),
+            body: trf(
+                "Remover o perfil '{}' ({})? O token de sessão guardado nele é apagado.",
+                &[&p.name, &p.url],
+            ),
+            confirm_label: tr("Remover").into(),
+            danger: true,
+            tag: "remove-profile".into(),
+        };
+        match ui::confirm_modal(ctx, &c) {
+            Some(true) => {
+                self.remove_pending = None;
+                self.file.profiles.retain(|x| x.id != p.id);
+                if let Err(e) = profiles::save(&self.file) {
+                    cx.toasts.error(e);
+                }
+                if self.edit_id.as_deref() == Some(p.id.as_str()) {
+                    self.clear_form();
+                }
+            }
+            Some(false) => self.remove_pending = None,
+            None => {}
         }
+    }
+
+    /// Tela de entrada inteira (título, abas e conteúdo), centralizada. O app
+    /// desenha isto no painel central quando não há conexão.
+    pub fn ui(&mut self, ui: &mut egui::Ui, cx: &mut Cx) {
+        let current = cx.svc.profile();
+        self.poll(cx);
+
+        egui::ScrollArea::vertical()
+            .id_salt("landing")
+            .auto_shrink([false, false])
+            .show(ui, |ui| {
+                let full = ui.available_width();
+                let w = full.min(LANDING_WIDTH);
+                let pad = ((full - w) / 2.0).max(0.0);
+                ui.add_space(28.0);
+                ui.horizontal_top(|ui| {
+                    ui.add_space(pad);
+                    ui.vertical(|ui| {
+                        ui.set_width(w);
+                        ui.set_min_width(w);
+                        ui::heading(
+                            ui,
+                            tr("Entrar no will-ia"),
+                            Some(tr(
+                                "O app é um cliente: escolha o servidor will-ia ao qual conectar.",
+                            )),
+                        );
+                        ui.add_space(6.0);
+                        ui.horizontal(|ui| {
+                            if ui
+                                .selectable_label(self.tab == LandingTab::Profiles, tr("Perfis"))
+                                .clicked()
+                            {
+                                self.tab = LandingTab::Profiles;
+                            }
+                            let form_label = if self.edit_id.is_some() {
+                                tr("Editar perfil")
+                            } else {
+                                tr("Novo perfil")
+                            };
+                            if ui
+                                .selectable_label(self.tab == LandingTab::Form, form_label)
+                                .clicked()
+                            {
+                                self.tab = LandingTab::Form;
+                            }
+                        });
+                        ui.separator();
+                        match self.tab {
+                            LandingTab::Profiles => {
+                                if cx.svc.has_profile() {
+                                    self.reconnect_card(ui, cx, &current);
+                                }
+                                self.profiles_tab(ui, cx, &current);
+                            }
+                            LandingTab::Form => self.form_tab(ui, cx),
+                        }
+                        ui.add_space(24.0);
+                    });
+                });
+            });
+
+        let ctx = ui.ctx().clone();
+        self.remove_modal(&ctx, cx);
     }
 }

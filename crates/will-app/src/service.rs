@@ -28,7 +28,7 @@ pub fn client_for(profile: &Profile) -> Client {
     )
 }
 
-/// Comandos vindos de fora da GUI (ipc do app, atalho global, página Conexão).
+/// Comandos vindos de fora da GUI (ipc do app, atalho global, tela de entrada).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum UiCommand {
     Show,
@@ -39,7 +39,7 @@ pub enum UiCommand {
     /// navegando antes para a página indicada.
     Screenshot(std::path::PathBuf, Option<String>),
     ScreenshotNow(std::path::PathBuf),
-    /// Trocar de servidor (perfil escolhido na página Conexão).
+    /// Trocar de servidor (perfil escolhido na tela de entrada).
     Connect(Profile),
 }
 
@@ -74,7 +74,10 @@ impl Service {
             ev_tx,
             events_task: Mutex::new(None),
         });
-        svc.spawn_events();
+        // Sem perfil (tela de entrada) não há a quem conectar.
+        if svc.has_profile() {
+            svc.spawn_events();
+        }
         Ok((svc, ev_rx, cmd_rx))
     }
 
@@ -99,6 +102,22 @@ impl Service {
         *self.api.write() = Arc::new(client_for(&profile));
         *self.profile.write() = profile;
         self.spawn_events();
+    }
+
+    /// Desiste do servidor atual (sair do perfil ou cancelar a reconexão): para
+    /// o WS de eventos e troca o cliente por um que não aponta para lugar
+    /// nenhum. O app volta para a tela de entrada.
+    pub fn disconnect(&self) {
+        if let Some(t) = self.events_task.lock().take() {
+            t.abort();
+        }
+        *self.api.write() = Arc::new(Client::new("http://127.0.0.1:0", ""));
+        *self.profile.write() = Profile::none();
+    }
+
+    /// Há um perfil escolhido (mesmo que o servidor esteja fora do ar).
+    pub fn has_profile(&self) -> bool {
+        !self.profile.read().is_none()
     }
 
     pub fn api(&self) -> Api {

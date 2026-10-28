@@ -42,6 +42,10 @@ Comportamento para o usuário: o mesmo de antes; a diferença visível é que na
   Nunca `bind = 0.0.0.0` sem TLS na internet aberta: o servidor recusa por padrão e volta para loopback.
 - **Firewall**: só a porta da API (padrão 47300). MCP (`127.0.0.1`), proxy CDP (`127.0.0.1:9223`) e Chrome (`9222`) continuam em loopback e não devem ser expostos.
 
+### Ferramentas fora do `PATH` (macOS, autostart, systemd)
+
+Um app aberto pelo Finder/launchd, pelo autostart ou por uma unit do systemd recebe um `PATH` mínimo (`/usr/bin:/bin:/usr/sbin:/sbin`), sem Homebrew (`/opt/homebrew/bin`), nvm, volta, fnm, npm global ou pyenv. Por isso `will_platform::which` procura também nessas pastas (`tool_dirs()`), e o processo `claude` recebe `PATH` aumentado (`augmented_path()`), para o script `claude` achar o `node`. Sintoma antes da correção (2026-10-28): Base de conhecimento mostrava "Node.js não encontrado" no macOS mesmo com o Node instalado.
+
 ### Serviço residente: difícil de derrubar, instância única
 
 O **servidor** é a peça que mantém tudo de pé (MCP para os processos `claude`, Telegram, voz, agendamentos). Por isso, a partir de 2026-10-28:

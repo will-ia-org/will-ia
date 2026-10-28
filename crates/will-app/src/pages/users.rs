@@ -329,13 +329,13 @@ impl UsersPage {
                         });
                         ui.add_space(4.0);
                         ui.horizontal(|ui| {
-                            if ui.small_button(tr("Editar")).clicked() {
+                            if ui.button(tr("Editar")).clicked() {
                                 edit = Some(u.clone());
                             }
                             if active {
                                 let r = ui.add_enabled(
                                     !is_me,
-                                    egui::Button::new(tr("Desativar")).small(),
+                                    egui::Button::new(tr("Desativar")),
                                 );
                                 let r = if is_me {
                                     r.on_disabled_hover_text(tr(
@@ -349,7 +349,7 @@ impl UsersPage {
                                 if r.clicked() {
                                     deactivate = Some((id.clone(), username.clone()));
                                 }
-                            } else if ui.small_button(tr("Reativar")).clicked() {
+                            } else if ui.button(tr("Reativar")).clicked() {
                                 reactivate = Some((id.clone(), username.clone()));
                             }
                         });

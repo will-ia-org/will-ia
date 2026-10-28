@@ -29,6 +29,26 @@ pub struct Profile {
 
 impl Profile {
     pub const LOCAL_ID: &'static str = "local";
+    /// Id do perfil vazio ("nenhum servidor"): o app está na tela de entrada.
+    pub const NONE_ID: &'static str = "none";
+
+    /// Perfil vazio: sem servidor escolhido. O cliente aponta para uma porta
+    /// inválida de loopback e o app não tenta conectar nele.
+    pub fn none() -> Profile {
+        Profile {
+            id: Self::NONE_ID.into(),
+            name: crate::i18n::tr("nenhum servidor").into(),
+            url: "http://127.0.0.1:0".into(),
+            token: String::new(),
+            username: None,
+            ca_pem: None,
+            insecure: false,
+        }
+    }
+
+    pub fn is_none(&self) -> bool {
+        self.id == Self::NONE_ID
+    }
 
     /// Política de certificado derivada do perfil (só importa em `https://`).
     pub fn tls_options(&self) -> will_client::TlsOptions {

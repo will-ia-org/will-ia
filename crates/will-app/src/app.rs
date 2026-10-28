@@ -16,28 +16,22 @@ use will_client::ClientEvent;
 use will_core::{Event, Module, Principal, Settings};
 
 pub fn run(profile: Option<Profile>, visible: bool) -> anyhow::Result<()> {
-    let (profile, had_profile) = match profile {
-        Some(p) => (p, true),
-        None => (
-            Profile {
-                id: "none".into(),
-                name: tr("nenhum servidor").into(),
-                url: "http://127.0.0.1:0".into(),
-                token: String::new(),
-                username: None,
-                ca_pem: None,
-                insecure: false,
-            },
-            false,
-        ),
+    // Perfil sem token (nunca entrou, ou saiu do perfil): nada responde nele,
+    // então o app abre na tela de entrada com o formulário já preenchido.
+    let (profile, prefill) = match profile {
+        Some(p) if !p.token.is_empty() => (p, None),
+        Some(p) => (Profile::none(), Some(p)),
+        None => (Profile::none(), None),
     };
     let (svc, ev_rx, cmd_rx) = Service::new(profile)?;
     crate::app_ipc::serve(svc.clone());
     // Snapshot inicial pela API (o app é cliente mesmo em loopback).
-    let mut snap = initial_snapshot(&svc);
-    if !had_profile {
-        snap.connected = false;
-    }
+    // Sem perfil o snapshot nasce vazio (`connected = false`): tela de entrada.
+    let snap = if svc.has_profile() {
+        initial_snapshot(&svc)
+    } else {
+        Snapshot::default()
+    };
     let viewport = egui::ViewportBuilder::default()
         .with_title("will-ia")
         .with_app_id("will-ia")
@@ -57,7 +51,7 @@ pub fn run(profile: Option<Profile>, visible: bool) -> anyhow::Result<()> {
         options,
         Box::new(move |cc| {
             Ok(Box::new(WillApp::new(
-                cc, svc2, snap, ev_rx, cmd_rx, visible,
+                cc, svc2, snap, ev_rx, cmd_rx, visible, prefill,
             )))
         }),
     );
@@ -153,6 +147,11 @@ pub struct WillApp {
     resync_task: Option<crate::service::Task<(Value, Value)>>,
     /// `GET /api/auth/me` depois de conectar (e depois de trocar a senha).
     me_task: Option<crate::service::Task<Value>>,
+    /// Acabou de conectar: quando as settings chegarem, escolhe Início ou o
+    /// onboarding (Motor Claude).
+    pick_nav_on_settings: bool,
+    /// "Sair do perfil" clicado no menu; tratado no fim do quadro.
+    pending_leave: bool,
 }
 
 impl WillApp {
@@ -163,6 +162,7 @@ impl WillApp {
         ev_rx: Receiver<ClientEvent>,
         cmd_rx: Receiver<UiCommand>,
         visible: bool,
+        prefill: Option<Profile>,
     ) -> Self {
         svc.set_ctx(cc.egui_ctx.clone());
         egui_extras::install_image_loaders(&cc.egui_ctx);
@@ -173,16 +173,15 @@ impl WillApp {
         let mut voice = VoiceController::new();
         voice.apply_settings(&settings.realtime);
         let mut pages = Pages::default();
-        pages.settings.state.load(&svc);
-        let must_change = snap
-            .principal
-            .as_ref()
-            .is_some_and(|p| p.must_change_password);
-        let nav = if !snap.connected || must_change {
-            // Sem servidor, ou primeiro acesso com senha inicial: página Conexão
-            // (é lá que fica o modal de troca de senha).
-            Nav::Connect
-        } else if settings.general.onboarding_done || !snap.is_admin() {
+        if svc.has_profile() {
+            pages.settings.state.load(&svc);
+        }
+        if let Some(p) = &prefill {
+            pages.connect.open_login(p);
+        }
+        // Sem conexão a tela de entrada cobre tudo; `nav` só importa depois
+        // (o modal de troca de senha aparece sobre qualquer página).
+        let nav = if !snap.connected || settings.general.onboarding_done || !snap.is_admin() {
             Nav::Dashboard
         } else {
             Nav::Settings(SettingsSection::Engine)
@@ -206,9 +205,51 @@ impl WillApp {
             settings_task: None,
             resync_task: None,
             me_task: None,
+            pick_nav_on_settings: false,
+            pending_leave: false,
         };
         app.apply_theme(&cc.egui_ctx);
         app
+    }
+
+    /// Sair do perfil: encerra a sessão da conta no servidor (se houver),
+    /// esquece o token do perfil salvo, desconecta e volta à tela de entrada.
+    fn leave_profile(&mut self) {
+        let profile = self.svc.profile();
+        if !self.svc.has_profile() {
+            return;
+        }
+        if self
+            .snap
+            .principal
+            .as_ref()
+            .is_some_and(|p| p.user_id.is_some())
+        {
+            // Resultado ignorado: localmente o token some de qualquer jeito.
+            let _ = self.svc.call(|c| async move { c.logout().await });
+        }
+        // "Esta máquina" usa o token que o servidor local grava; só perfis
+        // salvos têm token próprio a apagar.
+        if profile.id != Profile::LOCAL_ID {
+            let mut pf = crate::profiles::load();
+            if let Some(saved) = pf.profiles.iter_mut().find(|x| x.id == profile.id) {
+                saved.token.clear();
+                saved.username = None;
+                if let Err(e) = crate::profiles::save(&pf) {
+                    self.toasts.error(e);
+                }
+            }
+        }
+        self.voice.stop(&self.svc);
+        self.svc.disconnect();
+        self.snap = Snapshot::default();
+        self.pages = Pages::default();
+        self.settings_task = None;
+        self.resync_task = None;
+        self.me_task = None;
+        self.pick_nav_on_settings = false;
+        self.nav = Nav::Dashboard;
+        self.toasts.info(tr("Sessão encerrada."));
     }
 
     fn apply_theme(&mut self, ctx: &egui::Context) {
@@ -366,14 +407,12 @@ impl WillApp {
                 };
                 self.pages = Pages::default();
                 self.pages.settings.state.load(&self.svc);
+                self.settings_task = None;
+                self.resync_task = None;
                 self.me_task = None;
-                // Sem token (perfil novo ou depois de sair da conta) nada responde:
-                // fica na página Conexão para entrar.
-                self.nav = if profile.token.is_empty() {
-                    Nav::Connect
-                } else {
-                    Nav::Dashboard
-                };
+                // A tela de entrada fica até `ClientEvent::Connected`; depois
+                // Início (ou onboarding, decidido quando as settings chegarem).
+                self.nav = Nav::Dashboard;
                 self.toasts.info(trf("Conectando em {}…", &[&profile.name]));
             }
             UiCommand::HotkeyDown => {
@@ -433,14 +472,14 @@ impl WillApp {
         self.me_task = Some(self.svc.call(|c| async move { c.me().await }));
     }
 
-    /// Aplica a identidade carregada: troca obrigatória de senha leva à página
-    /// Conexão (onde fica o modal); membro não fica numa página de administrador.
+    /// Aplica a identidade carregada: troca obrigatória de senha abre o modal
+    /// (`ConnectPage::password_gate`, sobre qualquer página); membro não fica
+    /// numa página de administrador.
     fn apply_principal(&mut self, p: Principal) {
         let must_change = p.must_change_password;
         let admin = p.is_admin();
         self.snap.principal = Some(p);
         if must_change {
-            self.nav = Nav::Connect;
             self.toasts
                 .info(tr("Primeiro acesso: defina uma nova senha para continuar."));
         }
@@ -458,11 +497,16 @@ impl WillApp {
             match ev {
                 ClientEvent::Event(ev) => self.handle_event(ev),
                 ClientEvent::Connected => {
+                    if !self.svc.has_profile() {
+                        // Evento atrasado de um WS já abortado (saiu do perfil).
+                        continue;
+                    }
                     let was = self.snap.connected;
                     self.snap.connected = true;
                     self.pages.connect.last_error = None;
                     self.pages.connect.refresh();
                     if !was {
+                        self.pick_nav_on_settings = true;
                         // Ressincroniza o que pode ter mudado enquanto estávamos fora.
                         self.resync_task = Some(self.svc.call(|c| async move {
                             let st = c.status().await?;
@@ -475,6 +519,9 @@ impl WillApp {
                     }
                 }
                 ClientEvent::Disconnected(why) => {
+                    if !self.svc.has_profile() {
+                        continue;
+                    }
                     if self.snap.connected {
                         self.toasts
                             .error(trf("Conexão com o servidor perdida: {}", &[&why]));
@@ -492,6 +539,13 @@ impl WillApp {
                         self.snap.settings = st;
                         self.voice.apply_settings(&self.snap.settings.realtime);
                     }
+                }
+                if std::mem::take(&mut self.pick_nav_on_settings)
+                    && !self.snap.settings.general.onboarding_done
+                    && self.snap.is_admin()
+                {
+                    // Primeira conexão num servidor ainda sem onboarding.
+                    self.nav = Nav::Settings(SettingsSection::Engine);
                 }
             }
         }
@@ -543,7 +597,7 @@ impl WillApp {
                 Err(e) => self.toasts.error(e),
             }
         }
-        if self.last_status_refresh.elapsed() > Duration::from_secs(15) {
+        if self.svc.has_profile() && self.last_status_refresh.elapsed() > Duration::from_secs(15) {
             self.last_status_refresh = Instant::now();
             self.pages.dashboard.refresh(&self.svc);
         }
@@ -578,6 +632,31 @@ impl WillApp {
                 if self.voice.session_active {
                     let (label, color) = crate::voice::overlay::label_for(&self.voice.state);
                     ui.label(egui::RichText::new(label).color(color).small());
+                }
+                ui.add_space(6.0);
+                // Perfil/conta em uso (o servidor e quem está logado).
+                {
+                    let p = self.svc.profile();
+                    let who = match &self.snap.principal {
+                        Some(pr) if pr.user_id.is_some() => format!("{} · {}", p.name, pr.username),
+                        _ => p.name.clone(),
+                    };
+                    ui.add(egui::Label::new(egui::RichText::new(who).small().weak()).truncate())
+                        .on_hover_text(&p.url);
+                }
+                // Sair do perfil: encerra a sessão da conta, esquece o token do
+                // perfil e volta à tela de entrada (o servidor continua no ar).
+                if ui
+                    .add_sized(
+                        [ui.available_width(), 30.0],
+                        egui::Button::new(tr("Sair do perfil")),
+                    )
+                    .on_hover_text(tr(
+                        "Encerra a sessão no servidor e apaga o token deste perfil.",
+                    ))
+                    .clicked()
+                {
+                    self.pending_leave = true;
                 }
                 ui.add_space(4.0);
                 // Sem botões Ocultar/Sair: o serviço é residente (bandeja). Fechar a
@@ -620,7 +699,6 @@ impl WillApp {
                 if self.snap.principal.as_ref().is_some_and(|p| p.is_admin()) {
                     items.push((Nav::Users, tr("Usuários").into()));
                 }
-                items.push((Nav::Connect, tr("Conexão").into()));
                 for (n, label) in items {
                     if ui::nav_item(ui, self.nav == n, &label, None).clicked() {
                         self.nav = n;
@@ -910,24 +988,35 @@ impl eframe::App for WillApp {
             .show_separator_line(false)
             .show(ui, |ui| self.title_bar(ui));
 
+        // Sem conexão (sem perfil, servidor fora do ar ou depois de sair do
+        // perfil): só a tela de entrada, sem menu nem páginas. Ela some sozinha
+        // quando `ClientEvent::Connected` chegar.
+        if !self.snap.connected {
+            let mut requested_nav: Option<Nav> = None;
+            egui::CentralPanel::default().show(ui, |ui| {
+                let mut cx = Cx {
+                    svc: &self.svc,
+                    snap: &self.snap,
+                    toasts: &mut self.toasts,
+                    voice: &mut self.voice,
+                    go: &mut requested_nav,
+                };
+                self.pages.connect.ui(ui, &mut cx);
+            });
+            if self.pending_hide {
+                self.pending_hide = false;
+                self.hide_window(&ctx);
+            }
+            self.toasts.show(&ctx);
+            self.resize_edges(&ctx);
+            return;
+        }
+
         egui::Panel::left("nav")
             .exact_size(232.0)
             .resizable(false)
             .show(ui, |ui| self.nav_panel(ui));
 
-        // Faixa de conexão: o app é cliente do servidor (loopback ou remoto).
-        if !self.snap.connected {
-            egui::Panel::top("conn-banner").show(ui, |ui| {
-                ui.horizontal(|ui| {
-                    ui.spinner();
-                    ui.colored_label(
-                        Tone::Warning.color(ui.visuals().dark_mode),
-                        tr("Desconectado do servidor; tentando reconectar…"),
-                    );
-                    ui.label(egui::RichText::new(&self.snap.api_url).weak().small());
-                });
-            });
-        }
         // Faixa de aprovações pendentes.
         if !self.snap.pending_approvals.is_empty() && self.nav != Nav::Approvals {
             let n = self.snap.pending_approvals.len();
@@ -988,6 +1077,22 @@ impl eframe::App for WillApp {
         });
         if let Some(n) = requested_nav {
             self.nav = n;
+        }
+        // Troca obrigatória de senha: modal bloqueante sobre qualquer página.
+        {
+            let mut go: Option<Nav> = None;
+            let mut cx = Cx {
+                svc: &self.svc,
+                snap: &self.snap,
+                toasts: &mut self.toasts,
+                voice: &mut self.voice,
+                go: &mut go,
+            };
+            self.pages.connect.password_gate(&ctx, &mut cx);
+        }
+        if self.pending_leave {
+            self.pending_leave = false;
+            self.leave_profile();
         }
         if self.pending_hide {
             self.pending_hide = false;
