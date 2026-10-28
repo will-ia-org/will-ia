@@ -35,6 +35,11 @@ Chrome/Chromium/Brave/Edge · --remote-debugging-port=9222 (upstream_host:upstre
 
 Em português: o primeiro comando do agente numa máquina sem navegador aberto só **demora alguns segundos** (lançamento + espera); nunca falha por "ninguém escutando" em 9222. Nas chamadas seguintes o `probe` responde na hora e o repasse é direto.
 
+
+## Instalação do zero: o que é automático
+
+Com o módulo ligado (padrão), sem nenhum clique: proxy em 9223, detecção e lançamento do navegador com perfil dedicado, `AGENT_BROWSER_CDP`/`AGENT_BROWSER_SCREENSHOT_DIR`/`AGENT_BROWSER_DOWNLOAD_PATH` e `Bash(agent-browser:*)` nos processos `claude`, `inbox/browser/` criado na KB, seção "Navegador (agent-browser)" no `CLAUDE.md` gerado para KBs novas, e a **skill copiada automaticamente** para `<kb>/.claude/skills/agent-browser/` assim que o CLI existe (na subida do módulo, ao trocar a KB e ao criar o esqueleto). O que depende do usuário: instalar o Node.js e clicar em **Instalar agent-browser** (um `npm install -g`). Enquanto faltar algo, a bolinha do módulo fica **amarela com o motivo** ("agent-browser não instalado…", "Node.js/npm não encontrados…", "skill ausente…"), visível na tela Início.
+
 ## Configurações (`BrowserSettings`, seção `browser`)
 
 | Campo | Tipo | Padrão | Efeito |

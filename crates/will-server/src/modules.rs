@@ -577,8 +577,14 @@ pub async fn apply_section(state: &Arc<AppState>, section: &str) {
         "kb" => {
             let _ = crate::mcp_json::write(state).await;
             register_core_tools(state);
-            if let Some(b) = state.browser.read().clone() {
+            let browser = state.browser.read().clone();
+            if let Some(b) = browser {
                 b.set_kb_path(state.kb_path());
+                if let Some(kb) = state.kb_path().filter(|p| p.is_dir()) {
+                    let _ = std::fs::create_dir_all(kb.join("inbox").join("browser"));
+                }
+                b.ensure_skill().await;
+                b.refresh_readiness();
             }
             refresh_engine(state, true).await;
             recompute_engine_status(state);

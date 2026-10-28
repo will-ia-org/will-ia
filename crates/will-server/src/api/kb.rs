@@ -16,6 +16,14 @@ pub async fn scaffold(State(state): State<App>) -> ApiResult<Value> {
     let created = crate::kb::scaffold(&kb).map_err(bad)?;
     let _ = crate::mcp_json::write(&state).await;
     crate::modules::refresh_engine(&state, false).await;
+    // Skill do agent-browser entra junto com o esqueleto, se o CLI já existir.
+    let browser = state.browser.read().clone();
+    if let Some(b) = browser {
+        b.set_kb_path(Some(kb.clone()));
+        let _ = std::fs::create_dir_all(kb.join("inbox").join("browser"));
+        b.ensure_skill().await;
+        b.refresh_readiness();
+    }
     Ok(Json(json!({ "created": created })))
 }
 

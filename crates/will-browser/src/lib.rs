@@ -240,8 +240,66 @@ impl BrowserModule {
                 self.upstream_authority()
             ),
         );
-        self.set_status(ModuleStatus::Running);
         self.emit("listening", Some(format!("127.0.0.1:{port}")));
+        self.ensure_skill().await;
+        self.refresh_readiness();
+    }
+
+    /// O que ainda falta para o agente navegar (barato: só olha o disco).
+    /// `None` = pronto. Vira o motivo do `Degraded` na bolinha do módulo.
+    pub fn readiness(&self) -> Option<String> {
+        if detect::find_node_tool("agent-browser").is_none() {
+            return Some(if detect::find_node_tool("npm").is_some() {
+                "agent-browser não instalado: Browser CDP → Instalação → Instalar agent-browser"
+                    .into()
+            } else {
+                "Node.js/npm não encontrados: instale o Node.js e depois o agent-browser em Browser CDP → Instalação".into()
+            });
+        }
+        if let Some(kb) = self.kb_path() {
+            if kb.is_dir() && !install::skill_path_in_kb(&kb).is_file() {
+                return Some(
+                    "skill agent-browser ausente na base de conhecimento: Browser CDP → Instalação"
+                        .into(),
+                );
+            }
+        }
+        None
+    }
+
+    /// Recalcula a bolinha: `Running` quando pronto, `Degraded` com o que falta.
+    /// Não sobrescreve um erro de proxy/navegador em curso.
+    pub fn refresh_readiness(&self) {
+        if !self.enabled() || !*self.listening.read() || self.last_error.read().is_some() {
+            return;
+        }
+        match self.readiness() {
+            None => self.set_status(ModuleStatus::Running),
+            Some(reason) => self.set_status(ModuleStatus::Degraded(reason)),
+        }
+    }
+
+    /// Copia a skill para a KB quando o CLI existe e ela ainda não está lá
+    /// (instalação do zero sem cliques). Silencioso se não há KB ou CLI.
+    pub async fn ensure_skill(&self) {
+        let Some(kb) = self.kb_path().filter(|p| p.is_dir()) else {
+            return;
+        };
+        if install::skill_path_in_kb(&kb).is_file()
+            || detect::find_node_tool("agent-browser").is_none()
+        {
+            return;
+        }
+        match self.installer.install_skill(&kb).await {
+            Ok(p) => self.log(
+                "info",
+                format!("skill agent-browser instalada automaticamente em {p}"),
+            ),
+            Err(e) => self.log(
+                "warn",
+                format!("não consegui instalar a skill agent-browser na KB: {e}"),
+            ),
+        }
     }
 
     pub async fn stop(&self) {
@@ -554,6 +612,7 @@ impl BrowserModule {
     }
 
     pub async fn status(&self) -> BrowserStatus {
+        self.refresh_readiness();
         let c = self.cfg.read().clone();
         let up = self
             .probe_upstream(Duration::from_millis(600))

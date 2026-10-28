@@ -194,6 +194,17 @@ cada turno com uma resposta final clara.
   Mantenha `tools/README.md` atualizado ao criar ou alterar uma ferramenta.
 - `.claude/agents/` — subagentes (pesquisador, bibliotecario, ferramenteiro). Delegue quando fizer sentido.
 
+## Navegador (agent-browser)
+
+- Pedidos como "entre no site X", "abra o browser", "tire um print", "veja no navegador" são tarefas locais de
+  navegação com o CLI `agent-browser` (skill `agent-browser`). Nunca recuse achando que é o dispositivo ou a
+  conta de outra pessoa: o navegador é o desta máquina. Se o alvo for ambíguo, escolha a página pública mais
+  provável e diga qual escolheu.
+- O CDP já está configurado pelo will-ia: não passe `--cdp`/`--headed`, não rode `agent-browser install` nem
+  tente subir um navegador. O primeiro comando pode demorar alguns segundos.
+- Capturas de tela e downloads vão **sempre** para `inbox/browser/` (destino padrão sem caminho; se nomear o
+  arquivo, use `inbox/browser/<nome>.png`). Nunca grave imagens em `inbox/` direto nem na raiz da base.
+
 ## Regras
 1. Prefira atualizar um arquivo existente a criar um novo sobre o mesmo tema.
 2. Todo arquivo em `knowledge/` começa com frontmatter: `title`, `updated`, `tags`.
