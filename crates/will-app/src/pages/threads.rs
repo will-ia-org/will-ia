@@ -58,6 +58,9 @@ pub struct ThreadsPage {
     confirm_reset: Option<ThreadId>,
     show_archived: bool,
     focus_input: bool,
+    /// Ditado (botão "Falar" segurado): gravador ativo e transcrição em voo.
+    dictation: Option<crate::voice::audio::Recorder>,
+    dictation_task: Option<Task<Value>>,
     /// Altura medida do bloco de entrada no quadro anterior (define quanto
     /// sobra para o histórico sem a página rolar).
     bottom_h: f32,
@@ -308,6 +311,32 @@ impl ThreadsPage {
     }
 
     fn poll(&mut self, cx: &mut Cx) {
+        if let Some(t) = &self.dictation_task {
+            if let Some(r) = t.take() {
+                self.dictation_task = None;
+                match r {
+                    Ok(v) => {
+                        let text = v
+                            .get("text")
+                            .and_then(|t| t.as_str())
+                            .unwrap_or("")
+                            .trim()
+                            .to_string();
+                        if text.is_empty() {
+                            cx.toasts.info(tr("Não entendi nada no áudio."));
+                        } else {
+                            if !self.input.is_empty() && !self.input.ends_with(char::is_whitespace)
+                            {
+                                self.input.push(' ');
+                            }
+                            self.input.push_str(&text);
+                            self.focus_input = true;
+                        }
+                    }
+                    Err(e) => cx.toasts.error(trf("Transcrição falhou: {}", &[&e])),
+                }
+            }
+        }
         if self.list.stale(std::time::Duration::from_secs(30)) {
             self.reload_list(cx);
         }
@@ -953,6 +982,78 @@ impl ThreadsPage {
                             .min_size(egui::vec2(84.0, 34.0));
                             if ui.add_enabled(can, b).clicked() {
                                 send_now = true;
+                            }
+                            // Falar (ditado): segure para gravar; solte para transcrever
+                            // no campo (Whisper via servidor). Só com o módulo de voz pronto.
+                            let voice_ready = matches!(
+                                cx.snap.modules.get(&will_core::Module::Realtime),
+                                Some(will_core::ModuleStatus::Running)
+                            );
+                            if voice_ready {
+                                let recording = self.dictation.is_some();
+                                let transcribing =
+                                    self.dictation_task.as_ref().is_some_and(|t| t.pending());
+                                let label = if recording {
+                                    trf(
+                                        "● {}s",
+                                        &[&format!(
+                                            "{:.0}",
+                                            self.dictation
+                                                .as_ref()
+                                                .map(|d| d.elapsed_secs())
+                                                .unwrap_or(0.0)
+                                        )],
+                                    )
+                                } else if transcribing {
+                                    tr("…").into()
+                                } else {
+                                    tr("Falar").into()
+                                };
+                                let b = egui::Button::new(egui::RichText::new(label).color(
+                                    if recording {
+                                        egui::Color32::WHITE
+                                    } else {
+                                        pal2.text
+                                    },
+                                ))
+                                .fill(if recording {
+                                    egui::Color32::from_rgb(200, 60, 60)
+                                } else {
+                                    pal2.card
+                                })
+                                .min_size(egui::vec2(68.0, 34.0));
+                                let r = ui
+                                    .add_enabled(!busy && !transcribing, b)
+                                    .on_hover_text(tr(
+                                    "Segure para falar; solte para transcrever no campo (Whisper).",
+                                ));
+                                let held = r.is_pointer_button_down_on();
+                                if held && !recording && !transcribing {
+                                    let dev = cx.snap.settings.realtime.input_device.clone();
+                                    let rec = crate::voice::audio::Recorder::start(dev.as_deref());
+                                    if let Some(e) = &rec.error {
+                                        cx.toasts.error(e.clone());
+                                    } else {
+                                        self.dictation = Some(rec);
+                                    }
+                                } else if !held && recording {
+                                    if let Some(rec) = self.dictation.take() {
+                                        match rec.stop() {
+                                            Some(wav) => {
+                                                self.dictation_task =
+                                                    Some(cx.svc.call(move |c| async move {
+                                                        c.transcribe(wav, Some("pt")).await
+                                                    }));
+                                            }
+                                            None => cx.toasts.info(tr("Gravação muito curta.")),
+                                        }
+                                    }
+                                }
+                                if recording || transcribing {
+                                    ui.ctx().request_repaint_after(
+                                        std::time::Duration::from_millis(200),
+                                    );
+                                }
                             }
                             // Anexar: diálogo nativo de arquivos (vários de uma vez)
                             let a = egui::Button::new(

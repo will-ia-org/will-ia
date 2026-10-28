@@ -635,6 +635,123 @@ impl Drop for AudioPipeline {
     }
 }
 
+/// Taxa do ditado (Whisper aceita 16 kHz mono PCM16 sem perda relevante).
+pub const DICTATION_RATE: u32 = 16_000;
+
+/// Gravador do botão "Falar" (push-to-talk de ditado): captura o microfone
+/// enquanto existir e devolve um WAV PCM16 mono 16 kHz em `stop`.
+pub struct Recorder {
+    _stream: Option<cpal::Stream>,
+    buf: Arc<Mutex<Vec<i16>>>,
+    pub error: Option<String>,
+    started: Instant,
+}
+
+impl Recorder {
+    pub fn start(input_name: Option<&str>) -> Self {
+        let host = audio_host();
+        let buf: Arc<Mutex<Vec<i16>>> = Arc::new(Mutex::new(Vec::new()));
+        let Some(dev) = find_device(&host, input_name, true) else {
+            return Self {
+                _stream: None,
+                buf,
+                error: Some(tr("nenhum dispositivo de entrada").into()),
+                started: Instant::now(),
+            };
+        };
+        let cfg = match dev.default_input_config() {
+            Ok(c) => c,
+            Err(e) => {
+                return Self {
+                    _stream: None,
+                    buf,
+                    error: Some(trf("microfone: {}", &[&e])),
+                    started: Instant::now(),
+                }
+            }
+        };
+        let channels = cfg.channels() as usize;
+        let mut rs = Resampler::new(cfg.sample_rate(), DICTATION_RATE);
+        let mut mono: Vec<f32> = Vec::new();
+        let mut out: Vec<f32> = Vec::new();
+        let b2 = buf.clone();
+        let stream = dev.build_input_stream(
+            low_latency(&cfg),
+            move |data: &[f32], _| {
+                mono.clear();
+                if channels <= 1 {
+                    mono.extend_from_slice(data);
+                } else {
+                    for frame in data.chunks(channels) {
+                        mono.push(frame.iter().sum::<f32>() / channels as f32);
+                    }
+                }
+                out.clear();
+                rs.process(&mono, &mut out);
+                let mut g = b2.lock();
+                for s in &out {
+                    g.push((s.clamp(-1.0, 1.0) * 32767.0) as i16);
+                }
+            },
+            |e| tracing::warn!(error = %e, "gravador de ditado"),
+            None,
+        );
+        match stream {
+            Ok(s) => {
+                let err = s.play().err().map(|e| trf("microfone: {}", &[&e]));
+                Self {
+                    _stream: Some(s),
+                    buf,
+                    error: err,
+                    started: Instant::now(),
+                }
+            }
+            Err(e) => Self {
+                _stream: None,
+                buf,
+                error: Some(trf("microfone: {}", &[&e])),
+                started: Instant::now(),
+            },
+        }
+    }
+
+    pub fn elapsed_secs(&self) -> f32 {
+        self.started.elapsed().as_secs_f32()
+    }
+
+    /// Para a captura e devolve o WAV (ou `None` se gravou quase nada).
+    pub fn stop(self) -> Option<Vec<u8>> {
+        drop(self._stream);
+        let samples = std::mem::take(&mut *self.buf.lock());
+        if samples.len() < (DICTATION_RATE as usize) / 4 {
+            return None;
+        }
+        Some(wav_pcm16_mono(&samples, DICTATION_RATE))
+    }
+}
+
+/// Cabeçalho WAV + amostras PCM16 little-endian.
+pub fn wav_pcm16_mono(samples: &[i16], rate: u32) -> Vec<u8> {
+    let data_len = (samples.len() * 2) as u32;
+    let mut w = Vec::with_capacity(44 + data_len as usize);
+    w.extend_from_slice(b"RIFF");
+    w.extend_from_slice(&(36 + data_len).to_le_bytes());
+    w.extend_from_slice(b"WAVEfmt ");
+    w.extend_from_slice(&16u32.to_le_bytes());
+    w.extend_from_slice(&1u16.to_le_bytes()); // PCM
+    w.extend_from_slice(&1u16.to_le_bytes()); // mono
+    w.extend_from_slice(&rate.to_le_bytes());
+    w.extend_from_slice(&(rate * 2).to_le_bytes());
+    w.extend_from_slice(&2u16.to_le_bytes());
+    w.extend_from_slice(&16u16.to_le_bytes());
+    w.extend_from_slice(b"data");
+    w.extend_from_slice(&data_len.to_le_bytes());
+    for s in samples {
+        w.extend_from_slice(&s.to_le_bytes());
+    }
+    w
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

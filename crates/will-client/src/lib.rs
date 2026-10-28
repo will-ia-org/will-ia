@@ -719,6 +719,24 @@ impl Client {
     pub async fn voice_status(&self) -> ApiResult {
         self.get("voice/status").await
     }
+    /// Ditado: WAV PCM16 mono 16 kHz → `{text, secs, usd}` (Whisper no servidor).
+    pub async fn transcribe(&self, wav: Vec<u8>, lang: Option<&str>) -> ApiResult {
+        let url = format!(
+            "{}{}",
+            self.url("voice/transcribe"),
+            query_string(&[("lang", lang.unwrap_or_default().to_string())])
+        );
+        Self::finish(
+            self.http
+                .post(url)
+                .bearer_auth(&self.token)
+                .header("content-type", "audio/wav")
+                .body(wav)
+                .send()
+                .await,
+        )
+        .await
+    }
     pub async fn voice_transcripts(&self, query: &[(&str, String)]) -> ApiResult {
         self.get_q("voice/transcripts", query).await
     }

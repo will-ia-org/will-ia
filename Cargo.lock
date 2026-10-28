@@ -9068,6 +9068,7 @@ dependencies = [
  "rand 0.10.3",
  "rcgen",
  "regex",
+ "reqwest 0.13.5",
  "rustls",
  "secrecy",
  "serde",

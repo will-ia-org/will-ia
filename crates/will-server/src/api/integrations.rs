@@ -173,6 +173,91 @@ pub struct Limit {
     pub limit: Option<i64>,
 }
 
+#[derive(serde::Deserialize, Default)]
+pub struct TranscribeQuery {
+    /// Idioma ISO-639-1 (ex.: `pt`); vazio = detecção automática.
+    pub lang: Option<String>,
+}
+
+/// `POST /api/voice/transcribe` com o corpo em WAV (PCM16 mono): ditado do
+/// campo de mensagem. Usa a chave da OpenAI do módulo de voz (Whisper) e
+/// devolve `{text}`; registra custo estimado (US$ 0,006/min) em `ai_costs`.
+pub async fn voice_transcribe(
+    State(state): State<App>,
+    axum::extract::Extension(me): axum::extract::Extension<will_core::Principal>,
+    Query(q): Query<TranscribeQuery>,
+    body: axum::body::Bytes,
+) -> ApiResult<Value> {
+    if !state.settings().realtime.enabled {
+        return Err(bad("módulo de voz desligado"));
+    }
+    let key = crate::modules::openai_key(&state)
+        .await
+        .ok_or_else(|| bad("sem chave da OpenAI (Configurações → Voz)"))?;
+    if body.len() < 2_000 {
+        return Err(bad("áudio curto demais"));
+    }
+    let secs = (body.len().saturating_sub(44)) as f64 / 32_000.0; // 16 kHz · 16 bits · mono
+    let mut form = reqwest::multipart::Form::new()
+        .text("model", "whisper-1")
+        .text("response_format", "json")
+        .part(
+            "file",
+            reqwest::multipart::Part::bytes(body.to_vec())
+                .file_name("audio.wav")
+                .mime_str("audio/wav")
+                .map_err(|e| super::internal(e.to_string()))?,
+        );
+    if let Some(l) = q.lang.as_deref().map(str::trim).filter(|l| !l.is_empty()) {
+        form = form.text("language", l.to_string());
+    }
+    use secrecy::ExposeSecret;
+    let client = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(90))
+        .build()
+        .map_err(|e| super::internal(e.to_string()))?;
+    let resp = client
+        .post("https://api.openai.com/v1/audio/transcriptions")
+        .bearer_auth(key.expose_secret())
+        .multipart(form)
+        .send()
+        .await
+        .map_err(|e| super::internal(format!("OpenAI: {e}")))?;
+    let status = resp.status();
+    let v: Value = resp
+        .json()
+        .await
+        .map_err(|e| super::internal(format!("OpenAI: resposta inválida: {e}")))?;
+    if !status.is_success() {
+        let msg = v
+            .get("error")
+            .and_then(|e| e.get("message"))
+            .and_then(|m| m.as_str())
+            .unwrap_or("falha na transcrição")
+            .to_string();
+        return Err(bad(format!("OpenAI {status}: {msg}")));
+    }
+    let text = v
+        .get("text")
+        .and_then(|t| t.as_str())
+        .unwrap_or("")
+        .trim()
+        .to_string();
+    let usd = secs / 60.0 * 0.006;
+    let rec = will_storage::costs::NewAiCost {
+        source: "voice_stt".into(),
+        r#ref: Some(format!("user:{}", me.username)),
+        model: Some("whisper-1".into()),
+        units: json!({ "audio_secs": secs.round() as i64 }),
+        usd,
+        estimated: true,
+        duration_secs: Some(secs.round() as i64),
+        note: Some(format!("ditado de {}", me.username)),
+    };
+    let _ = state.storage.add_ai_cost(&rec).await;
+    Ok(Json(json!({ "text": text, "secs": secs, "usd": usd })))
+}
+
 pub async fn voice_transcripts(
     State(state): State<App>,
     Query(q): Query<Limit>,

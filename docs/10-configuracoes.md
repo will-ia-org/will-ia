@@ -266,3 +266,7 @@ egui/eframe em `crates/will-app` (ADR-0016, ADR-0019). Modo imediato: cada pági
 | amarelo | `Degraded(motivo)` → "atenção · motivo" | habilitado, mas falta algo ou algo falha; o motivo é sempre mostrado |
 | vermelho | `Error(motivo)` → "erro · motivo" | falhou ao subir ou erro fatal |
 | cinza | `Disabled` → "desligado" / `Stopped` → "parado" | desligado nas configurações / parado explicitamente. "Ocioso mas pronto" **não** é cinza: é verde |
+
+### Ditado no campo de mensagem (Threads)
+
+Com o módulo Voz pronto (habilitado + chave da OpenAI), o campo de mensagem ganha o botão **Falar** ao lado de Anexar/Enviar. Segure com o mouse para gravar (o botão fica vermelho com o tempo), solte para transcrever: o app grava o microfone em 16 kHz, manda o WAV para `POST /api/voice/transcribe` e **insere o texto no campo sem enviar**; Ctrl+Enter envia quando quiser. Gravações curtas (< 0,25 s) são ignoradas; erros aparecem em toast.
