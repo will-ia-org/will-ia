@@ -51,6 +51,10 @@ regex.workspace = true
 sha2.workspace = true
 bytes.workspace = true
 rustls.workspace = true
+argon2.workspace = true
+axum-server.workspace = true
+rcgen.workspace = true
+dashmap.workspace = true
 
 [lints]
 workspace = true

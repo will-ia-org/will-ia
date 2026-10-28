@@ -15,11 +15,106 @@ use will_core::Event;
 
 pub use voice::{AudioOut, VoiceLink};
 
+/// Como validar o certificado do servidor (só para `https://`).
+#[derive(Debug, Clone, Default)]
+pub struct TlsOptions {
+    /// Certificado/CA do servidor em PEM (o autoassinado gerado por ele), fixado no perfil.
+    pub ca_pem: Option<String>,
+    /// Aceitar qualquer certificado (não recomendado; só para testes).
+    pub insecure: bool,
+}
+
 #[derive(Debug, Clone)]
 pub struct Client {
     base: String,
     token: String,
     http: reqwest::Client,
+    /// Config rustls para o WebSocket (mesma política do HTTP).
+    ws_tls: Option<Arc<rustls::ClientConfig>>,
+}
+
+/// Verificador que aceita qualquer certificado (modo inseguro explícito).
+#[derive(Debug)]
+struct NoVerify(rustls::crypto::CryptoProvider);
+
+impl rustls::client::danger::ServerCertVerifier for NoVerify {
+    fn verify_server_cert(
+        &self,
+        _end_entity: &rustls::pki_types::CertificateDer<'_>,
+        _intermediates: &[rustls::pki_types::CertificateDer<'_>],
+        _server_name: &rustls::pki_types::ServerName<'_>,
+        _ocsp: &[u8],
+        _now: rustls::pki_types::UnixTime,
+    ) -> Result<rustls::client::danger::ServerCertVerified, rustls::Error> {
+        Ok(rustls::client::danger::ServerCertVerified::assertion())
+    }
+    fn verify_tls12_signature(
+        &self,
+        message: &[u8],
+        cert: &rustls::pki_types::CertificateDer<'_>,
+        dss: &rustls::DigitallySignedStruct,
+    ) -> Result<rustls::client::danger::HandshakeSignatureValid, rustls::Error> {
+        rustls::crypto::verify_tls12_signature(
+            message,
+            cert,
+            dss,
+            &self.0.signature_verification_algorithms,
+        )
+    }
+    fn verify_tls13_signature(
+        &self,
+        message: &[u8],
+        cert: &rustls::pki_types::CertificateDer<'_>,
+        dss: &rustls::DigitallySignedStruct,
+    ) -> Result<rustls::client::danger::HandshakeSignatureValid, rustls::Error> {
+        rustls::crypto::verify_tls13_signature(
+            message,
+            cert,
+            dss,
+            &self.0.signature_verification_algorithms,
+        )
+    }
+    fn supported_verify_schemes(&self) -> Vec<rustls::SignatureScheme> {
+        self.0.signature_verification_algorithms.supported_schemes()
+    }
+}
+
+fn ws_tls_config(tls: &TlsOptions) -> Option<Arc<rustls::ClientConfig>> {
+    let provider = rustls::crypto::ring::default_provider();
+    if tls.insecure {
+        let cfg = rustls::ClientConfig::builder_with_provider(Arc::new(provider.clone()))
+            .with_safe_default_protocol_versions()
+            .ok()?
+            .dangerous()
+            .with_custom_certificate_verifier(Arc::new(NoVerify(provider)))
+            .with_no_client_auth();
+        return Some(Arc::new(cfg));
+    }
+    let pem = tls.ca_pem.as_deref()?.trim();
+    if pem.is_empty() {
+        return None;
+    }
+    let mut roots = rustls::RootCertStore::empty();
+    let mut reader = std::io::Cursor::new(pem.as_bytes());
+    for cert in rustls_pemfile::certs(&mut reader).flatten() {
+        let _ = roots.add(cert);
+    }
+    let cfg = rustls::ClientConfig::builder_with_provider(Arc::new(provider))
+        .with_safe_default_protocol_versions()
+        .ok()?
+        .with_root_certificates(roots)
+        .with_no_client_auth();
+    Some(Arc::new(cfg))
+}
+
+/// SHA-256 (hex) do primeiro certificado de um PEM, para conferir com `/api/health`.
+pub fn pem_fingerprint(pem: &str) -> Option<String> {
+    use sha2::Digest;
+    let mut reader = std::io::Cursor::new(pem.as_bytes());
+    let cert = rustls_pemfile::certs(&mut reader).next()?.ok()?;
+    let mut h = sha2::Sha256::new();
+    h.update(cert.as_ref());
+    Some(h.finalize().iter().map(|b| format!("{b:02x}")).collect())
 }
 
 /// Resultado padrão: corpo JSON ou mensagem de erro legível (campo `error`
@@ -37,17 +132,55 @@ pub enum ClientEvent {
 impl Client {
     /// `base` = `http://127.0.0.1:47300` (sem barra final). `token` = token de sessão.
     pub fn new(base: impl Into<String>, token: impl Into<String>) -> Self {
-        let http = reqwest::Client::builder()
+        Self::with_tls(base, token, &TlsOptions::default())
+    }
+
+    /// Como [`new`](Self::new), com política de certificado para `https://`.
+    pub fn with_tls(base: impl Into<String>, token: impl Into<String>, tls: &TlsOptions) -> Self {
+        let mut b = reqwest::Client::builder()
             .no_proxy()
             .timeout(Duration::from_secs(120))
-            .connect_timeout(Duration::from_secs(5))
-            .build()
-            .unwrap_or_default();
+            .connect_timeout(Duration::from_secs(5));
+        if tls.insecure {
+            b = b.danger_accept_invalid_certs(true);
+        } else if let Some(pem) = tls
+            .ca_pem
+            .as_deref()
+            .map(str::trim)
+            .filter(|p| !p.is_empty())
+        {
+            if let Ok(certs) = reqwest::Certificate::from_pem_bundle(pem.as_bytes()) {
+                for c in certs {
+                    b = b.add_root_certificate(c);
+                }
+            }
+        }
+        let http = b.build().unwrap_or_default();
         Self {
             base: base.into().trim_end_matches('/').to_string(),
             token: token.into(),
             http,
+            ws_tls: ws_tls_config(tls),
         }
+    }
+
+    /// Abre um WebSocket na API respeitando a política TLS do cliente.
+    pub async fn connect_ws(
+        &self,
+        url: &str,
+    ) -> Result<
+        tokio_tungstenite::WebSocketStream<
+            tokio_tungstenite::MaybeTlsStream<tokio::net::TcpStream>,
+        >,
+        tokio_tungstenite::tungstenite::Error,
+    > {
+        let connector = self
+            .ws_tls
+            .clone()
+            .map(tokio_tungstenite::Connector::Rustls);
+        let (ws, _) =
+            tokio_tungstenite::connect_async_tls_with_config(url, None, false, connector).await?;
+        Ok(ws)
     }
 
     pub fn base_url(&self) -> &str {
@@ -176,6 +309,49 @@ impl Client {
     pub async fn delete_q(&self, path: &str, query: &[(&str, String)]) -> ApiResult {
         let url = format!("{}{}", self.url(path), query_string(query));
         Self::finish(self.http.delete(url).bearer_auth(&self.token).send().await).await
+    }
+
+    // ----- autenticação e usuários -----
+
+    /// `POST /api/auth/login` sem token (função associada: ainda não há sessão).
+    pub async fn login(
+        base: &str,
+        login: &str,
+        password: &str,
+        client: Option<&str>,
+    ) -> Result<Value, String> {
+        let c = Client::new(base, "");
+        let url = c.url("auth/login");
+        let body = json!({ "login": login, "password": password, "client": client });
+        Self::finish(c.http.post(url).json(&body).send().await).await
+    }
+    pub async fn logout(&self) -> ApiResult {
+        self.post("auth/logout", None).await
+    }
+    pub async fn me(&self) -> ApiResult {
+        self.get("auth/me").await
+    }
+    pub async fn change_password(&self, current: &str, new: &str) -> ApiResult {
+        self.post(
+            "auth/password",
+            Some(json!({ "current": current, "new": new })),
+        )
+        .await
+    }
+    pub async fn users(&self) -> ApiResult {
+        self.get("users").await
+    }
+    pub async fn create_user(&self, body: Value) -> ApiResult {
+        self.post("users", Some(body)).await
+    }
+    pub async fn patch_user(&self, id: &str, body: Value) -> ApiResult {
+        self.patch(&format!("users/{id}"), body).await
+    }
+    pub async fn deactivate_user(&self, id: &str) -> ApiResult {
+        self.delete(&format!("users/{id}")).await
+    }
+    pub async fn user_sessions(&self, id: &str) -> ApiResult {
+        self.get(&format!("users/{id}/sessions")).await
     }
 
     // ----- sistema -----
@@ -607,8 +783,8 @@ impl Client {
             let mut backoff = Duration::from_secs(1);
             loop {
                 let url = format!("{}/api/events?token={}", me.ws_base(), me.token);
-                match tokio_tungstenite::connect_async(&url).await {
-                    Ok((mut ws, _)) => {
+                match me.connect_ws(&url).await {
+                    Ok(mut ws) => {
                         backoff = Duration::from_secs(1);
                         if sink.send(ClientEvent::Connected).is_err() {
                             return;

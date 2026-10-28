@@ -51,6 +51,8 @@ pub struct RealtimeDeps {
     pub host: Arc<dyn BrainHost>,
     pub bus: EventBus,
     pub storage: will_storage::Storage,
+    /// Usuário dono desta sessão (`None` = instância única/legado).
+    pub owner: Option<String>,
 }
 
 #[derive(Clone)]
@@ -339,6 +341,7 @@ impl RealtimeManager {
         self.deps.bus.emit(Event::Voice {
             state: state.to_string(),
             detail: detail.clone(),
+            user: self.deps.owner.clone(),
         });
         self.audio_control(json!({"type": "state", "state": state, "detail": detail}));
     }
@@ -404,7 +407,7 @@ impl RealtimeManager {
             usd,
             estimated: true,
             duration_secs: Some(duration.as_secs() as i64),
-            note: None,
+            note: self.deps.owner.as_ref().map(|u| format!("user:{u}")),
         };
         tokio::spawn(async move {
             if let Err(e) = storage.add_ai_cost(&rec).await {

@@ -50,7 +50,7 @@ Com o módulo ligado (padrão), sem nenhum clique: proxy em 9223, detecção e l
 | `upstream_port` | u16 | `9222` | porta de depuração do navegador (`--remote-debugging-port`) |
 | `auto_launch` | bool | `true` | lançar o navegador quando ninguém responde no upstream |
 | `browser_path` | string opcional | `None` | executável do navegador; vazio = detectar (ordem: Chrome, Chromium, Brave, Edge, Chromium do agent-browser) |
-| `headless` | bool | `false` | `--headless=new` no lançamento; `false` = janela visível |
+| `headless` | bool | `false` | `--headless=new` no lançamento; `false` = janela visível. **Servidor sem sessão gráfica** (`will_platform::has_desktop()` falso: sem `DISPLAY`/`WAYLAND_DISPLAY`, caso do Linux server): headless é **forçado** independentemente do valor; o status mostra `launched.headless = true` e a página avisa (`docs/26` etapa 7) |
 | `user_data_dir` | path opcional | `None` → `<data_dir>/browser-profile` | perfil **dedicado** (Chrome 136+ ignora `--remote-debugging-port` no perfil padrão) |
 | `extra_args` | lista | `[]` | argumentos extras na linha de comando do navegador (entradas vazias são ignoradas) |
 | `launch_wait_secs` | u32 | `20` | quanto esperar o navegador responder depois de lançado (mínimo efetivo 3 s) |

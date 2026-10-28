@@ -1,10 +1,25 @@
 # 22 — API local (contrato interno)
 
-O serviço (`will-ia`, em qualquer modo) sobe um servidor HTTP em `http://127.0.0.1:<porta>` com esta API. Desde a ADR-0016 ela **não serve UI**: a interface é o app nativo (egui) que roda no mesmo processo e fala com o `AppState` diretamente. A API fica como contrato **interno/headless/automação**: modo `will-ia serve`, `scripts/smoke.sh`, clientes externos e a segunda instância do binário (`POST /api/ui/show`).
+O servidor (`will-ia`, residente ou `serve`) sobe esta API em `http://127.0.0.1:<porta>` por padrão. O endereço vem de `settings.network.bind` (ou `will-ia --bind <ip>`, que sobrepõe); fora do loopback só com TLS (`settings.network.tls`, certificado próprio ou autoassinado em `<data_dir>/tls/`) ou com `allow_remote_without_tls` explícito; senão o servidor volta para `127.0.0.1` e registra erro (`docs/12`). Com TLS a URL é `https://host:porta` e o cliente precisa confiar no certificado (`will-client::TlsOptions { ca_pem, insecure }`; o app fixa o PEM no perfil). **Não há CORS**: a API não atende navegadores, só o app (`will-client`) e scripts; requisições com `Origin` não recebem cabeçalhos `Access-Control-*`. Ela **não serve UI** em HTML: desde a fase 5 (`docs/26`, ADR-0019) é o **contrato entre o app desktop `will-ia-app` e o servidor**, consumido pelo crate tipado `will-client` (um método por rota + WS de eventos + WS de áudio), além de `scripts/smoke.sh`, automações e clientes externos. A porta efetiva fica em `<data_dir>/api-port` (é assim que o app descobre o servidor local).
 
 ## Autenticação
 
-Token local gerado na primeira execução, gravado em `<data_dir>/ui-session.token` (0600) e impresso no log (`will-ia info` também o mostra). Enviado como `Authorization: Bearer <token>` e, no WebSocket, como `?token=`. Endpoints sem token: `GET /api/health`.
+Toda rota (exceto `GET /api/health` e `POST /api/auth/login`) exige um bearer, enviado como `Authorization: Bearer <token>` ou, no WebSocket e em downloads, como `?token=`. O middleware `auth` (`crates/will-server/src/api/mod.rs`) aceita **dois tipos de token** e põe um `Principal` (`will_core::auth`: `user_id?`, `username`, `name`, `role`, `must_change_password`) na requisição:
+
+| Token | De onde vem | Quem é | Uso |
+|---|---|---|---|
+| **Token local da API** | `<data_dir>/ui-session.token` (0600), gerado na primeira execução; `will-ia info` o mostra | `Principal::local()`: **admin implícito**, `username = "local"`, sem `user_id` | Só para quem tem acesso ao disco do servidor: app em loopback ("Esta máquina"), `scripts/smoke.sh`, automações locais. Não serve para login de pessoa; `POST /api/auth/password` com ele responde 400 |
+| **Token de sessão** | `POST /api/auth/login` (usuário + senha) | O usuário da sessão, com seu papel (`admin` \| `member`) | App conectado a um servidor (remoto ou local) com conta; é o que fica salvo no perfil do app |
+
+Sessão: token aleatório de 32 bytes (hex); o servidor guarda só o **sha256** (`sessions.token_hash`), com validade **fixa de 30 dias** (não renova pelo uso; `last_used_at` é atualizado no máximo uma vez por minuto), `client` livre (ex.: `will-ia-app/0.1.2 linux`). Sessões expiradas são apagadas ao serem usadas e na subida do servidor. Desativar um usuário derruba todas as suas sessões; usuário inativo não autentica.
+
+Primeira subida sem usuários (`bootstrap_admin`): cria `admin` ("Administrador", papel `admin`, `must_change_password = 1`) com senha aleatória de 16 caracteres gravada em `<data_dir>/admin-initial-password.txt` (0600; duas linhas: usuário e senha), avisa no log e em `/api/logs`; `will-ia info` imprime usuário e senha. O arquivo é apagado na primeira troca de senha.
+
+**Portão de administrador** (`admin_gate` / `is_admin_path`): com `Principal` de membro, estas rotas respondem **403** `{ "error": "só administradores" }`: `PUT /api/settings`, `/api/secrets*`, `/api/engine/tokens*`, `/api/mcp/script-token*`, `PUT /api/mcp/tools/{name}/policy`, `/api/mcp/external*`, `/api/users*`, `POST /api/kb/scaffold`, `POST /api/kb/open`, `GET /api/kb/browse`, `GET /api/diagnostics`, `/api/browser/install/*`, `POST /api/browser/launch`, `POST /api/browser/close`, `/api/google/connect`, `/api/google/accounts/*` (reautorizar, revogar), `/api/google/calendars*`, `/api/whatsapp/pair|unlink|reconnect`, `/api/whatsapp/accounts/*`, `GET /api/network/cert`. Tudo o mais (threads, mensagens, uploads, `files`, aprovações, agendamentos, voz, logs, custos, leitura de settings/status/health) é liberado a membros.
+
+Códigos: **401** `token de sessão ausente` / `token de sessão inválido` (também para sessão expirada ou usuário desativado) / `usuário ou senha inválidos` / `senha atual incorreta`; **403** só administradores; **429** `muitas tentativas; aguarde alguns minutos` no login (`LoginLimiter`: **10 tentativas por IP em 15 min**, contador zerado no login bem-sucedido).
+
+**Autoria**: o `Principal` vira rótulo em `turns.author` (`username`; `local` para o token local; `NULL` para Telegram/voz/scheduler), em `approvals.decided_via = "ui:<username>"` e nos logs de login/criação de usuário. Threads continuam compartilhadas: todo usuário vê todas.
 
 ## Convenções
 
@@ -14,10 +29,24 @@ Token local gerado na primeira execução, gravado em `<data_dir>/ui-session.tok
 
 ## Endpoints
 
+### Autenticação e usuários (`docs/26`, etapa 4)
+| Método | Rota | Descrição |
+|---|---|---|
+| POST | `/api/auth/login` | **sem token**. `{ login, password, client? }` (`login` = usuário **ou** e-mail, sem diferenciar maiúsculas) → `{ token, user: Principal, must_change_password }`. 401 credenciais/usuário inativo; 429 rate limit |
+| POST | `/api/auth/logout` | invalida a sessão do token usado → `{ ok }` (com o token local é inócuo) |
+| GET | `/api/auth/me` | o `Principal` do token (`{ user_id, username, name, role, must_change_password }`) |
+| POST | `/api/auth/password` | `{ current?, new }` troca a própria senha; `current` é dispensado quando `must_change_password` está ligado; mínimo 8 caracteres (400); apaga `admin-initial-password.txt`. 400 com o token local |
+| GET | `/api/users` | **admin**. Lista `UserRecord` (`id, username, name, email, role, active, must_change_password, created_at, last_login_at`; nunca o hash) |
+| POST | `/api/users` | **admin**. `{ username, password, name?, email?, role?: admin\|member, must_change_password?: true }`; `username` minúsculo `[a-z0-9._-]`, único; senha ≥ 8 |
+| PATCH | `/api/users/{id}` | **admin**. `{ name?, email?, role?, active?, password? }`; `password` redefine, força troca no próximo login e derruba as sessões do usuário; `active: false` derruba as sessões. 400 ao desativar/rebaixar a própria conta |
+| DELETE | `/api/users/{id}` | **admin**. **Desativa** (não apaga: a autoria em turnos/aprovações continua válida); 400 na própria conta |
+| GET | `/api/users/{id}/sessions` | **admin**. `[ { token_hash, user_id, created_at, expires_at, last_used_at, client } ]` |
+
 ### Sistema
 | Método | Rota | Descrição |
 |---|---|---|
-| GET | `/api/health` | `{ ok, version, uptime_secs }` |
+| GET | `/api/health` | sem token. `{ ok, version, scheme: "http"\|"https", tls_fingerprint_sha256: hex\|null }` (o app compara a impressão digital com a do PEM fixado no perfil) |
+| GET | `/api/network/cert` | **admin**. Certificado TLS em uso: `{ path, pem, fingerprint_sha256 }` (tudo `null` sem TLS). É o PEM que o admin copia para os perfis dos apps remotos |
 | GET | `/api/status` | módulos (`{module: ModuleStatus}`), KB, engine stats, counts |
 | GET | `/api/settings` | `Settings` + `secrets_present: {campo: bool}` |
 | PUT | `/api/settings` | corpo `Settings` parcial por seção: `{ "section": "telegram", "value": {...} }` → aplica a quente |
@@ -26,10 +55,10 @@ Token local gerado na primeira execução, gravado em `<data_dir>/ui-session.tok
 | GET | `/api/logs?limit&module&level` | registros |
 | GET | `/api/costs?limit&source` | registros de custo de IA (`ai_costs`) |
 | GET | `/api/costs/summary?source` | totais por período (hoje, 7 d, 30 d, total) e por fonte |
-| POST | `/api/ui/screenshot?nav=` | captura da janela em `<data_dir>/screenshot.png` (diagnóstico) |
+| POST | `/api/ui/screenshot?nav=` | pede uma captura da janela do **app**: o servidor roda `will-ia-app screenshot --nav <pagina>` (binário ao lado do `will-ia` ou no PATH), que grava `<config>/will-ia-app/screenshot.png`. Diagnóstico/iteração de layout |
 | GET | `/api/diagnostics` | zip (segredos redigidos) |
 | WS | `/api/events?token=` | stream de `Event` (JSON por mensagem) |
-| POST | `/api/ui/show` | pede à instância ativa que mostre a janela principal (usado pela segunda execução de `will-ia`). Só responde `{ "ok": true }` no modo GUI; no headless retorna `{ "ok": false, "error": "sem GUI" }` |
+| POST | `/api/ui/show` | **lança (ou traz para frente) o app** `will-ia-app`: o servidor executa o binário ao lado do seu ou no PATH; se o app já está aberto, ele mesmo só mostra a janela (ipc do app, `docs/13`). Responde `{ "ok": true }` quando há o gancho (hoje em `will-ia` e `will-ia serve`); sem app instalado o erro fica só no log. Em servidor sem desktop é inútil, mas inofensivo |
 
 ### Threads
 | Método | Rota | Descrição |
@@ -37,9 +66,9 @@ Token local gerado na primeira execução, gravado em `<data_dir>/ui-session.tok
 | GET | `/api/threads` | lista `ThreadSummary` (alive/pending/session_expired preenchidos) |
 | POST | `/api/threads` | `{ title? }` cria thread de origem `ui` |
 | GET | `/api/threads/{id}` | detalhe |
-| GET | `/api/threads/{id}/turns?limit` | turnos (`prompt` cru, `prompt_display` sem notas de anexo, `attachments[]` = `{name, mime, path, size}`, `merged_into` em turnos absorvidos) |
+| GET | `/api/threads/{id}/turns?limit` | turnos (`author` = quem enviou pela API, `null` para outros canais; `prompt` cru, `prompt_display` sem notas de anexo, `attachments[]` = `{name, mime, path, size}`, `merged_into` em turnos absorvidos) |
 | GET | `/api/turns/{id}/events` | eventos do turno |
-| POST | `/api/threads/{id}/messages` | `{ text, attachments?: [caminho local] }` → `{ turn_id, mid_turn }` (imediato). Cada anexo é copiado para `<kb>/inbox/ui/<data-hora>-<nome>` e entra no prompt como nota de anexo; `text` pode ser vazio se houver anexos |
+| POST | `/api/threads/{id}/messages` | `{ text, attachments?: [caminho no servidor] }` → `{ turn_id, mid_turn }` (imediato). Cada anexo é copiado para `<kb>/inbox/ui/<data-hora>-<nome>` (já no inbox, como os vindos de `POST /api/uploads`, entra sem nova cópia) e vai ao prompt como nota de anexo; `text` pode ser vazio se houver anexos |
 | POST | `/api/threads/{id}/restart` | mantém sessão |
 | POST | `/api/threads/{id}/reset` | esquece sessão |
 | POST | `/api/threads/{id}/interrupt` | |
@@ -77,7 +106,7 @@ Token local gerado na primeira execução, gravado em `<data_dir>/ui-session.tok
 | GET | `/api/mcp/calls?limit` | log |
 | GET | `/api/approvals` | pendentes |
 | GET | `/api/approvals/history?limit` | |
-| POST | `/api/approvals/{id}` | `{ decision: approved\|denied }` |
+| POST | `/api/approvals/{id}` | `{ decision: approved\|denied }`; grava `decided_via = "ui:<username>"` |
 | GET | `/api/mcp/external` | catálogo |
 | PUT | `/api/mcp/external/{name}` | cria/edita (`ExternalMcpServer`; segredos como `{ "$secret_value": "..." }` no corpo → gravados no keyring) |
 | DELETE | `/api/mcp/external/{name}` | |
@@ -94,9 +123,9 @@ Token local gerado na primeira execução, gravado em `<data_dir>/ui-session.tok
 ### Voz
 | Método | Rota | Descrição |
 |---|---|---|
-| POST | `/api/voice/start` / `/stop` / `/toggle` | sessão |
-| GET | `/api/voice/status` | |
-| WS | `/api/voice/audio?token=` | **só no modo headless** (no app o áudio vai pelo `cpal`): cliente envia PCM16 24 kHz mono (frames), recebe PCM16 do assistente; mensagens de texto JSON para controle (`{"type":"ptt","down":true}`, `{"type":"commit"}`) e eventos (`speaking`, `listening`, `transcript`) |
+| POST | `/api/voice/start` / `/stop` / `/toggle` | sessão de voz **do usuário do token** (uma por usuário; `docs/07`). `start`/`toggle` respeitam `realtime.max_sessions` contando as sessões ativas de outros usuários → 400 `limite de N sessão(ões) de voz simultânea(s) atingido`. Resposta `{ ok, active, user }` |
+| GET | `/api/voice/status` | estado da sessão do usuário (`active`, `state`, …) + `user`, `sessions: [{ user, active, state }]` (todas), `max_sessions`, `active_sessions` |
+| WS | `/api/voice/audio?token=` | **único caminho de áudio** (app e clientes): liga à sessão do usuário do token; cliente envia PCM16 24 kHz mono (frames), recebe PCM16 do assistente; mensagens de texto JSON para controle (`{"type":"ptt","down":true}`, `{"type":"commit"}`) e eventos (`speaking`, `listening`, `transcript`) |
 | GET | `/api/voice/transcripts?limit` | |
 
 ### WhatsApp

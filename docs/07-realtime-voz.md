@@ -2,7 +2,9 @@
 
 Conversa por voz em tempo real. O modelo Realtime é a **boca e o ouvido**; o Claude Code é o **cérebro**. O Realtime responde sozinho o que é trivial e delega o resto via function calling, sem interromper a conversa.
 
-> **Implementação (ADR-0016):** a captura e a reprodução de áudio acontecem **no app** (`will-desktop`, via `cpal`) e chegam ao `RealtimeManager` por canais em processo; o crate `will-realtime` cuida do WebSocket com a OpenAI, do handoff e do pipeline de áudio. O WebSocket `/api/voice/audio` (`docs/22`) permanece apenas para o modo headless (`will-ia serve`) e clientes externos.
+> **Implementação (ADR-0016, ADR-0019):** a captura e a reprodução de áudio acontecem **no app** (`will-ia-app`, via `cpal`) e viajam em PCM16 24 kHz pelo WebSocket `/api/voice/audio` (`will-client::VoiceLink`) até o **servidor**, onde o crate `will-realtime` cuida do WebSocket com a OpenAI, do handoff e do pipeline de áudio. Esse WS é o **único** caminho de áudio (loopback ou rede).
+>
+> **Uma sessão por usuário (etapa 6 de `docs/26`):** o servidor mantém um `RealtimeManager` por usuário conectado (`AppState.voice: HashMap<username, …>`, `modules::voice_manager_for`), criado sob demanda com `RealtimeDeps.owner = username`. `POST /api/voice/start|stop|toggle`, `GET /api/voice/status` e o WS de áudio agem sobre a sessão **do usuário do token** (`Principal`); o token local da API é o usuário `local`. `RealtimeSettings.max_sessions` (padrão 3, Voz › "Sessões simultâneas") limita as sessões **ativas** no servidor: quem tenta iniciar além do teto recebe 400 "limite de N sessão(ões) de voz simultânea(s) atingido" (a própria sessão já ativa nunca conta contra si). Cada usuário tem a sua thread de voz **"Voz · <user>"** ("Voz" para `local`), com `BrainHost` próprio (`orchestrator::UserBrain`) e autor `voz:<user>` nos turnos; `Event::Voice { state, detail, user }` identifica a sessão nos eventos, e o custo entra em `ai_costs` com `note = "user:<u>"`. Mudar chave/configurações da voz (`start_realtime`) reaplica a todas as sessões; a bolinha do módulo (`recompute_realtime_status`) é global (desligado / sem chave / pronto).
 
 ## Transporte
 
@@ -96,7 +98,7 @@ Observações:
 - A resposta ao `function_call` é **imediata** (`status: working`), porque a Realtime API espera um `function_call_output` para prosseguir. O resultado real chega depois como item de conversa.
 - Se a sessão de voz já tiver sido encerrada quando o cérebro terminar, o resultado vai para a thread na UI e gera notificação nativa ("O cérebro terminou: …"), opcionalmente com TTS curto.
 - Texto do cérebro passa por uma limpeza antes de ir ao Realtime: remove blocos de código, tabelas e caminhos longos, e limita tamanho (configurável, padrão 1500 caracteres) para a fala não ficar interminável. O texto completo fica na thread.
-- A thread padrão de voz é fixa (`origin = realtime`, título "Voz") e reutilizada. `new_thread: true` cria outra e a torna a ativa da sessão de voz.
+- A thread padrão de voz é **por usuário** (`origin = realtime`, título "Voz · <user>", ou "Voz" para o token local) e reutilizada: `Host::voice_thread_for(user, new_thread, title)` devolve a corrente da sessão, senão a última thread `realtime` com esse título, senão cria uma. `new_thread: true` cria outra e a torna a ativa da sessão de voz daquele usuário. Como as threads são compartilhadas, outros usuários veem "Voz · ligia" na lista, mas só a sessão da Ligia escreve nela pela voz.
 
 ## Interrupção (barge-in)
 
@@ -107,7 +109,7 @@ Com `server_vad`, ao receber `input_audio_buffer.speech_started` enquanto áudio
 - Thread de captura: callback do `cpal` copia frames para um buffer sem alocação; uma task tokio drena, converte para PCM16 mono 24 kHz (reamostragem linear a partir da taxa do dispositivo), codifica base64 e envia `input_audio_buffer.append` em chunks de ~100 ms. O nível do microfone alimenta o indicador flutuante.
 - Thread de reprodução: buffer alimentado pelas `*.audio.delta` decodificadas (`AudioOut`); callback do `cpal` consome, reamostrando para a taxa do dispositivo. Underrun → silêncio, sem pânico.
 - Dispositivos de entrada/saída enumerados pelo `cpal` e selecionáveis nas configurações; padrão do sistema se não configurado. Troca a quente reinicia apenas os streams.
-- Modo headless (`will-ia serve`): não há `cpal`; um cliente externo envia/recebe PCM16 pelo WS `/api/voice/audio` com o mesmo formato.
+- O app envia/recebe esse PCM16 pelo WS `/api/voice/audio` do servidor (`will-client::VoiceLink`), autenticado pelo token do perfil, que o liga à sessão do usuário; clientes externos usam o mesmo WS com o mesmo formato. A latência extra é a da rede (ida e volta); aceitável em LAN/VPN.
 - Sem gravação em disco por padrão.
 
 ## Reconexão e erros
@@ -118,7 +120,7 @@ Com `server_vad`, ao receber `input_audio_buffer.speech_started` enquanto áudio
 
 ## Custos
 
-A Realtime API cobra por minuto de áudio de entrada e saída. A UI mostra duração da sessão e estimativa; há opção de limite de minutos por dia.
+A Realtime API cobra por minuto de áudio de entrada e saída. A UI mostra duração da sessão e estimativa; há opção de limite de minutos por dia. Com várias sessões, cada registro em `ai_costs` leva `note = "user:<username>"`, e a página Custos pode filtrar por usuário.
 
 ## Transcrições
 

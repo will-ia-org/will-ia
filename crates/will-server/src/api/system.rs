@@ -7,9 +7,29 @@ use std::collections::BTreeMap;
 use will_core::Module;
 
 pub async fn health(State(state): State<App>) -> ApiResult<Value> {
-    Ok(Json(
-        json!({ "ok": true, "version": env!("CARGO_PKG_VERSION"), "uptime_secs": state.started_at.elapsed().as_secs() }),
-    ))
+    Ok(Json(json!({
+        "ok": true,
+        "version": env!("CARGO_PKG_VERSION"),
+        "uptime_secs": state.started_at.elapsed().as_secs(),
+        "scheme": *state.scheme.read(),
+        "tls_fingerprint_sha256": *state.tls_fingerprint.read(),
+    })))
+}
+
+/// Certificado TLS em uso (PEM), para o app fixar no perfil. Só admin.
+pub async fn network_cert(State(state): State<App>) -> ApiResult<Value> {
+    let path = state.tls_cert_path.read().clone();
+    match path {
+        Some(p) => {
+            let pem = std::fs::read_to_string(&p).map_err(|e| internal(e.to_string()))?;
+            Ok(Json(
+                json!({ "path": p, "pem": pem, "fingerprint_sha256": *state.tls_fingerprint.read() }),
+            ))
+        }
+        None => Ok(Json(
+            json!({ "path": null, "pem": null, "fingerprint_sha256": null }),
+        )),
+    }
 }
 
 pub async fn status(State(state): State<App>) -> ApiResult<Value> {

@@ -79,13 +79,57 @@ pub fn recompute_engine_status(state: &Arc<AppState>) {
 /// Voz: delega ao `RealtimeManager` (`Running` = habilitada + chave, em sessão
 /// ou não). Sem gerenciador: `Disabled` se desligada nas configurações.
 pub fn recompute_realtime_status(state: &Arc<AppState>) {
-    let rt = state.realtime.read().clone();
-    let status = match rt {
-        Some(rt) => rt.module_status(),
-        None if !state.settings.read().realtime.enabled => ModuleStatus::Disabled,
-        None => ModuleStatus::Degraded("módulo de voz não inicializado".into()),
+    let enabled = state.settings.read().realtime.enabled;
+    let status = if !enabled {
+        ModuleStatus::Disabled
+    } else if state.voice_key.read().is_none() {
+        ModuleStatus::Degraded("sem chave da OpenAI".into())
+    } else {
+        // Qualquer sessão com erro recente aparece como atenção.
+        let sessions = state.voice.read().clone();
+        sessions
+            .values()
+            .map(|m| m.module_status())
+            .find(|s| matches!(s, ModuleStatus::Degraded(_)))
+            .unwrap_or(ModuleStatus::Running)
     };
     state.set_module_status(Module::Realtime, status);
+}
+
+/// Sessão de voz do usuário (cria sob demanda com as configurações atuais).
+pub fn voice_manager_for(state: &Arc<AppState>, user: &str) -> Arc<will_realtime::RealtimeManager> {
+    if let Some(m) = state.voice.read().get(user) {
+        return m.clone();
+    }
+    let settings = state.settings().realtime;
+    let key = state.voice_key.read().clone();
+    let host = state.host();
+    let brain: Arc<dyn will_core::BrainHost> = Arc::new(crate::orchestrator::UserBrain {
+        host,
+        user: user.to_string(),
+    });
+    let m = will_realtime::RealtimeManager::new(
+        will_realtime::RealtimeDeps {
+            host: brain,
+            bus: state.bus.clone(),
+            storage: state.storage.clone(),
+            owner: Some(user.to_string()),
+        },
+        settings,
+        key,
+    );
+    state.voice.write().insert(user.to_string(), m.clone());
+    m
+}
+
+/// Quantas sessões de voz estão ativas agora.
+pub fn active_voice_sessions(state: &AppState) -> usize {
+    state
+        .voice
+        .read()
+        .values()
+        .filter(|m| m.is_active())
+        .count()
 }
 
 /// Google, Agenda e Gmail a partir das contas conectadas no módulo.
@@ -116,9 +160,10 @@ pub fn recompute_google_status(state: &Arc<AppState>) {
 }
 
 pub async fn stop_all(state: &Arc<AppState>) {
-    let rt = state.realtime.read().clone();
-    if let Some(rt) = rt {
-        rt.stop().await;
+    let managers: Vec<Arc<will_realtime::RealtimeManager>> =
+        state.voice.read().values().cloned().collect();
+    for m in managers {
+        m.stop().await;
     }
     #[cfg(feature = "telegram")]
     if let Some(t) = state.telegram.read().await.clone() {
@@ -344,6 +389,7 @@ pub fn start_scheduler(state: &Arc<AppState>) {
     }
 }
 
+/// Aplica configurações/chave da voz a todas as sessões por usuário.
 pub async fn start_realtime(state: &Arc<AppState>) {
     let s = state.settings().realtime;
     let key = state
@@ -352,23 +398,11 @@ pub async fn start_realtime(state: &Arc<AppState>) {
         .await
         .ok()
         .flatten();
-    let existing = state.realtime.read().clone();
-    match existing {
-        Some(rt) => {
-            rt.update(s.clone(), key);
-        }
-        None => {
-            let rt = will_realtime::RealtimeManager::new(
-                will_realtime::RealtimeDeps {
-                    host: state.host(),
-                    bus: state.bus.clone(),
-                    storage: state.storage.clone(),
-                },
-                s.clone(),
-                key,
-            );
-            *state.realtime.write() = Some(rt);
-        }
+    *state.voice_key.write() = key.clone();
+    let managers: Vec<Arc<will_realtime::RealtimeManager>> =
+        state.voice.read().values().cloned().collect();
+    for m in managers {
+        m.update(s.clone(), key.clone());
     }
     recompute_realtime_status(state);
 }
@@ -606,6 +640,13 @@ pub async fn apply_section(state: &Arc<AppState>, section: &str) {
         }
         "realtime" => start_realtime(state).await,
         "scheduler" => start_scheduler(state),
+        "network" => {
+            state.bus.log(
+                "warn",
+                "network",
+                "Configurações de rede salvas; valem no próximo início do servidor.".to_string(),
+            );
+        }
         "browser" => {
             start_browser(state).await;
             refresh_engine(state, false).await;

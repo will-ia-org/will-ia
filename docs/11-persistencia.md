@@ -51,7 +51,9 @@ CREATE TABLE turns (
   cost_usd REAL,
   duration_ms INTEGER,
   model TEXT,
-  usage_json TEXT
+  usage_json TEXT,
+  attachments_json TEXT,                  -- migration 0004
+  author TEXT                             -- migration 0006: username de quem enviou pela API (`local` = token local; NULL = Telegram/voz/scheduler)
 );
 CREATE INDEX turns_thread ON turns(thread_id, started_at);
 
@@ -130,8 +132,31 @@ CREATE TABLE approvals (
   args_redacted TEXT,
   decided_at TEXT,
   decision TEXT,                          -- approved | denied | timeout
-  decided_via TEXT                        -- ui | notification | telegram
+  decided_via TEXT                        -- ui:<username> | notification | telegram
 );
+
+-- Contas e sessões (migration 0006; docs/26 etapa 4)
+CREATE TABLE users (
+  id TEXT PRIMARY KEY,                    -- uuid v7
+  username TEXT NOT NULL UNIQUE COLLATE NOCASE,
+  name TEXT NOT NULL,
+  email TEXT,
+  password_hash TEXT NOT NULL,            -- argon2id, PHC string
+  role TEXT NOT NULL DEFAULT 'member',    -- admin | member
+  active INTEGER NOT NULL DEFAULT 1,      -- 0 = desativado (nunca se apaga)
+  must_change_password INTEGER NOT NULL DEFAULT 0,
+  created_at TEXT NOT NULL,
+  last_login_at TEXT
+);
+CREATE TABLE sessions (
+  token_hash TEXT PRIMARY KEY,            -- sha256 do token; o token em si nunca é gravado
+  user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  created_at TEXT NOT NULL,
+  expires_at TEXT NOT NULL,               -- created_at + 30 dias
+  last_used_at TEXT,                      -- atualizado no máximo 1×/min
+  client TEXT                             -- livre (app, SO), informado no login
+);
+CREATE INDEX sessions_user ON sessions(user_id);
 
 -- Google
 CREATE TABLE google_accounts (
@@ -243,6 +268,7 @@ CREATE TABLE events_log (                 -- eventos operacionais para a aba Log
 - `turns`: sem limite por padrão (são pequenos); opção de limpeza por thread.
 - `wa_messages`: 90 dias (configurável); mídia baixada segue a retenção de `inbox/`.
 - `approvals`: 90 dias.
+- `sessions`: apagadas ao expirar (30 dias), no logout, ao desativar/redefinir senha do usuário e por `purge_expired_sessions` na subida. `users`: nunca apagados (só `active = 0`).
 - `schedule_runs`: últimos 50 por agendamento (poda na própria transação do disparo); `schedules` não expira.
 
 ## Backup
@@ -253,6 +279,10 @@ Botão "Exportar dados" gera um zip com o `.db` (via `VACUUM INTO`) e a configur
 ## Custos de IA (`ai_costs`, migration 0003)
 
 Tabela genérica: `at`, `source` (`voice`, `claude`, …), `ref` (sessão/thread/turno), `model`, `units_json` (contagens por tipo de token), `usd`, `estimated` (1 = calculado pela tabela de preços local), `duration_secs`, `note`. Resumo por período e fonte em `Storage::ai_cost_summary`.
+
+## Usuários e sessões (`users`, `sessions`, `turns.author`, migration `0006_users.sql`)
+
+Repositório em `will-storage::users` (`UserRecord` sem `password_hash` na serialização, `SessionRecord`): `count_users`, `list_users`, `get_user`, `find_user_by_login` (usuário **ou** e-mail, sem diferenciar maiúsculas), `create_user`, `update_user` (nome, e-mail, papel, ativo; desativar apaga as sessões do usuário), `set_password(id, hash, must_change)`, `touch_login`, `create_session(token_hash, user_id, ttl, client)`, `session_user(token_hash)` (só sessão não expirada + usuário ativo; apaga a expirada ao encontrá-la), `delete_session`, `delete_user_sessions`, `list_sessions`, `purge_expired_sessions` (na subida). Hash de senha e de token são responsabilidade de `will-server::auth` (argon2id, sha256); o storage só guarda strings. `turns.author` é gravado por `Storage::start_turn_by` (via `ThreadHost::send_message_from`). Ver `docs/12` e `docs/22`.
 
 ## Agendamentos (`schedules`, `schedule_runs`, migration `0005_schedules.sql`)
 

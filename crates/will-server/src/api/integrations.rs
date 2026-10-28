@@ -67,40 +67,105 @@ pub async fn telegram_status(State(state): State<App>) -> ApiResult<Value> {
 
 // ---------- Voz ----------
 
-fn rt(state: &App) -> Result<std::sync::Arc<will_realtime::RealtimeManager>, super::ApiError> {
-    state
-        .realtime
-        .read()
-        .clone()
-        .ok_or_else(|| bad("módulo de voz não inicializado"))
+/// Sessão de voz do usuário que chamou (uma por usuário, `docs/26` etapa 6).
+fn rt(state: &App, me: &will_core::Principal) -> std::sync::Arc<will_realtime::RealtimeManager> {
+    crate::modules::voice_manager_for(state, &me.username)
 }
 
-pub async fn voice_start(State(state): State<App>) -> ApiResult<Value> {
-    let r = rt(&state)?;
+/// Respeita `max_sessions` contando as sessões ativas de **outros** usuários.
+fn check_capacity(state: &App, me: &will_core::Principal) -> Result<(), super::ApiError> {
+    let max = state.settings.read().realtime.max_sessions.max(1) as usize;
+    let mine_active = state
+        .voice
+        .read()
+        .get(&me.username)
+        .map(|m| m.is_active())
+        .unwrap_or(false);
+    let active = crate::modules::active_voice_sessions(state);
+    if !mine_active && active >= max {
+        return Err(bad(format!(
+            "limite de {max} sessão(ões) de voz simultânea(s) atingido; tente mais tarde"
+        )));
+    }
+    Ok(())
+}
+
+pub async fn voice_start(
+    State(state): State<App>,
+    axum::extract::Extension(me): axum::extract::Extension<will_core::Principal>,
+) -> ApiResult<Value> {
+    check_capacity(&state, &me)?;
+    let r = rt(&state, &me);
     r.start().await.map_err(bad)?;
     crate::modules::recompute_realtime_status(&state);
-    Ok(Json(json!({ "ok": true, "active": true })))
+    Ok(Json(
+        json!({ "ok": true, "active": true, "user": me.username }),
+    ))
 }
 
-pub async fn voice_stop(State(state): State<App>) -> ApiResult<Value> {
-    let r = rt(&state)?;
+pub async fn voice_stop(
+    State(state): State<App>,
+    axum::extract::Extension(me): axum::extract::Extension<will_core::Principal>,
+) -> ApiResult<Value> {
+    let r = rt(&state, &me);
     r.stop().await;
     crate::modules::recompute_realtime_status(&state);
-    Ok(Json(json!({ "ok": true, "active": false })))
+    Ok(Json(
+        json!({ "ok": true, "active": false, "user": me.username }),
+    ))
 }
 
-pub async fn voice_toggle(State(state): State<App>) -> ApiResult<Value> {
-    let r = rt(&state)?;
+pub async fn voice_toggle(
+    State(state): State<App>,
+    axum::extract::Extension(me): axum::extract::Extension<will_core::Principal>,
+) -> ApiResult<Value> {
+    let r = rt(&state, &me);
+    if !r.is_active() {
+        check_capacity(&state, &me)?;
+    }
     let active = r.toggle().await.map_err(bad)?;
     crate::modules::recompute_realtime_status(&state);
-    Ok(Json(json!({ "ok": true, "active": active })))
+    Ok(Json(
+        json!({ "ok": true, "active": active, "user": me.username }),
+    ))
 }
 
-pub async fn voice_status(State(state): State<App>) -> ApiResult<Value> {
-    match state.realtime.read().clone() {
-        Some(r) => Ok(Json(r.status())),
-        None => Ok(Json(json!({ "active": false, "state": "disabled" }))),
+/// Status da **minha** sessão + resumo das outras (quem está falando).
+pub async fn voice_status(
+    State(state): State<App>,
+    axum::extract::Extension(me): axum::extract::Extension<will_core::Principal>,
+) -> ApiResult<Value> {
+    let settings = state.settings().realtime;
+    let mut v = match state.voice.read().get(&me.username) {
+        Some(r) => r.status(),
+        None => json!({
+            "active": false,
+            "state": "stopped",
+            "enabled": settings.enabled,
+            "has_api_key": state.voice_key.read().is_some(),
+            "model": settings.model,
+            "activation": settings.activation,
+        }),
+    };
+    let sessions: Vec<Value> = state
+        .voice
+        .read()
+        .iter()
+        .map(|(u, m)| {
+            let st = m.status();
+            json!({ "user": u, "active": m.is_active(), "state": st["state"] })
+        })
+        .collect();
+    if let Some(o) = v.as_object_mut() {
+        o.insert("user".into(), json!(me.username));
+        o.insert("sessions".into(), json!(sessions));
+        o.insert("max_sessions".into(), json!(settings.max_sessions));
+        o.insert(
+            "active_sessions".into(),
+            json!(crate::modules::active_voice_sessions(&state)),
+        );
     }
+    Ok(Json(v))
 }
 
 #[derive(serde::Deserialize)]

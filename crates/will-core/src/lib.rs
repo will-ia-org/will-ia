@@ -6,6 +6,7 @@
 //! ferramentas MCP (`WillTool`/`ToolProvider`) e o gerenciador de aprovações.
 
 pub mod approvals;
+pub mod auth;
 pub mod bus;
 pub mod host;
 pub mod ids;
@@ -18,6 +19,7 @@ pub mod thread;
 pub mod tools;
 
 pub use approvals::{ApprovalDecision, ApprovalManager, ApprovalRequest};
+pub use auth::{Principal, Role};
 pub use bus::EventBus;
 pub use host::{BrainHost, BrainTask, ClaudeTokenInfo, SharedThreadHost, ThreadHost};
 pub use ids::{ApprovalId, MessageId, ScheduleId, ThreadId, TurnId};
@@ -103,10 +105,13 @@ pub enum Event {
         module: String,
         message: String,
     },
-    /// Eventos de voz (sessão aberta/fechada, falando, ouvindo…).
+    /// Eventos de voz (sessão aberta/fechada, falando, ouvindo…). `user`: dono
+    /// da sessão (uma por usuário conectado); `None` em registros antigos.
     Voice {
         state: String,
         detail: Option<String>,
+        #[serde(default)]
+        user: Option<String>,
     },
     /// Estado do pareamento do WhatsApp (qr, code, connected, disconnected).
     WhatsApp {

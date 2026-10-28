@@ -1,0 +1,801 @@
+//! Página Conexão: a que servidor o app está ligado, quem está logado nele e
+//! os perfis salvos. Aparece sozinha quando não há servidor alcançável.
+//!
+//! Login (`docs/26`, etapa 4): usuário + senha → `POST /api/auth/login` devolve
+//! um token de sessão, que fica no perfil (`profiles.json`) junto do nome da
+//! conta. O campo Token continua existindo para quem usa o token local da API
+//! (`will-ia info`). A troca obrigatória de senha do primeiro acesso é um modal
+//! desta página; o app navega para cá quando `principal.must_change_password`.
+//!
+//! TLS (`docs/26`, etapa 5): para `https://` o perfil guarda o certificado do
+//! servidor em PEM (`ca_pem`), fixado no estilo TOFU: "Buscar do servidor" lê a
+//! impressão digital em `GET /api/health` (sem validar o certificado, só para
+//! mostrar), o usuário confere com a que o servidor exibe em Configurações →
+//! Rede e cola o PEM aqui. `insecure` aceita qualquer certificado (só testes).
+
+use super::Cx;
+use crate::i18n::{tr, trf};
+use crate::profiles::{self, Profile, ProfilesFile};
+use crate::service::{Task, UiCommand};
+use crate::ui::{self, Tone};
+use serde_json::{json, Value};
+use will_client::{pem_fingerprint, Client, TlsOptions};
+use will_core::Role;
+
+/// Identificação do app no login (aparece na lista de sessões do usuário).
+const CLIENT_NAME: &str = "will-ia-app";
+/// Tamanho mínimo exigido na troca de senha (o servidor pode exigir mais).
+const MIN_PASSWORD_LEN: usize = 8;
+
+pub struct ConnectPage {
+    file: ProfilesFile,
+    local: Option<Profile>,
+    // formulário de perfil
+    edit_id: Option<String>,
+    name: String,
+    url: String,
+    token: String,
+    username: String,
+    password: String,
+    /// Certificado do servidor (PEM) para `https://`; vazio = confiar no sistema.
+    ca_pem: String,
+    /// Aceitar qualquer certificado (inseguro).
+    insecure: bool,
+    login_task: Option<Task<Value>>,
+    logout_task: Option<Task<Value>>,
+    /// `GET /api/health` do servidor do formulário (Buscar do servidor).
+    health_task: Option<Task<Value>>,
+    fetched: Option<FetchedHealth>,
+    // troca obrigatória de senha
+    pw_new: String,
+    pw_confirm: String,
+    pw_task: Option<Task<Value>>,
+    /// Senha já trocada nesta conexão: esconde o modal até o app recarregar o `principal`.
+    pw_done: bool,
+    /// Pede ao app que recarregue `GET /api/auth/me` (lido e zerado pelo app).
+    pub principal_dirty: bool,
+    pub last_error: Option<String>,
+}
+
+impl Default for ConnectPage {
+    fn default() -> Self {
+        Self {
+            file: profiles::load(),
+            local: profiles::local_profile(),
+            edit_id: None,
+            name: String::new(),
+            url: "http://".into(),
+            token: String::new(),
+            username: String::new(),
+            password: String::new(),
+            ca_pem: String::new(),
+            insecure: false,
+            login_task: None,
+            logout_task: None,
+            health_task: None,
+            fetched: None,
+            pw_new: String::new(),
+            pw_confirm: String::new(),
+            pw_task: None,
+            pw_done: false,
+            principal_dirty: false,
+            last_error: None,
+        }
+    }
+}
+
+/// Resposta de `GET /api/health` obtida por "Buscar do servidor".
+struct FetchedHealth {
+    url: String,
+    scheme: String,
+    fingerprint: Option<String>,
+}
+
+/// Normaliza uma impressão digital SHA-256 para comparação (hex minúsculo, sem `:`).
+fn norm_fp(fp: &str) -> String {
+    fp.chars()
+        .filter(|c| c.is_ascii_hexdigit())
+        .collect::<String>()
+        .to_ascii_lowercase()
+}
+
+/// Papel no idioma da UI.
+pub fn role_label(role: Role) -> &'static str {
+    match role {
+        Role::Admin => tr("administrador"),
+        Role::Member => tr("membro"),
+    }
+}
+
+impl ConnectPage {
+    pub fn refresh(&mut self) {
+        self.file = profiles::load();
+        self.local = profiles::local_profile();
+    }
+
+    fn clear_form(&mut self) {
+        self.edit_id = None;
+        self.name.clear();
+        self.url = "http://".into();
+        self.token.clear();
+        self.username.clear();
+        self.password.clear();
+        self.ca_pem.clear();
+        self.insecure = false;
+        self.fetched = None;
+    }
+
+    fn load_form(&mut self, p: &Profile) {
+        self.edit_id = Some(p.id.clone());
+        self.name = p.name.clone();
+        self.url = p.url.clone();
+        self.token = p.token.clone();
+        self.username = p.username.clone().unwrap_or_default();
+        self.password.clear();
+        self.ca_pem = p.ca_pem.clone().unwrap_or_default();
+        self.insecure = p.insecure;
+        self.fetched = None;
+    }
+
+    fn form_is_https(&self) -> bool {
+        self.url.trim_start().starts_with("https://")
+    }
+
+    /// Política de certificado do formulário (só importa em `https://`).
+    fn form_tls(&self) -> TlsOptions {
+        TlsOptions {
+            ca_pem: Some(self.ca_pem.trim().to_string()).filter(|p| !p.is_empty()),
+            insecure: self.insecure,
+        }
+    }
+
+    /// `https://` sem PEM fixado nem modo inseguro: só funciona se o sistema
+    /// confiar no certificado (CA pública), o que não é o caso do autoassinado.
+    fn https_without_trust(&self) -> bool {
+        self.form_is_https() && !self.insecure && self.ca_pem.trim().is_empty()
+    }
+
+    fn https_hint(&self, cx: &mut Cx) {
+        if self.https_without_trust() {
+            cx.toasts.info(tr(
+                "https:// sem certificado fixado: a conexão só funciona se o sistema confiar no certificado do servidor. Cole o PEM em \"TLS (https)\" ou marque o modo inseguro.",
+            ));
+        }
+    }
+
+    fn form_url(&self) -> Result<String, String> {
+        let url = self.url.trim().trim_end_matches('/').to_string();
+        if !url.starts_with("http://") && !url.starts_with("https://") {
+            return Err(tr("A URL precisa começar com http:// ou https://").into());
+        }
+        Ok(url)
+    }
+
+    /// Perfil montado a partir do formulário (id novo ou o que está em edição).
+    fn form_profile(&self, url: String, token: String, username: Option<String>) -> Profile {
+        let name = if self.name.trim().is_empty() {
+            url.clone()
+        } else {
+            self.name.trim().to_string()
+        };
+        let id = self
+            .edit_id
+            .clone()
+            .unwrap_or_else(|| format!("p{}", chrono::Utc::now().timestamp_millis()));
+        let tls = self.form_tls();
+        Profile {
+            id,
+            name,
+            url,
+            token,
+            username,
+            ca_pem: tls.ca_pem,
+            insecure: tls.insecure,
+        }
+    }
+
+    fn store(&mut self, p: &Profile) -> Result<(), String> {
+        self.file.profiles.retain(|x| x.id != p.id);
+        self.file.profiles.push(p.clone());
+        profiles::save(&self.file)
+    }
+
+    fn save_form(&mut self) -> Result<(), String> {
+        let url = self.form_url()?;
+        let username = Some(self.username.trim().to_string()).filter(|u| !u.is_empty());
+        let p = self.form_profile(url, self.token.trim().to_string(), username);
+        self.store(&p)?;
+        self.clear_form();
+        Ok(())
+    }
+
+    /// Dispara `POST /api/auth/login` com o que está no formulário.
+    fn start_login(&mut self, cx: &mut Cx) {
+        let url = match self.form_url() {
+            Ok(u) => u,
+            Err(e) => {
+                cx.toasts.error(e);
+                return;
+            }
+        };
+        let user = self.username.trim().to_string();
+        let pass = self.password.clone();
+        if user.is_empty() || pass.is_empty() {
+            cx.toasts.error(tr("Informe usuário e senha."));
+            return;
+        }
+        self.https_hint(cx);
+        let tls = self.form_tls();
+        let custom_tls = self.form_is_https() && (tls.insecure || tls.ca_pem.is_some());
+        // Função associada: ainda não há sessão, então o cliente recebido é ignorado.
+        // Em https com certificado fixado/inseguro, o cliente de login precisa da
+        // mesma política de TLS; a rota é pública e o token vazio é ignorado.
+        self.login_task = Some(cx.svc.call(move |_c| async move {
+            if custom_tls {
+                Client::with_tls(&url, "", &tls)
+                    .post(
+                        "auth/login",
+                        Some(json!({ "login": user, "password": pass, "client": CLIENT_NAME })),
+                    )
+                    .await
+            } else {
+                Client::login(&url, &user, &pass, Some(CLIENT_NAME)).await
+            }
+        }));
+    }
+
+    /// `GET /api/health` no servidor do formulário, sem validar o certificado:
+    /// serve só para mostrar a impressão digital que o usuário vai conferir.
+    fn start_fetch_health(&mut self, cx: &mut Cx) {
+        let url = match self.form_url() {
+            Ok(u) => u,
+            Err(e) => {
+                cx.toasts.error(e);
+                return;
+            }
+        };
+        let tls = TlsOptions {
+            ca_pem: None,
+            insecure: true,
+        };
+        self.health_task = Some(
+            cx.svc
+                .call(move |_c| async move { Client::with_tls(&url, "", &tls).health().await }),
+        );
+    }
+
+    /// Login respondeu: guarda o token no perfil e conecta.
+    fn finish_login(&mut self, cx: &mut Cx, v: Value) {
+        let token = ui::s(&v, "token");
+        if token.is_empty() {
+            cx.toasts
+                .error(tr("O servidor não devolveu um token de sessão."));
+            return;
+        }
+        let username = v
+            .get("user")
+            .map(|u| ui::s(u, "username"))
+            .filter(|u| !u.is_empty())
+            .unwrap_or_else(|| self.username.trim().to_string());
+        let url = match self.form_url() {
+            Ok(u) => u,
+            Err(e) => {
+                cx.toasts.error(e);
+                return;
+            }
+        };
+        let p = self.form_profile(url, token, Some(username.clone()));
+        if let Err(e) = self.store(&p) {
+            cx.toasts.error(e);
+            return;
+        }
+        self.clear_form();
+        profiles::remember_last(&p.id);
+        cx.toasts.success(trf("Conectado como {}.", &[&username]));
+        cx.svc.send_cmd(UiCommand::Connect(p));
+    }
+
+    /// Sessão encerrada (ou falhou ao encerrar): esquece o token localmente e
+    /// reconecta sem ele, o que leva de volta a esta página.
+    fn finish_logout(&mut self, cx: &mut Cx, current: &Profile) {
+        let mut p = current.clone();
+        p.token.clear();
+        if let Some(saved) = self.file.profiles.iter_mut().find(|x| x.id == p.id) {
+            saved.token.clear();
+            if let Err(e) = profiles::save(&self.file) {
+                cx.toasts.error(e);
+            }
+        }
+        self.load_form(&p);
+        cx.toasts.info(tr("Sessão encerrada."));
+        cx.svc.send_cmd(UiCommand::Connect(p));
+    }
+
+    fn poll(&mut self, cx: &mut Cx, current: &Profile) {
+        if let Some(t) = &self.login_task {
+            if let Some(r) = t.take() {
+                self.login_task = None;
+                match r {
+                    Ok(v) => self.finish_login(cx, v),
+                    Err(e) => cx.toasts.error(trf("Não entrou: {}", &[&e])),
+                }
+            }
+        }
+        if let Some(t) = &self.health_task {
+            if let Some(r) = t.take() {
+                self.health_task = None;
+                match r {
+                    Ok(v) => {
+                        self.fetched = Some(FetchedHealth {
+                            url: self.form_url().unwrap_or_default(),
+                            scheme: ui::s(&v, "scheme"),
+                            fingerprint: v
+                                .get("tls_fingerprint_sha256")
+                                .and_then(|f| f.as_str())
+                                .map(str::to_string)
+                                .filter(|f| !f.is_empty()),
+                        });
+                    }
+                    Err(e) => cx.toasts.error(trf("Não alcançou o servidor: {}", &[&e])),
+                }
+            }
+        }
+        if let Some(t) = &self.logout_task {
+            if let Some(r) = t.take() {
+                self.logout_task = None;
+                if let Err(e) = r {
+                    cx.toasts
+                        .error(trf("O servidor não encerrou a sessão: {}", &[&e]));
+                }
+                self.finish_logout(cx, current);
+            }
+        }
+        if let Some(t) = &self.pw_task {
+            if let Some(r) = t.take() {
+                self.pw_task = None;
+                match r {
+                    Ok(_) => {
+                        self.pw_new.clear();
+                        self.pw_confirm.clear();
+                        self.pw_done = true;
+                        self.principal_dirty = true;
+                        cx.toasts.success(tr("Senha alterada."));
+                    }
+                    Err(e) => cx.toasts.error(trf("Não alterou a senha: {}", &[&e])),
+                }
+            }
+        }
+    }
+
+    /// Modal bloqueante do primeiro acesso: só sai com a senha trocada.
+    fn password_modal(&mut self, ctx: &egui::Context, cx: &mut Cx) {
+        let busy = self.pw_task.as_ref().is_some_and(|t| t.pending());
+        let mut submit = false;
+        let _ = egui::Modal::new(egui::Id::unique("must-change-password")).show(ctx, |ui| {
+            ui.set_width(440.0);
+            ui.heading(tr("Defina uma nova senha"));
+            ui.add_space(4.0);
+            ui.label(
+                egui::RichText::new(tr(
+                    "Esta conta ainda usa a senha inicial gerada pelo servidor. Escolha uma senha sua para continuar.",
+                ))
+                .weak(),
+            );
+            ui.add_space(10.0);
+            ui::field(ui, tr("Nova senha"), None, |ui| {
+                ui.add(
+                    egui::TextEdit::singleline(&mut self.pw_new)
+                        .password(true)
+                        .desired_width(f32::INFINITY),
+                );
+            });
+            ui::field(ui, tr("Confirmar senha"), None, |ui| {
+                let r = ui.add(
+                    egui::TextEdit::singleline(&mut self.pw_confirm)
+                        .password(true)
+                        .desired_width(f32::INFINITY),
+                );
+                if r.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter)) {
+                    submit = true;
+                }
+            });
+            ui.horizontal(|ui| {
+                if busy {
+                    ui::busy(ui, tr("salvando…"));
+                } else if ui::primary_button(ui, tr("Salvar senha")).clicked() {
+                    submit = true;
+                }
+            });
+        });
+        if submit && !busy {
+            let new = self.pw_new.clone();
+            if new.chars().count() < MIN_PASSWORD_LEN {
+                cx.toasts.error(trf(
+                    "A senha precisa ter pelo menos {} caracteres.",
+                    &[&MIN_PASSWORD_LEN],
+                ));
+            } else if new != self.pw_confirm {
+                cx.toasts.error(tr("As senhas não conferem."));
+            } else {
+                // Primeiro login obrigatório: a senha atual pode ir vazia.
+                self.pw_task = Some(
+                    cx.svc
+                        .call(move |c| async move { c.change_password("", &new).await }),
+                );
+            }
+        }
+    }
+
+    /// Subseção "TLS (https)" do formulário de perfil: PEM fixado, impressão
+    /// digital, busca da impressão digital no servidor e modo inseguro.
+    fn tls_form(&mut self, ui: &mut egui::Ui, cx: &mut Cx) {
+        let dark = ui.visuals().dark_mode;
+        ui.label(egui::RichText::new(tr("TLS (https)")).strong());
+        if !self.form_is_https() {
+            ui.label(
+                egui::RichText::new(tr("Só vale para URLs https://."))
+                    .small()
+                    .weak(),
+            );
+        }
+        let fetching = self.health_task.as_ref().is_some_and(|t| t.pending());
+        let local_fp = pem_fingerprint(&self.ca_pem);
+        ui::field(
+            ui,
+            tr("Certificado do servidor (PEM)"),
+            Some(tr(
+                "Cole aqui o certificado mostrado no servidor em Configurações → Rede. Vazio = confiar nos certificados do sistema.",
+            )),
+            |ui| {
+                ui::text_area(ui, &mut self.ca_pem, 5);
+                if !self.ca_pem.trim().is_empty() {
+                    match &local_fp {
+                        Some(fp) => {
+                            ui.horizontal_wrapped(|ui| {
+                                ui.label(
+                                    egui::RichText::new(tr("Impressão digital SHA-256:"))
+                                        .small()
+                                        .weak(),
+                                );
+                                ui::mono(ui, fp);
+                            });
+                        }
+                        None => ui::error_text(
+                            ui,
+                            tr("Não é um certificado PEM válido (esperado -----BEGIN CERTIFICATE-----)."),
+                        ),
+                    }
+                }
+            },
+        );
+        ui::field(
+            ui,
+            tr("Impressão digital no servidor"),
+            Some(tr(
+                "Lê GET /api/health sem validar o certificado, só para você conferir.",
+            )),
+            |ui| {
+                ui.horizontal(|ui| {
+                    if fetching {
+                        ui::busy(ui, tr("consultando…"));
+                    } else if ui.button(tr("Buscar do servidor")).clicked() {
+                        self.start_fetch_health(cx);
+                    }
+                });
+                if let Some(f) = &self.fetched {
+                    ui.add_space(4.0);
+                    if f.scheme != "https" {
+                        ui.label(
+                            egui::RichText::new(trf(
+                                "{} responde em http (sem TLS): nenhum certificado a fixar.",
+                                &[&f.url],
+                            ))
+                            .small()
+                            .weak(),
+                        );
+                    } else if let Some(fp) = &f.fingerprint {
+                        ui::mono(ui, fp);
+                        match &local_fp {
+                            Some(l) if norm_fp(l) == norm_fp(fp) => {
+                                ui::badge(ui, tr("bate com o PEM colado"), Tone::Success)
+                            }
+                            Some(_) => ui::badge(ui, tr("não bate com o PEM colado"), Tone::Danger),
+                            None => {
+                                ui.add(
+                                    egui::Label::new(
+                                        egui::RichText::new(tr(
+                                            "Confira se esta impressão digital é a mesma que o servidor mostra em Configurações → Rede (ou `will-ia info`). Se bater, copie lá o PEM do certificado e cole no campo acima.",
+                                        ))
+                                        .small()
+                                        .weak(),
+                                    )
+                                    .wrap(),
+                                );
+                            }
+                        }
+                    } else {
+                        ui.label(
+                            egui::RichText::new(tr(
+                                "O servidor usa https mas não informou a impressão digital (versão antiga?).",
+                            ))
+                            .small()
+                            .weak(),
+                        );
+                    }
+                }
+            },
+        );
+        ui::field(
+            ui,
+            tr("Aceitar qualquer certificado (inseguro)"),
+            Some(tr(
+                "Só para testes: sem verificação, alguém no caminho pode ler tudo.",
+            )),
+            |ui| {
+                ui::toggle(ui, &mut self.insecure);
+                if self.insecure {
+                    ui.colored_label(
+                        Tone::Warning.color(dark),
+                        tr("Inseguro: o app não vai verificar a identidade do servidor."),
+                    );
+                }
+            },
+        );
+        if self.https_without_trust() {
+            ui.colored_label(
+                Tone::Warning.color(dark),
+                tr("https:// sem certificado fixado: a conexão só funciona se o sistema confiar no certificado do servidor. Cole o PEM em \"TLS (https)\" ou marque o modo inseguro."),
+            );
+        }
+    }
+
+    pub fn ui(&mut self, ui: &mut egui::Ui, cx: &mut Cx) {
+        let current = cx.svc.profile();
+        self.poll(cx, &current);
+
+        ui::heading(
+            ui,
+            tr("Conexão"),
+            Some(tr(
+                "O app é um cliente: escolha o servidor will-ia ao qual conectar.",
+            )),
+        );
+        let principal = cx.snap.principal.clone();
+        ui::section(ui, tr("Servidor atual"), |ui| {
+            ui.horizontal(|ui| {
+                ui::dot(
+                    ui,
+                    if cx.snap.connected {
+                        Tone::Success
+                    } else {
+                        Tone::Warning
+                    },
+                );
+                ui.label(egui::RichText::new(&current.name).strong());
+                ui::mono(ui, &current.url);
+                ui.label(
+                    egui::RichText::new(if cx.snap.connected {
+                        tr("conectado")
+                    } else {
+                        tr("sem conexão")
+                    })
+                    .weak(),
+                );
+            });
+            if let Some(p) = &principal {
+                ui.add_space(4.0);
+                ui.horizontal(|ui| {
+                    let who = if p.user_id.is_none() {
+                        tr("Token local da API").to_string()
+                    } else {
+                        p.username.clone()
+                    };
+                    ui.label(trf("Conta: {}", &[&who]));
+                    ui::badge(
+                        ui,
+                        role_label(p.role),
+                        if p.is_admin() {
+                            Tone::Info
+                        } else {
+                            Tone::Neutral
+                        },
+                    );
+                    if p.must_change_password {
+                        ui::badge(ui, tr("troca de senha pendente"), Tone::Warning);
+                    }
+                    // Só sessões de conta podem sair; o token local não é uma sessão.
+                    if p.user_id.is_some() {
+                        let busy = self.logout_task.as_ref().is_some_and(|t| t.pending());
+                        if ui
+                            .add_enabled(!busy, egui::Button::new(tr("Sair da conta")))
+                            .on_hover_text(tr(
+                                "Encerra a sessão no servidor e apaga o token deste perfil.",
+                            ))
+                            .clicked()
+                        {
+                            self.logout_task =
+                                Some(cx.svc.call(|c| async move { c.logout().await }));
+                        }
+                    }
+                });
+            }
+            if let Some(e) = &self.last_error {
+                ui::error_text(ui, e);
+            }
+        });
+
+        ui::section(ui, tr("Perfis"), |ui| {
+            let mut connect: Option<Profile> = None;
+            let mut remove: Option<String> = None;
+            let mut edit: Option<Profile> = None;
+            let local = self.local.clone();
+            match &local {
+                Some(p) => {
+                    ui.horizontal(|ui| {
+                        ui::dot(ui, Tone::Info);
+                        ui.label(egui::RichText::new(tr("Esta máquina")).strong());
+                        ui::mono(ui, &p.url);
+                        if ui
+                            .add_enabled(current.id != p.id, egui::Button::new(tr("Conectar")))
+                            .clicked()
+                        {
+                            connect = Some(p.clone());
+                        }
+                    });
+                }
+                None => {
+                    ui.label(
+                        egui::RichText::new(tr(
+                            "Nenhum servidor will-ia nesta máquina (inicie o `will-ia` para ele aparecer aqui).",
+                        ))
+                        .weak(),
+                    );
+                }
+            }
+            for p in self.file.profiles.clone() {
+                ui.horizontal(|ui| {
+                    ui::dot(
+                        ui,
+                        if current.id == p.id {
+                            Tone::Success
+                        } else {
+                            Tone::Neutral
+                        },
+                    );
+                    ui.label(egui::RichText::new(&p.name).strong());
+                    ui::mono(ui, &p.url);
+                    if let Some(u) = &p.username {
+                        ui.label(egui::RichText::new(u).weak().small());
+                    }
+                    if p.token.is_empty() {
+                        // Sem token (nunca entrou ou saiu da conta): abre o
+                        // formulário para digitar a senha.
+                        if ui.button(tr("Entrar")).clicked() {
+                            edit = Some(p.clone());
+                        }
+                    } else if ui
+                        .add_enabled(current.id != p.id, egui::Button::new(tr("Conectar")))
+                        .clicked()
+                    {
+                        connect = Some(p.clone());
+                    }
+                    if ui.small_button(tr("Editar")).clicked() {
+                        edit = Some(p.clone());
+                    }
+                    if ui.small_button(tr("Remover")).clicked() {
+                        remove = Some(p.id.clone());
+                    }
+                });
+            }
+            if let Some(p) = edit {
+                self.load_form(&p);
+            }
+            if let Some(id) = remove {
+                self.file.profiles.retain(|x| x.id != id);
+                if let Err(e) = profiles::save(&self.file) {
+                    cx.toasts.error(e);
+                }
+            }
+            if let Some(p) = connect {
+                if p.is_https() && !p.insecure && p.ca_pem.is_none() {
+                    cx.toasts.info(tr(
+                        "https:// sem certificado fixado: a conexão só funciona se o sistema confiar no certificado do servidor. Cole o PEM em \"TLS (https)\" ou marque o modo inseguro.",
+                    ));
+                }
+                profiles::remember_last(&p.id);
+                cx.svc.send_cmd(UiCommand::Connect(p));
+            }
+        });
+
+        let logging_in = self.login_task.as_ref().is_some_and(|t| t.pending());
+        let mut do_login = false;
+        ui::section(
+            ui,
+            if self.edit_id.is_some() {
+                tr("Editar perfil")
+            } else {
+                tr("Novo perfil")
+            },
+            |ui| {
+                ui::field(ui, tr("Nome"), None, |ui| {
+                    ui::text_input(ui, &mut self.name, tr("ex.: servidor da equipe"));
+                });
+                ui::field(
+                    ui,
+                    tr("URL do servidor"),
+                    Some(tr("http://host:porta ou https://…")),
+                    |ui| {
+                        ui::text_input(ui, &mut self.url, "http://192.168.0.10:47300");
+                    },
+                );
+                ui::field(
+                    ui,
+                    tr("Usuário"),
+                    Some(tr("Conta criada pelo administrador do servidor.")),
+                    |ui| {
+                        ui::text_input(ui, &mut self.username, "admin");
+                    },
+                );
+                ui::field(
+                    ui,
+                    tr("Senha"),
+                    Some(tr("Não é guardada: Entrar troca por um token de sessão.")),
+                    |ui| {
+                        let r = ui.add(
+                            egui::TextEdit::singleline(&mut self.password)
+                                .password(true)
+                                .desired_width(f32::INFINITY),
+                        );
+                        if r.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter)) {
+                            do_login = true;
+                        }
+                    },
+                );
+                ui.horizontal(|ui| {
+                    if logging_in {
+                        ui::busy(ui, tr("entrando…"));
+                    } else if ui::primary_button(ui, tr("Entrar")).clicked() {
+                        do_login = true;
+                    }
+                    if ui.button(tr("Salvar perfil")).clicked() {
+                        match self.save_form() {
+                            Ok(()) => cx.toasts.success(tr("Perfil salvo.")),
+                            Err(e) => cx.toasts.error(e),
+                        }
+                    }
+                    if self.edit_id.is_some() && ui.button(tr("Cancelar")).clicked() {
+                        self.clear_form();
+                    }
+                });
+                ui.add_space(6.0);
+                ui::field(
+                    ui,
+                    tr("Token de sessão"),
+                    Some(tr("Opcional: o token local da API (`will-ia info`) para quem não usa conta. Entrar preenche este campo sozinho.")),
+                    |ui| {
+                        ui.add(egui::TextEdit::singleline(&mut self.token).password(true).desired_width(f32::INFINITY));
+                    },
+                );
+                ui.add_space(6.0);
+                self.tls_form(ui, cx);
+                ui.label(
+                    egui::RichText::new(trf(
+                        "Perfis ficam em {}",
+                        &[&profiles::config_dir().join("profiles.json").display()],
+                    ))
+                    .small()
+                    .weak(),
+                );
+            },
+        );
+        if do_login && !logging_in {
+            self.start_login(cx);
+        }
+
+        let must_change = principal.as_ref().is_some_and(|p| p.must_change_password);
+        if must_change && !self.pw_done && cx.snap.connected {
+            let ctx = ui.ctx().clone();
+            self.password_modal(&ctx, cx);
+        }
+    }
+}

@@ -54,14 +54,16 @@ async fn handle_events(mut socket: WebSocket, state: App) {
 }
 
 /// Áudio da voz: binário PCM16 24 kHz nos dois sentidos + controle em JSON.
-pub async fn voice_ws(ws: WebSocketUpgrade, State(state): State<App>) -> Response {
-    ws.on_upgrade(move |socket| handle_voice(socket, state))
+pub async fn voice_ws(
+    ws: WebSocketUpgrade,
+    State(state): State<App>,
+    axum::extract::Extension(me): axum::extract::Extension<will_core::Principal>,
+) -> Response {
+    ws.on_upgrade(move |socket| handle_voice(socket, state, me.username))
 }
 
-async fn handle_voice(socket: WebSocket, state: App) {
-    let Some(rt) = state.realtime.read().clone() else {
-        return;
-    };
+async fn handle_voice(socket: WebSocket, state: App, user: String) {
+    let rt = crate::modules::voice_manager_for(&state, &user);
     let (mut tx, mut rx_ws) = socket.split();
     let mut audio_rx = rt.subscribe_audio_out();
     let rt2 = rt.clone();

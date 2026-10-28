@@ -116,6 +116,7 @@ pub struct DecideBody {
 
 pub async fn decide(
     State(state): State<App>,
+    axum::extract::Extension(me): axum::extract::Extension<will_core::Principal>,
     Path(id): Path<String>,
     Json(b): Json<DecideBody>,
 ) -> ApiResult<Value> {
@@ -124,7 +125,8 @@ pub async fn decide(
         "approved" | "approve" | "yes" => ApprovalDecision::Approved,
         _ => ApprovalDecision::Denied,
     };
-    let ok = state.host().decide_approval(id, d, "ui");
+    let via = format!("ui:{}", me.author());
+    let ok = state.host().decide_approval(id, d, &via);
     if !ok {
         return Err(bad("pedido não está mais pendente"));
     }

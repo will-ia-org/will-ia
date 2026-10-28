@@ -19,6 +19,8 @@ pub struct RunOptions {
     pub data_dir: Option<PathBuf>,
     /// Força segredos em arquivo (sem keyring).
     pub file_secrets: bool,
+    /// Endereço de escuta (sobrepõe `settings.network.bind`).
+    pub bind: Option<String>,
 }
 
 pub struct ServerHandle {
@@ -29,9 +31,15 @@ pub struct ServerHandle {
 }
 
 impl ServerHandle {
-    /// Base da API local (`http://127.0.0.1:<porta>`).
+    /// Base da API local (`http://127.0.0.1:<porta>`; `https` com TLS).
     pub fn url(&self) -> String {
-        format!("http://{}", self.addr)
+        let scheme = self.state.scheme.read().clone();
+        let host = if self.addr.ip().is_unspecified() {
+            "127.0.0.1".to_string()
+        } else {
+            self.addr.ip().to_string()
+        };
+        format!("{scheme}://{host}:{}", self.addr.port())
     }
     pub async fn shutdown(&self) {
         self.cancel.cancel();
@@ -56,9 +64,18 @@ pub struct AppState {
     pub mcp: tokio::sync::Mutex<Option<McpServer>>,
     pub mcp_url: Arc<RwLock<String>>,
     pub module_status: RwLock<HashMap<Module, ModuleStatus>>,
-    pub realtime: RwLock<Option<Arc<will_realtime::RealtimeManager>>>,
+    /// Sessões de voz por usuário (`docs/26`, etapa 6): chave = username
+    /// (`local` para o token da API).
+    pub voice: RwLock<HashMap<String, Arc<will_realtime::RealtimeManager>>>,
+    /// Chave da OpenAI em cache (para status sem I/O).
+    pub voice_key: RwLock<Option<secrecy::SecretString>>,
     pub scheduler: RwLock<Option<Arc<will_scheduler::SchedulerModule>>>,
     pub browser: RwLock<Option<Arc<will_browser::BrowserModule>>>,
+    pub login_limiter: crate::auth::LoginLimiter,
+    /// `http` ou `https` (depois da subida).
+    pub scheme: RwLock<String>,
+    pub tls_fingerprint: RwLock<Option<String>>,
+    pub tls_cert_path: RwLock<Option<PathBuf>>,
     #[cfg(feature = "telegram")]
     pub telegram: tokio::sync::RwLock<Option<Arc<will_telegram::TelegramModule>>>,
     #[cfg(feature = "google")]
@@ -67,7 +84,8 @@ pub struct AppState {
     pub whatsapp: tokio::sync::RwLock<Option<Arc<will_whatsapp::WhatsAppModule>>>,
     pub ui_token: String,
     pub started_at: Instant,
-    pub voice_thread: RwLock<Option<ThreadId>>,
+    /// Thread de voz corrente por usuário.
+    pub voice_threads: RwLock<HashMap<String, ThreadId>>,
     pub cancel: CancellationToken,
     pub host: RwLock<Option<Arc<Host>>>,
     /// Gancho da GUI (app desktop): recebe comandos como `show`. `None` no modo headless.
@@ -189,9 +207,14 @@ pub async fn start(opts: RunOptions) -> anyhow::Result<ServerHandle> {
         mcp: tokio::sync::Mutex::new(None),
         mcp_url,
         module_status: RwLock::new(HashMap::new()),
-        realtime: RwLock::new(None),
+        voice: RwLock::new(HashMap::new()),
+        voice_key: RwLock::new(None),
         scheduler: RwLock::new(None),
         browser: RwLock::new(None),
+        login_limiter: crate::auth::LoginLimiter::default(),
+        scheme: RwLock::new("http".into()),
+        tls_fingerprint: RwLock::new(None),
+        tls_cert_path: RwLock::new(None),
         #[cfg(feature = "telegram")]
         telegram: tokio::sync::RwLock::new(None),
         #[cfg(feature = "google")]
@@ -200,7 +223,7 @@ pub async fn start(opts: RunOptions) -> anyhow::Result<ServerHandle> {
         whatsapp: tokio::sync::RwLock::new(None),
         ui_token: ui_token.clone(),
         started_at: Instant::now(),
-        voice_thread: RwLock::new(None),
+        voice_threads: RwLock::new(HashMap::new()),
         cancel: cancel.clone(),
         host: RwLock::new(None),
         ui_hook: RwLock::new(None),
@@ -208,6 +231,8 @@ pub async fn start(opts: RunOptions) -> anyhow::Result<ServerHandle> {
     let host = Arc::new(Host::new(state.clone()));
     *state.host.write() = Some(host.clone());
 
+    crate::auth::bootstrap_admin(&state).await;
+    let _ = state.storage.purge_expired_sessions().await;
     crate::orchestrator::spawn_engine_loop(state.clone());
     crate::orchestrator::spawn_bus_persistence(state.clone());
     crate::modules::start_all(&state).await;
@@ -215,19 +240,96 @@ pub async fn start(opts: RunOptions) -> anyhow::Result<ServerHandle> {
     let port = opts
         .port
         .unwrap_or_else(|| state.settings.read().general.ui_port);
-    let listener = tokio::net::TcpListener::bind(("127.0.0.1", port)).await?;
+    let net = state.settings().network;
+    let mut bind = opts
+        .bind
+        .clone()
+        .unwrap_or_else(|| net.bind.clone())
+        .trim()
+        .to_string();
+    if bind.is_empty() {
+        bind = "127.0.0.1".into();
+    }
+    let loopback = matches!(bind.as_str(), "127.0.0.1" | "localhost" | "::1");
+    // TLS resolvido antes da regra de exposição: se falhar, conta como "sem TLS".
+    let tls = if net.tls {
+        match crate::tls::ensure_files(
+            &state.paths.data_dir,
+            net.cert_path.as_deref(),
+            net.key_path.as_deref(),
+            &bind,
+            &net.tls_extra_names,
+        ) {
+            Ok(f) => {
+                *state.tls_fingerprint.write() = crate::tls::fingerprint(&f.cert);
+                *state.tls_cert_path.write() = Some(f.cert.clone());
+                Some(f)
+            }
+            Err(e) => {
+                tracing::error!(error = %e, "TLS pedido mas indisponível");
+                state
+                    .bus
+                    .log("error", "network", format!("TLS indisponível: {e}"));
+                None
+            }
+        }
+    } else {
+        None
+    };
+    if !loopback && tls.is_none() && !net.allow_remote_without_tls {
+        tracing::error!(
+            %bind,
+            "escuta fora do loopback sem TLS e sem `allow_remote_without_tls`: voltando para 127.0.0.1"
+        );
+        state.bus.log(
+            "error",
+            "network",
+            "Rede: bind fora do loopback exige TLS (ou `allow_remote_without_tls`). Escutando só em 127.0.0.1.".to_string(),
+        );
+        bind = "127.0.0.1".into();
+    }
+    let listener = tokio::net::TcpListener::bind((bind.as_str(), port)).await?;
     let addr = listener.local_addr()?;
     let app = crate::api::router(state.clone());
     let c2 = cancel.clone();
-    tokio::spawn(async move {
-        if let Err(e) = axum::serve(listener, app)
+    let scheme = if tls.is_some() { "https" } else { "http" };
+    if let Some(f) = tls {
+        let cfg = axum_server::tls_rustls::RustlsConfig::from_pem_file(&f.cert, &f.key)
+            .await
+            .map_err(|e| anyhow::anyhow!("TLS: {e}"))?;
+        let std_listener = listener.into_std()?;
+        let handle = axum_server::Handle::new();
+        let h2 = handle.clone();
+        tokio::spawn(async move {
+            c2.cancelled().await;
+            h2.graceful_shutdown(Some(std::time::Duration::from_secs(5)));
+        });
+        let server = axum_server::from_tcp_rustls(std_listener, cfg)
+            .map_err(|e| anyhow::anyhow!("TLS: {e}"))?;
+        tokio::spawn(async move {
+            if let Err(e) = server
+                .handle(handle)
+                .serve(app.into_make_service_with_connect_info::<std::net::SocketAddr>())
+                .await
+            {
+                tracing::error!(error = %e, "servidor HTTPS encerrou com erro");
+            }
+        });
+    } else {
+        tokio::spawn(async move {
+            if let Err(e) = axum::serve(
+                listener,
+                app.into_make_service_with_connect_info::<std::net::SocketAddr>(),
+            )
             .with_graceful_shutdown(async move { c2.cancelled().await })
             .await
-        {
-            tracing::error!(error = %e, "servidor HTTP encerrou com erro");
-        }
-    });
-    tracing::info!(%addr, "API local no ar");
+            {
+                tracing::error!(error = %e, "servidor HTTP encerrou com erro");
+            }
+        });
+    }
+    *state.scheme.write() = scheme.to_string();
+    tracing::info!(%addr, scheme, "API no ar");
     let _ = opts.open_browser;
     Ok(ServerHandle {
         addr,

@@ -8,6 +8,7 @@ pub mod general;
 pub mod google;
 pub mod kb;
 pub mod mcp;
+pub mod network;
 pub mod scheduler;
 pub mod telegram;
 pub mod voice;
@@ -217,6 +218,7 @@ fn section_label(s: &str) -> &str {
         "external_mcps" => tr("MCPs externos"),
         "scheduler" => tr("Agendamentos"),
         "browser" => tr("Browser CDP"),
+        "network" => tr("Rede"),
         other => other,
     }
 }
@@ -235,6 +237,7 @@ pub struct SettingsPages {
     pub google: google::GooglePage,
     pub scheduler: scheduler::SchedulerPage,
     pub browser: browser::BrowserPage,
+    pub network: network::NetworkPage,
 }
 
 impl SettingsPages {
@@ -274,6 +277,7 @@ impl SettingsPages {
             SettingsSection::Google => self.google.ui(ui, cx, st),
             SettingsSection::Scheduler => self.scheduler.ui(ui, cx, st),
             SettingsSection::Browser => self.browser.ui(ui, cx, st),
+            SettingsSection::Network => self.network.ui(ui, cx, st),
         }
     }
 }

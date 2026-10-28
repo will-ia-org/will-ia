@@ -158,13 +158,33 @@ impl GeneralPage {
     }
 }
 
+/// O autostart é do **servidor** (`will-ia`, residente na bandeja), não do app:
+/// procura o binário ao lado deste executável e, depois, no PATH.
+fn server_binary() -> Result<std::path::PathBuf, String> {
+    let name = if cfg!(windows) {
+        "will-ia.exe"
+    } else {
+        "will-ia"
+    };
+    if let Ok(me) = std::env::current_exe() {
+        if let Some(dir) = me.parent() {
+            let p = dir.join(name);
+            if p.is_file() {
+                return Ok(p);
+            }
+        }
+    }
+    will_platform::which("will-ia").ok_or_else(|| {
+        tr("binário do servidor (will-ia) não encontrado ao lado do app nem no PATH").to_string()
+    })
+}
+
 fn apply_autostart(enable: bool) -> Result<(), String> {
-    let exe = std::env::current_exe().map_err(|e| e.to_string())?;
+    let exe = server_binary()?;
     let exe_s = exe.to_string_lossy().to_string();
     let al = auto_launch::AutoLaunchBuilder::new()
         .set_app_name("will-ia")
         .set_app_path(&exe_s)
-        .set_args(&["--hidden"])
         .build()
         .map_err(|e| e.to_string())?;
     let enabled = al.is_enabled().unwrap_or(false);

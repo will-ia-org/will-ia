@@ -345,3 +345,23 @@ pub const BROWSER: Help = Help {
         ("Chrome: remote debugging port e perfil", "https://developer.chrome.com/blog/remote-debugging-port"),
     ],
 };
+
+// ---------- Usuários ----------
+
+pub const USERS: Help = Help {
+    title: "Usuários",
+    intro: "Contas de acesso a este servidor will-ia. Cada pessoa entra com usuário e senha no app; o login identifica quem escreveu cada mensagem, quem aprovou o quê e quem gastou quanto, e permite revogar o acesso de alguém sem mexer nos demais. As threads são compartilhadas: todo mundo vê as mesmas conversas.",
+    steps: &[
+        ("Primeiro acesso", "Na primeira subida o servidor cria o usuário admin com uma senha aleatória, impressa no log e em will-ia info. Ao entrar com ela, o app exige a troca por uma senha sua."),
+        ("Criar uma conta", "Novo usuário: nome de usuário curto (vira o autor nas threads), nome, e-mail opcional, senha inicial e papel. Entregue a senha inicial por um canal seguro; com \"Exigir troca no primeiro acesso\" a pessoa define a própria senha ao entrar."),
+        ("Papéis", "Administrador mexe em configurações, segredos, tokens do motor, políticas, MCPs externos e usuários. Membro conversa, aprova, agenda, usa a voz e vê logs e custos; as páginas de configuração nem aparecem no menu dele."),
+        ("Revogar acesso", "Desativar encerra as sessões abertas e impede novos logins; o histórico da pessoa fica. Reativar devolve o acesso. Redefinir senha, em Editar, serve para quem esqueceu a sua."),
+    ],
+    notes: &[
+        ("Token local da API", "O app na mesma máquina do servidor pode entrar com o token de will-ia info, sem conta: aparece como \"local\" e é administrador. Scripts e automações usam o mesmo token."),
+        ("Sessões", "Cada login no app gera um token de sessão guardado no perfil de conexão. Sair da conta (página Conexão) invalida esse token no servidor."),
+        ("Não dá para desativar a si mesmo", "Para não trancar o servidor sem administrador. Crie outro administrador antes, se precisar."),
+    ],
+    code: "will-ia info",
+    links: &[],
+};

@@ -3,6 +3,11 @@ name: Release
 # Dispara em tags `v*` (ex.: v0.1.0) ou manualmente. Gera, em paralelo, os binários
 # de Linux x86_64, Windows x86_64, macOS x86_64 e macOS aarch64, mais o pacote
 # portátil (pendrive) com todos eles, e publica tudo numa GitHub Release.
+#
+# Desde a etapa 3 de docs/26 (ADR-0019) são DOIS binários por plataforma:
+#   will-ia      servidor residente (+ bandeja quando há desktop; `serve` = headless)
+#   will-ia-app  app desktop (egui), cliente do servidor
+# Cada tar.gz/zip, o .deb, o .app e o pacote portátil levam os dois.
 
 on:
   push:
@@ -19,7 +24,10 @@ permissions:
 
 env:
   CARGO_TERM_COLOR: always
-  BIN: will-ia
+  # nome do produto (prefixo dos pacotes)
+  NAME: will-ia
+  # binários gerados por plataforma (separados por espaço)
+  BINS: will-ia will-ia-app
 
 jobs:
   version:
@@ -81,31 +89,36 @@ jobs:
         if: runner.os == 'Linux'
         run: sudo apt-get update && sudo apt-get install -y --no-install-recommends libasound2-dev pkg-config
 
-      - name: Compilar
-        run: cargo build --release -p will-desktop --target ${{ matrix.target }}
+      - name: Compilar (servidor + app)
+        run: cargo build --release -p will-ia -p will-app --target ${{ matrix.target }}
 
       - name: Empacotar (tar.gz / zip)
         shell: bash
         run: |
           set -euo pipefail
           out=dist; mkdir -p "$out"
-          bin="target/${{ matrix.target }}/release/${BIN}${{ matrix.ext }}"
+          rel="target/${{ matrix.target }}/release"
           stage="$out/stage"; mkdir -p "$stage"
-          cp "$bin" "$stage/"
+          # os dois binários lado a lado: o servidor acha o app na própria pasta
+          for b in $BINS; do
+            cp "$rel/${b}${{ matrix.ext }}" "$stage/"
+          done
           cp README.md LICENSE "$stage/"
           cp -r docs "$stage/docs"
           if [[ "${{ runner.os }}" == "Linux" ]]; then
             mkdir -p "$stage/packaging"
             cp -r packaging/linux packaging/systemd "$stage/packaging/"
           fi
-          name="${BIN}-${VERSION}-${{ matrix.name }}"
+          name="${NAME}-${VERSION}-${{ matrix.name }}"
           if [[ "${{ runner.os }}" == "Windows" ]]; then
             (cd "$stage" && 7z a -tzip "../${name}.zip" . >/dev/null)
           else
             tar -czf "$out/${name}.tar.gz" -C "$stage" .
           fi
-          # binário solto com nome por plataforma, para o pacote portátil
-          cp "$bin" "$out/${BIN}-${{ matrix.name }}${{ matrix.ext }}"
+          # binários soltos com nome por plataforma, para o pacote portátil
+          for b in $BINS; do
+            cp "$rel/${b}${{ matrix.ext }}" "$out/${b}-${{ matrix.name }}${{ matrix.ext }}"
+          done
           rm -rf "$stage"
           ls -la "$out"
 
@@ -113,7 +126,8 @@ jobs:
         if: runner.os == 'Linux'
         run: |
           cargo install cargo-deb --locked
-          cargo deb -p will-desktop --no-build --target ${{ matrix.target }} -o dist/
+          # os assets do .deb (will-ia, will-ia-app, .desktop, user unit) estão em crates/will-ia/Cargo.toml
+          cargo deb -p will-ia --no-build --target ${{ matrix.target }} -o dist/
           ls -la dist/*.deb
 
       - name: .app (macOS)
@@ -121,12 +135,16 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          app="dist/${BIN}.app"; mkdir -p "$app/Contents/MacOS" "$app/Contents/Resources"
-          cp "target/${{ matrix.target }}/release/${BIN}" "$app/Contents/MacOS/${BIN}"
+          rel="target/${{ matrix.target }}/release"
+          app="dist/${NAME}.app"; mkdir -p "$app/Contents/MacOS" "$app/Contents/Resources"
+          # executável principal do bundle = o app; o servidor fica ao lado em Contents/MacOS/
+          # (o app o encontra e o servidor acha o app na mesma pasta ao lançá-lo pela bandeja)
+          cp "$rel/will-ia-app" "$app/Contents/MacOS/will-ia-app"
+          cp "$rel/will-ia" "$app/Contents/MacOS/will-ia"
           sed "s/__VERSION__/${VERSION}/g" packaging/macos/Info.plist > "$app/Contents/Info.plist"
-          # não assinado/notarizado: o usuário remove a quarentena (xattr -d com.apple.quarantine)
+          # não assinado/notarizado: o usuário remove a quarentena (xattr -dr com.apple.quarantine)
           # ou libera em Privacidade e Segurança › "Abrir Mesmo Assim" (ver docs/13)
-          (cd dist && zip -qr "${BIN}-${VERSION}-${{ matrix.name }}.app.zip" "${BIN}.app" && rm -rf "${BIN}.app")
+          (cd dist && zip -qr "${NAME}-${VERSION}-${{ matrix.name }}.app.zip" "${NAME}.app" && rm -rf "${NAME}.app")
 
       - uses: actions/upload-artifact@v4
         with:
@@ -152,18 +170,24 @@ jobs:
           mkdir -p release
           # coleta todos os artefatos num diretório plano
           find artifacts -type f -exec cp {} release/ \;
-          # pacote portátil: bin/ com um binário por SO + lançadores + marcador
-          p="portable/will-ia"; mkdir -p "$p/bin"
-          for f in release/${BIN}-linux-x86_64 release/${BIN}-macos-x86_64 release/${BIN}-macos-aarch64; do
-            [[ -f "$f" ]] && cp "$f" "$p/bin/" && chmod +x "$p/bin/$(basename "$f")"
+          # pacote portátil: bin/ com os dois binários por SO + lançadores + marcador
+          p="portable/${NAME}"; mkdir -p "$p/bin"
+          for b in $BINS; do
+            for plat in linux-x86_64 macos-x86_64 macos-aarch64; do
+              f="release/${b}-${plat}"
+              [[ -f "$f" ]] && cp "$f" "$p/bin/" && chmod +x "$p/bin/$(basename "$f")"
+            done
+            f="release/${b}-windows-x86_64.exe"
+            [[ -f "$f" ]] && cp "$f" "$p/bin/"
           done
-          [[ -f release/${BIN}-windows-x86_64.exe ]] && cp release/${BIN}-windows-x86_64.exe "$p/bin/"
           cp packaging/portable/will-ia.sh packaging/portable/will-ia.cmd packaging/portable/README.md "$p/"
           chmod +x "$p/will-ia.sh"
           : > "$p/portable"
-          (cd portable && zip -qr "../release/${BIN}-${VERSION}-portable.zip" will-ia)
+          (cd portable && zip -qr "../release/${NAME}-${VERSION}-portable.zip" "${NAME}")
           # os binários soltos ficam só dentro do portátil
-          rm -f release/${BIN}-linux-x86_64 release/${BIN}-macos-x86_64 release/${BIN}-macos-aarch64 release/${BIN}-windows-x86_64.exe
+          for b in $BINS; do
+            rm -f release/${b}-linux-x86_64 release/${b}-macos-x86_64 release/${b}-macos-aarch64 release/${b}-windows-x86_64.exe
+          done
           (cd release && sha256sum * > SHA256SUMS.txt)
           ls -la release
       - uses: actions/upload-artifact@v4

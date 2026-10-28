@@ -1,20 +1,36 @@
-# Unidade de usuário do systemd para o will-ia (Linux).
+# Unidade de usuário do systemd para o SERVIDOR will-ia (Linux).
+#
+# Dois binários desde a etapa 3 de docs/26 (ADR-0019):
+#   will-ia      servidor residente (motor, módulos, API local); `serve` = headless
+#   will-ia-app  app desktop (janela egui), cliente do servidor
+#
+# Esta unidade sobe o servidor em modo `serve` (headless): sem bandeja, e
+# SIGTERM/Ctrl+C encerram limpo, que é o que o systemd espera ao parar/reiniciar.
+# É o jeito certo em servidor Linux sem tela (use também --file-secrets se não
+# houver Secret Service) e serve igualmente numa máquina com desktop quando se
+# quer o servidor supervisionado pelo systemd.
+#
+# Numa máquina pessoal com desktop a alternativa é NÃO usar esta unidade e deixar
+# o autostart da sessão (`~/.config/autostart/`) rodar `will-ia` sem argumentos:
+# ele vira residente (ignora sinais) e põe o ícone na bandeja, cujo único item,
+# "Abrir will-ia", lança o `will-ia-app`. Ver docs/13 ("Dois binários").
+#
 # Instalar:  mkdir -p ~/.config/systemd/user && cp will-ia.service ~/.config/systemd/user/
 #            systemctl --user daemon-reload && systemctl --user enable --now will-ia
-# Roda dentro da sessão gráfica do usuário (bandeja, áudio e keyring disponíveis).
+# Para o serviço continuar sem sessão aberta: loginctl enable-linger $USER
 # Instalado pelo .deb o binário fica em /usr/bin; instalação manual: ajuste ExecStart.
 
 [Unit]
-Description=will-ia — assistente pessoal (Claude Code + voz + Telegram + MCP)
-After=graphical-session.target
-PartOf=graphical-session.target
+Description=will-ia — servidor (Claude Code + Telegram + MCP + agendamentos)
+After=network-online.target
+Wants=network-online.target
 
 [Service]
 Type=simple
-ExecStart=/usr/bin/will-ia --hidden
+ExecStart=/usr/bin/will-ia serve
 Restart=on-failure
 RestartSec=3
 Environment=RUST_LOG=info
 
 [Install]
-WantedBy=graphical-session.target
+WantedBy=default.target

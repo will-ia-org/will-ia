@@ -1,9 +1,9 @@
 [package]
-name = "will-desktop"
+name = "will-ia"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
-description = "will-ia — app desktop (egui): serviço em processo, bandeja, voz e configurações"
+description = "will-ia — servidor residente: Claude Code (cérebro) + Telegram + MCP + voz + agendamentos; bandeja quando há desktop"
 
 [[bin]]
 name = "will-ia"
@@ -19,28 +19,12 @@ whatsapp-real = ["will-server/whatsapp-real"]
 [dependencies]
 will-core.workspace = true
 will-server.workspace = true
-will-client.workspace = true
 will-platform.workspace = true
 tokio.workspace = true
-serde.workspace = true
-serde_json.workspace = true
 anyhow.workspace = true
 tracing.workspace = true
-chrono.workspace = true
-bytes.workspace = true
-parking_lot.workspace = true
-axum.workspace = true
 clap.workspace = true
-eframe.workspace = true
-egui.workspace = true
-egui_extras.workspace = true
-egui_commonmark.workspace = true
-cpal.workspace = true
-rfd.workspace = true
-global-hotkey.workspace = true
-auto-launch = "0.5"
-qrcode.workspace = true
-image = { version = "0.25", default-features = false, features = ["png", "jpeg", "webp", "gif"] }
+parking_lot.workspace = true
 
 [target.'cfg(target_os = "linux")'.dependencies]
 ksni.workspace = true
@@ -51,12 +35,13 @@ tray-icon.workspace = true
 [package.metadata.deb]
 name = "will-ia"
 maintainer = "will-ia-org <noreply@github.com>"
-extended-description = "Assistente pessoal: Claude Code (cérebro) + voz OpenAI Realtime + Telegram + servidor MCP, com UI desktop nativa."
+extended-description = "Assistente pessoal: servidor will-ia (Claude Code + voz + Telegram + MCP) e app desktop will-ia-app."
 section = "utils"
 priority = "optional"
 depends = "$auto"
 assets = [
   ["target/release/will-ia", "usr/bin/", "755"],
+  ["target/release/will-ia-app", "usr/bin/", "755"],
   ["../../packaging/linux/will-ia.desktop", "usr/share/applications/", "644"],
   ["../../packaging/systemd/will-ia.service", "usr/lib/systemd/user/", "644"],
   ["../../README.md", "usr/share/doc/will-ia/", "644"],

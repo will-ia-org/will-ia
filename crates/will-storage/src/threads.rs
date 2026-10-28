@@ -16,6 +16,8 @@ pub struct TurnRecord {
     pub duration_ms: Option<i64>,
     pub model: Option<String>,
     pub attachments: Vec<Attachment>,
+    /// Quem escreveu (nome de usuário do app, `telegram:<user>`, `scheduler`…); `None` em registros antigos.
+    pub author: Option<String>,
 }
 
 #[derive(Debug, Clone, serde::Serialize)]
@@ -190,6 +192,18 @@ impl Storage {
         prompt: &str,
         attachments: &[Attachment],
     ) -> Result<TurnId> {
+        self.start_turn_by(thread_id, prompt, attachments, None)
+            .await
+    }
+
+    /// Como [`start_turn`](Self::start_turn), registrando o autor.
+    pub async fn start_turn_by(
+        &self,
+        thread_id: ThreadId,
+        prompt: &str,
+        attachments: &[Attachment],
+        author: Option<&str>,
+    ) -> Result<TurnId> {
         let id = TurnId::new();
         let atts = if attachments.is_empty() {
             None
@@ -197,13 +211,14 @@ impl Storage {
             Some(serde_json::to_string(attachments).unwrap_or_default())
         };
         sqlx::query(
-            "INSERT INTO turns (id, thread_id, started_at, prompt, attachments_json) VALUES (?, ?, ?, ?, ?)",
+            "INSERT INTO turns (id, thread_id, started_at, prompt, attachments_json, author) VALUES (?, ?, ?, ?, ?, ?)",
         )
         .bind(id.to_string())
         .bind(thread_id.to_string())
         .bind(fmt(now()))
         .bind(prompt)
         .bind(atts)
+        .bind(author)
         .execute(&self.pool)
         .await?;
         Ok(id)
@@ -287,6 +302,7 @@ impl Storage {
                     .get::<Option<String>, _>("attachments_json")
                     .and_then(|s| serde_json::from_str(&s).ok())
                     .unwrap_or_default(),
+                author: r.get("author"),
             });
         }
         out.reverse();

@@ -40,15 +40,6 @@ pub fn rgba(size: u32, active: bool) -> Vec<u8> {
     out
 }
 
-pub fn egui_icon() -> egui::IconData {
-    let size = 64;
-    egui::IconData {
-        rgba: rgba(size, false),
-        width: size,
-        height: size,
-    }
-}
-
 /// ARGB32 em ordem de rede (big-endian), como o StatusNotifierItem espera.
 #[cfg(target_os = "linux")]
 pub fn argb_network(size: u32, active: bool) -> Vec<u8> {

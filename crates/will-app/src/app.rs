@@ -4,8 +4,8 @@
 use crate::hotkey::Hotkeys;
 use crate::i18n::{tr, trf};
 use crate::pages::{Cx, Nav, Pages, SettingsSection, Snapshot};
+use crate::profiles::Profile;
 use crate::service::{Service, UiCommand};
-use crate::tray::Tray;
 use crate::ui::{self, Toasts, Tone};
 use crate::voice::VoiceController;
 use serde_json::Value;
@@ -13,25 +13,31 @@ use std::sync::mpsc::Receiver;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 use will_client::ClientEvent;
-use will_core::{Event, Module, Settings};
+use will_core::{Event, Module, Principal, Settings};
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum StartWindow {
-    Auto,
-    Shown,
-    Hidden,
-}
-
-pub fn run(opts: will_server::RunOptions, start: StartWindow) -> anyhow::Result<()> {
-    let (svc, ev_rx, cmd_rx) = Service::start(opts)?;
-    // Snapshot inicial pela API (o app é cliente mesmo em loopback).
-    let snap = initial_snapshot(&svc);
-    let onboarding_done = snap.settings.general.onboarding_done;
-    let visible = match start {
-        StartWindow::Shown => true,
-        StartWindow::Hidden => false,
-        StartWindow::Auto => !onboarding_done,
+pub fn run(profile: Option<Profile>, visible: bool) -> anyhow::Result<()> {
+    let (profile, had_profile) = match profile {
+        Some(p) => (p, true),
+        None => (
+            Profile {
+                id: "none".into(),
+                name: tr("nenhum servidor").into(),
+                url: "http://127.0.0.1:0".into(),
+                token: String::new(),
+                username: None,
+                ca_pem: None,
+                insecure: false,
+            },
+            false,
+        ),
     };
+    let (svc, ev_rx, cmd_rx) = Service::new(profile)?;
+    crate::app_ipc::serve(svc.clone());
+    // Snapshot inicial pela API (o app é cliente mesmo em loopback).
+    let mut snap = initial_snapshot(&svc);
+    if !had_profile {
+        snap.connected = false;
+    }
     let viewport = egui::ViewportBuilder::default()
         .with_title("will-ia")
         .with_app_id("will-ia")
@@ -55,7 +61,7 @@ pub fn run(opts: will_server::RunOptions, start: StartWindow) -> anyhow::Result<
             )))
         }),
     );
-    tracing::info!("janela encerrada; desligando o serviço");
+    tracing::info!("janela encerrada");
     svc.shutdown();
     result.map_err(|e| anyhow::anyhow!("GUI: {e}"))
 }
@@ -63,13 +69,17 @@ pub fn run(opts: will_server::RunOptions, start: StartWindow) -> anyhow::Result<
 /// Lê `/api/status`, `/api/settings` e `/api/approvals` de uma vez (bloqueante;
 /// só no arranque). Falhas viram snapshot vazio com `connected = false`.
 fn initial_snapshot(svc: &Arc<Service>) -> Snapshot {
-    let api = svc.api.clone();
-    let (status, settings, approvals) =
-        svc.block_on(async move { tokio::join!(api.status(), api.settings(), api.approvals()) });
+    let api = svc.api();
+    let api2 = api.clone();
     let mut snap = Snapshot {
-        api_url: svc.api.base_url().to_string(),
-        server_is_local: svc.api.is_local(),
+        api_url: api.base_url().to_string(),
+        server_is_local: api.is_local(),
         ..Default::default()
+    };
+    let Some((status, settings, approvals, me)) = svc.block_on(async move {
+        tokio::join!(api2.status(), api2.settings(), api2.approvals(), api2.me())
+    }) else {
+        return snap;
     };
     if let Ok(s) = settings {
         if let Ok(st) = serde_json::from_value::<Settings>(s) {
@@ -84,6 +94,9 @@ fn initial_snapshot(svc: &Arc<Service>) -> Snapshot {
         if let Ok(list) = serde_json::from_value(a.get("pending").cloned().unwrap_or(a.clone())) {
             snap.pending_approvals = list;
         }
+    }
+    if let Ok(m) = me {
+        snap.principal = serde_json::from_value::<Principal>(m).ok();
     }
     snap
 }
@@ -126,7 +139,6 @@ pub struct WillApp {
     pub pages: Pages,
     pub toasts: Toasts,
     pub voice: VoiceController,
-    tray: Tray,
     hotkeys: Hotkeys,
     window_visible: bool,
     last_status_refresh: Instant,
@@ -139,6 +151,8 @@ pub struct WillApp {
     settings_task: Option<crate::service::Task<Value>>,
     /// Recarga de status/aprovações depois de reconectar.
     resync_task: Option<crate::service::Task<(Value, Value)>>,
+    /// `GET /api/auth/me` depois de conectar (e depois de trocar a senha).
+    me_task: Option<crate::service::Task<Value>>,
 }
 
 impl WillApp {
@@ -153,7 +167,6 @@ impl WillApp {
         svc.set_ctx(cc.egui_ctx.clone());
         egui_extras::install_image_loaders(&cc.egui_ctx);
         crate::ui::setup(&cc.egui_ctx);
-        let tray = Tray::new(&svc);
         let hotkeys = Hotkeys::new(&svc);
         let settings = snap.settings.clone();
         crate::i18n::set_language(&settings.general.language);
@@ -161,7 +174,15 @@ impl WillApp {
         voice.apply_settings(&settings.realtime);
         let mut pages = Pages::default();
         pages.settings.state.load(&svc);
-        let nav = if settings.general.onboarding_done {
+        let must_change = snap
+            .principal
+            .as_ref()
+            .is_some_and(|p| p.must_change_password);
+        let nav = if !snap.connected || must_change {
+            // Sem servidor, ou primeiro acesso com senha inicial: página Conexão
+            // (é lá que fica o modal de troca de senha).
+            Nav::Connect
+        } else if settings.general.onboarding_done || !snap.is_admin() {
             Nav::Dashboard
         } else {
             Nav::Settings(SettingsSection::Engine)
@@ -175,7 +196,6 @@ impl WillApp {
             pages,
             toasts: Toasts::default(),
             voice,
-            tray,
             hotkeys,
             window_visible: visible,
             last_status_refresh: Instant::now() - Duration::from_secs(60),
@@ -185,12 +205,8 @@ impl WillApp {
             pending_screenshot: None,
             settings_task: None,
             resync_task: None,
+            me_task: None,
         };
-        if !app.tray.available() {
-            app.toasts.info(tr(
-                "Bandeja indisponível neste desktop: fechar a janela encerra o will-ia.",
-            ));
-        }
         app.apply_theme(&cc.egui_ctx);
         app
     }
@@ -263,13 +279,29 @@ impl WillApp {
                 self.settings_task = Some(self.svc.call(|c| async move { c.settings().await }));
                 self.pages.settings.state.load(&self.svc);
             }
-            Event::Voice { state, detail } => {
-                self.voice.on_voice_event(state, detail.as_deref());
-                let active = !matches!(state.as_str(), "stopped" | "error");
-                self.tray.set_voice_active(active, &self.svc);
+            Event::Voice {
+                state,
+                detail,
+                user,
+            } => {
+                // Uma sessão de voz por usuário: só reage à própria.
+                let me = self
+                    .snap
+                    .principal
+                    .as_ref()
+                    .map(|p| p.username.clone())
+                    .unwrap_or_else(|| "local".into());
+                if user.as_deref().map(|u| u == me).unwrap_or(true) {
+                    self.voice.on_voice_event(state, detail.as_deref());
+                }
             }
             Event::Notification { title, body } => {
                 self.toasts.info(format!("{title}: {body}"));
+                // Janela oculta: notificação nativa na máquina do app (o servidor
+                // só notifica quando tem desktop).
+                if !self.window_visible {
+                    will_platform::notify(title, body);
+                }
             }
             Event::CostRecorded {
                 source, summary, ..
@@ -324,7 +356,26 @@ impl WillApp {
     fn handle_cmd(&mut self, ctx: &egui::Context, cmd: UiCommand) {
         match cmd {
             UiCommand::Show => self.show_window(ctx),
-            UiCommand::ToggleVoice => self.voice.toggle(&self.svc),
+            UiCommand::Connect(profile) => {
+                self.voice.stop(&self.svc);
+                self.svc.connect(profile.clone());
+                self.snap = Snapshot {
+                    api_url: profile.url.clone(),
+                    server_is_local: self.svc.api().is_local(),
+                    ..Default::default()
+                };
+                self.pages = Pages::default();
+                self.pages.settings.state.load(&self.svc);
+                self.me_task = None;
+                // Sem token (perfil novo ou depois de sair da conta) nada responde:
+                // fica na página Conexão para entrar.
+                self.nav = if profile.token.is_empty() {
+                    Nav::Connect
+                } else {
+                    Nav::Dashboard
+                };
+                self.toasts.info(trf("Conectando em {}…", &[&profile.name]));
+            }
             UiCommand::HotkeyDown => {
                 if self.voice.ptt_mode {
                     if !self.voice.session_active && !self.voice.busy() {
@@ -377,6 +428,27 @@ impl WillApp {
         }
     }
 
+    /// Pede ao servidor quem somos (`GET /api/auth/me`).
+    fn load_principal(&mut self) {
+        self.me_task = Some(self.svc.call(|c| async move { c.me().await }));
+    }
+
+    /// Aplica a identidade carregada: troca obrigatória de senha leva à página
+    /// Conexão (onde fica o modal); membro não fica numa página de administrador.
+    fn apply_principal(&mut self, p: Principal) {
+        let must_change = p.must_change_password;
+        let admin = p.is_admin();
+        self.snap.principal = Some(p);
+        if must_change {
+            self.nav = Nav::Connect;
+            self.toasts
+                .info(tr("Primeiro acesso: defina uma nova senha para continuar."));
+        }
+        if !admin && matches!(self.nav, Nav::Settings(_) | Nav::Users) {
+            self.nav = Nav::Dashboard;
+        }
+    }
+
     fn pump(&mut self, ctx: &egui::Context) {
         let mut events = Vec::new();
         while let Ok(ev) = self.ev_rx.try_recv() {
@@ -388,6 +460,8 @@ impl WillApp {
                 ClientEvent::Connected => {
                     let was = self.snap.connected;
                     self.snap.connected = true;
+                    self.pages.connect.last_error = None;
+                    self.pages.connect.refresh();
                     if !was {
                         // Ressincroniza o que pode ter mudado enquanto estávamos fora.
                         self.resync_task = Some(self.svc.call(|c| async move {
@@ -397,6 +471,7 @@ impl WillApp {
                         }));
                         self.settings_task =
                             Some(self.svc.call(|c| async move { c.settings().await }));
+                        self.load_principal();
                     }
                 }
                 ClientEvent::Disconnected(why) => {
@@ -405,6 +480,7 @@ impl WillApp {
                             .error(trf("Conexão com o servidor perdida: {}", &[&why]));
                     }
                     self.snap.connected = false;
+                    self.pages.connect.last_error = Some(why);
                 }
             }
         }
@@ -428,6 +504,20 @@ impl WillApp {
                         serde_json::from_value(ap.get("pending").cloned().unwrap_or(ap))
                     {
                         self.snap.pending_approvals = list;
+                    }
+                }
+            }
+        }
+        if self.pages.connect.principal_dirty {
+            self.pages.connect.principal_dirty = false;
+            self.load_principal();
+        }
+        if let Some(t) = &self.me_task {
+            if let Some(r) = t.take() {
+                self.me_task = None;
+                if let Ok(v) = r {
+                    if let Ok(p) = serde_json::from_value::<Principal>(v) {
+                        self.apply_principal(p);
                     }
                 }
             }
@@ -496,9 +586,6 @@ impl WillApp {
                 if self.snap.portable_root.is_some() {
                     info.push_str(tr(" · portátil"));
                 }
-                if !self.tray.available() {
-                    info.push_str(tr(" · sem bandeja"));
-                }
                 ui.label(egui::RichText::new(info).small().weak());
                 ui.add_space(4.0);
             });
@@ -513,7 +600,7 @@ impl WillApp {
             .auto_shrink([false, false])
             .max_height((ui.available_height() - 12.0).max(80.0))
             .show(ui, |ui| {
-                let items: Vec<(Nav, String)> = vec![
+                let mut items: Vec<(Nav, String)> = vec![
                     (Nav::Dashboard, tr("Início").into()),
                     (Nav::Threads, tr("Threads").into()),
                     (Nav::Schedules, tr("Agendamentos").into()),
@@ -529,10 +616,20 @@ impl WillApp {
                     (Nav::Logs, tr("Logs").into()),
                     (Nav::Costs, tr("Custos").into()),
                 ];
+                // Usuários: só quando sabemos que quem está logado é administrador.
+                if self.snap.principal.as_ref().is_some_and(|p| p.is_admin()) {
+                    items.push((Nav::Users, tr("Usuários").into()));
+                }
+                items.push((Nav::Connect, tr("Conexão").into()));
                 for (n, label) in items {
                     if ui::nav_item(ui, self.nav == n, &label, None).clicked() {
                         self.nav = n;
                     }
+                }
+                // Configurações: rotas exigem administrador (`docs/26`). Sem
+                // `principal` carregado ainda, mostra como antes.
+                if !self.snap.is_admin() {
+                    return;
                 }
                 ui.add_space(14.0);
                 ui.label(egui::RichText::new(tr("CONFIGURAÇÕES")).small().weak());
@@ -806,9 +903,6 @@ impl eframe::App for WillApp {
         if ctx.input(|i| i.viewport().close_requested()) {
             ctx.send_viewport_cmd(egui::ViewportCommand::CancelClose);
             self.hide_window(&ctx);
-            if !self.tray.available() {
-                tracing::info!("janela oculta; sem bandeja neste desktop. Rode `will-ia` de novo para reabrir.");
-            }
         }
 
         egui::Panel::top("titlebar")

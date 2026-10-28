@@ -36,6 +36,15 @@ pub fn notify(title: &str, body: &str) {
     });
 }
 
+/// Há sessão gráfica (bandeja, app, Chrome visível)? Windows/macOS: sempre;
+/// Linux/BSD: `DISPLAY` ou `WAYLAND_DISPLAY`.
+pub fn has_desktop() -> bool {
+    if cfg!(windows) || cfg!(target_os = "macos") {
+        return true;
+    }
+    std::env::var_os("DISPLAY").is_some() || std::env::var_os("WAYLAND_DISPLAY").is_some()
+}
+
 pub fn open_path(path: &Path) -> Result<(), String> {
     open::that_detached(path).map_err(|e| e.to_string())
 }

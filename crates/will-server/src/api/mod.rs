@@ -2,6 +2,7 @@
 //! a interface é o app desktop (`will-desktop`), que chama estes handlers
 //! diretamente; a API HTTP atende o modo headless, automação e a segunda instância.
 
+pub mod auth;
 pub mod browser;
 pub mod engine;
 pub mod files;
@@ -11,6 +12,7 @@ pub mod mcp;
 pub mod schedules;
 pub mod system;
 pub mod threads;
+pub mod users;
 pub mod ws;
 
 use crate::app::AppState;
@@ -76,15 +78,88 @@ fn token_from(req: &Request) -> Option<String> {
     })
 }
 
-async fn auth(State(state): State<App>, req: Request, next: Next) -> Response {
+/// Token bruto da requisição (para `logout`).
+#[derive(Clone)]
+pub struct BearerToken(pub String);
+
+/// Autentica: token local da API (admin implícito desta máquina) ou sessão de
+/// usuário. Põe `Principal` e `BearerToken` nas extensões da requisição.
+async fn auth(State(state): State<App>, mut req: Request, next: Next) -> Response {
     // Dentro do `nest("/api")` o caminho chega sem o prefixo.
     let path = req.uri().path();
-    if path == "/health" || path == "/api/health" {
+    if path == "/health"
+        || path == "/api/health"
+        || path == "/auth/login"
+        || path == "/api/auth/login"
+    {
         return next.run(req).await;
     }
-    match token_from(&req) {
-        Some(t) if t == state.ui_token => next.run(req).await,
-        _ => ApiError(StatusCode::UNAUTHORIZED, "token de sessão inválido".into()).into_response(),
+    let Some(t) = token_from(&req) else {
+        return ApiError(StatusCode::UNAUTHORIZED, "token de sessão ausente".into())
+            .into_response();
+    };
+    let principal = if t == state.ui_token {
+        Some(will_core::Principal::local())
+    } else {
+        match state
+            .storage
+            .session_user(&crate::auth::token_hash(&t))
+            .await
+        {
+            Ok(Some(u)) => Some(crate::auth::principal_of(&u)),
+            _ => None,
+        }
+    };
+    let Some(p) = principal else {
+        return ApiError(StatusCode::UNAUTHORIZED, "token de sessão inválido".into())
+            .into_response();
+    };
+    req.extensions_mut().insert(p);
+    req.extensions_mut().insert(BearerToken(t));
+    next.run(req).await
+}
+
+/// Rotas de configuração: só administradores.
+async fn require_admin(req: Request, next: Next) -> Response {
+    match req.extensions().get::<will_core::Principal>() {
+        Some(p) if p.is_admin() => next.run(req).await,
+        _ => ApiError(StatusCode::FORBIDDEN, "só administradores".into()).into_response(),
+    }
+}
+
+pub fn is_admin_path(method: &axum::http::Method, path: &str) -> bool {
+    let p = path.trim_start_matches("/api");
+    let m = method.as_str();
+    (p == "/settings" && m == "PUT")
+        || p.starts_with("/secrets")
+        || p.starts_with("/engine/tokens")
+        || p.starts_with("/mcp/script-token")
+        || (p.starts_with("/mcp/tools/") && p.ends_with("/policy"))
+        || p.starts_with("/mcp/external")
+        || p.starts_with("/users")
+        || p == "/kb/scaffold"
+        || p.starts_with("/browser/install/")
+        || p.starts_with("/google/connect")
+        || p.starts_with("/google/accounts/")
+        || p.starts_with("/google/calendars")
+        || p.starts_with("/whatsapp/pair")
+        || p.starts_with("/whatsapp/unlink")
+        || p.starts_with("/whatsapp/reconnect")
+        || p.starts_with("/whatsapp/accounts/")
+        || p == "/kb/open"
+        || p == "/kb/browse"
+        || p == "/diagnostics"
+        || p == "/browser/launch"
+        || p == "/browser/close"
+        || p == "/network/cert"
+}
+
+/// Aplica [`require_admin`] só nos caminhos de configuração.
+async fn admin_gate(req: Request, next: Next) -> Response {
+    if is_admin_path(req.method(), req.uri().path()) {
+        require_admin(req, next).await
+    } else {
+        next.run(req).await
     }
 }
 
@@ -99,7 +174,15 @@ async fn not_found() -> Response {
 pub fn router(state: App) -> Router {
     let api = Router::new()
         .route("/health", get(system::health))
+        .route("/auth/login", post(auth::login))
+        .route("/auth/logout", post(auth::logout))
+        .route("/auth/me", get(auth::me))
+        .route("/auth/password", post(auth::change_password))
+        .route("/users", get(users::list).post(users::create))
+        .route("/users/{id}", patch(users::patch).delete(users::delete))
+        .route("/users/{id}/sessions", get(users::sessions))
         .route("/status", get(system::status))
+        .route("/network/cert", get(system::network_cert))
         .route(
             "/settings",
             get(system::get_settings).put(system::put_settings),
@@ -227,8 +310,8 @@ pub fn router(state: App) -> Router {
             "/google/calendars/{account}/{calendar_id}",
             put(integrations::google_calendar_flags),
         )
+        .layer(axum::middleware::from_fn(admin_gate))
         .layer(axum::middleware::from_fn_with_state(state.clone(), auth))
-        .layer(tower_http::cors::CorsLayer::very_permissive())
         .layer(axum::extract::DefaultBodyLimit::max(8 * 1024 * 1024));
     Router::new()
         .nest("/api", api)

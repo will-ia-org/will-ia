@@ -3,12 +3,14 @@
 
 pub mod approvals;
 pub mod browser;
+pub mod connect;
 pub mod costs;
 pub mod dashboard;
 pub mod logs;
 pub mod schedules;
 pub mod settings;
 pub mod threads;
+pub mod users;
 
 use crate::i18n::tr;
 use crate::service::Service;
@@ -17,7 +19,7 @@ use crate::voice::VoiceController;
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::Arc;
-use will_core::{ApprovalRequest, Event, Module, ModuleStatus, Settings};
+use will_core::{ApprovalRequest, Event, Module, ModuleStatus, Principal, Settings};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum SettingsSection {
@@ -32,10 +34,11 @@ pub enum SettingsSection {
     Google,
     Scheduler,
     Browser,
+    Network,
 }
 
 impl SettingsSection {
-    pub const ALL: [SettingsSection; 11] = [
+    pub const ALL: [SettingsSection; 12] = [
         SettingsSection::General,
         SettingsSection::Engine,
         SettingsSection::Kb,
@@ -47,6 +50,7 @@ impl SettingsSection {
         SettingsSection::Google,
         SettingsSection::Scheduler,
         SettingsSection::Browser,
+        SettingsSection::Network,
     ];
     /// Rótulo no idioma corrente da UI.
     pub fn label(self) -> &'static str {
@@ -62,6 +66,7 @@ impl SettingsSection {
             SettingsSection::Google => tr("Google"),
             SettingsSection::Scheduler => tr("Agendamentos"),
             SettingsSection::Browser => tr("Browser CDP"),
+            SettingsSection::Network => tr("Rede"),
         }
     }
     /// Módulo cujo status aparece como ponto colorido no menu.
@@ -82,6 +87,7 @@ impl SettingsSection {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum Nav {
+    Connect,
     Dashboard,
     Threads,
     Schedules,
@@ -89,15 +95,18 @@ pub enum Nav {
     Approvals,
     Logs,
     Costs,
+    /// Contas do servidor (só administradores).
+    Users,
     Settings(SettingsSection),
 }
 
 impl Nav {
     /// `dashboard`, `threads`, `schedules`, `browser`, `approvals`, `logs`, `costs`,
-    /// `general`, `engine`, `kb`, `voice`, `telegram`, `mcp`, `external`, `whatsapp`,
-    /// `google`, `scheduler`, `browser-settings`.
+    /// `users`, `general`, `engine`, `kb`, `voice`, `telegram`, `mcp`, `external`, `whatsapp`,
+    /// `google`, `scheduler`, `browser-settings`, `network`.
     pub fn parse(s: &str) -> Option<Nav> {
         Some(match s {
+            "connect" => Nav::Connect,
             "dashboard" => Nav::Dashboard,
             "threads" => Nav::Threads,
             "schedules" => Nav::Schedules,
@@ -105,6 +114,7 @@ impl Nav {
             "approvals" => Nav::Approvals,
             "logs" => Nav::Logs,
             "costs" => Nav::Costs,
+            "users" => Nav::Users,
             "general" => Nav::Settings(SettingsSection::General),
             "engine" => Nav::Settings(SettingsSection::Engine),
             "kb" => Nav::Settings(SettingsSection::Kb),
@@ -116,6 +126,7 @@ impl Nav {
             "google" => Nav::Settings(SettingsSection::Google),
             "scheduler" => Nav::Settings(SettingsSection::Scheduler),
             "browser-settings" => Nav::Settings(SettingsSection::Browser),
+            "network" => Nav::Settings(SettingsSection::Network),
             _ => return None,
         })
     }
@@ -136,6 +147,21 @@ pub struct Snapshot {
     pub server_is_local: bool,
     /// Conexão com o servidor (WS de eventos) no ar.
     pub connected: bool,
+    /// Quem está autenticado neste servidor (`GET /api/auth/me`); `None` enquanto
+    /// não carregou. Decide o que o menu mostra (configurações e usuários só
+    /// para administradores) e a troca obrigatória de senha.
+    pub principal: Option<Principal>,
+}
+
+impl Snapshot {
+    /// Administrador do servidor. Sem `principal` carregado ainda, assume que sim
+    /// (comportamento de antes das contas) para não esconder o menu durante a carga.
+    pub fn is_admin(&self) -> bool {
+        self.principal
+            .as_ref()
+            .map(|p| p.is_admin())
+            .unwrap_or(true)
+    }
 }
 
 pub struct Cx<'a> {
@@ -149,6 +175,7 @@ pub struct Cx<'a> {
 
 #[derive(Default)]
 pub struct Pages {
+    pub connect: connect::ConnectPage,
     pub dashboard: dashboard::DashboardPage,
     pub threads: threads::ThreadsPage,
     pub schedules: schedules::SchedulesPage,
@@ -156,6 +183,7 @@ pub struct Pages {
     pub approvals: approvals::ApprovalsPage,
     pub logs: logs::LogsPage,
     pub costs: costs::CostsPage,
+    pub users: users::UsersPage,
     pub settings: settings::SettingsPages,
 }
 
@@ -173,6 +201,7 @@ impl Pages {
 
     pub fn ui(&mut self, ui: &mut egui::Ui, nav: Nav, cx: &mut Cx) {
         match nav {
+            Nav::Connect => self.connect.ui(ui, cx),
             Nav::Dashboard => self.dashboard.ui(ui, cx),
             Nav::Threads => self.threads.ui(ui, cx),
             Nav::Schedules => self.schedules.ui(ui, cx),
@@ -180,6 +209,7 @@ impl Pages {
             Nav::Approvals => self.approvals.ui(ui, cx),
             Nav::Logs => self.logs.ui(ui, cx),
             Nav::Costs => self.costs.ui(ui, cx),
+            Nav::Users => self.users.ui(ui, cx),
             Nav::Settings(sec) => self.settings.ui(ui, sec, cx),
         }
     }

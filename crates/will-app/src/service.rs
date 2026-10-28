@@ -1,26 +1,37 @@
-//! Ponte entre a GUI (thread principal, síncrona) e o serviço (tokio).
+//! Ponte entre a GUI (thread principal, síncrona) e o servidor (via rede).
 //!
-//! O serviço (`will_server`) roda num runtime tokio em threads de fundo. A GUI
+//! O app é um **cliente** do `will-ia` (HTTP/2 + WebSocket, `docs/26`). A GUI
 //! dispara chamadas assíncronas com [`Service::call`], que devolvem um
 //! [`Task`] consultado a cada quadro; quando a tarefa termina ela pede um
-//! `request_repaint`, então a tela nunca faz polling.
+//! `request_repaint`, então a tela nunca faz polling. Eventos chegam pelo WS
+//! `/api/events` (com reconexão) como [`ClientEvent`].
 
-use parking_lot::Mutex;
+use parking_lot::{Mutex, RwLock};
 use std::future::Future;
 use std::sync::mpsc::{channel, Receiver, Sender};
 use std::sync::Arc;
 use std::time::Duration;
 use will_client::{Client, ClientEvent};
-use will_server::{RunOptions, ServerHandle};
 
-/// Cliente da API local, compartilhado pelas páginas (`Service::call`).
+use crate::profiles::Profile;
+
+/// Cliente da API, compartilhado pelas páginas (`Service::call`).
 pub type Api = Arc<Client>;
 
-/// Comandos vindos de fora da GUI (bandeja, atalho global, segunda instância).
+/// Cliente da API para um perfil: URL, token de sessão e política de
+/// certificado (`ca_pem`/`insecure`, só para `https://`).
+pub fn client_for(profile: &Profile) -> Client {
+    Client::with_tls(
+        profile.url.clone(),
+        profile.token.clone(),
+        &profile.tls_options(),
+    )
+}
+
+/// Comandos vindos de fora da GUI (ipc do app, atalho global, página Conexão).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum UiCommand {
     Show,
-    ToggleVoice,
     /// Atalho global pressionado/solto (toggle ou push-to-talk conforme configuração).
     HotkeyDown,
     HotkeyUp,
@@ -28,101 +39,74 @@ pub enum UiCommand {
     /// navegando antes para a página indicada.
     Screenshot(std::path::PathBuf, Option<String>),
     ScreenshotNow(std::path::PathBuf),
+    /// Trocar de servidor (perfil escolhido na página Conexão).
+    Connect(Profile),
 }
 
 pub struct Service {
     rt: tokio::runtime::Runtime,
-    /// Servidor em processo (etapa 1 da separação: ainda um binário só). `None`
-    /// quando o app conecta num servidor externo.
-    handle: Option<Arc<ServerHandle>>,
-    /// Cliente HTTP/WS da API: **todo** acesso da UI ao serviço passa por ele,
-    /// mesmo em loopback (`docs/26`).
-    pub api: Api,
+    api: RwLock<Api>,
+    profile: RwLock<Profile>,
     ctx: Mutex<Option<egui::Context>>,
     cmd_tx: Sender<UiCommand>,
+    ev_tx: Sender<ClientEvent>,
     events_task: Mutex<Option<tokio::task::JoinHandle<()>>>,
 }
 
 impl Service {
-    /// Sobe o runtime e o serviço em processo; conecta o cliente em loopback.
-    pub fn start(
-        opts: RunOptions,
+    /// Cria o runtime e conecta no perfil (o WS de eventos tenta até conseguir).
+    pub fn new(
+        profile: Profile,
     ) -> anyhow::Result<(Arc<Self>, Receiver<ClientEvent>, Receiver<UiCommand>)> {
         let rt = tokio::runtime::Builder::new_multi_thread()
             .enable_all()
-            .thread_name("will-rt")
+            .thread_name("will-app-rt")
             .build()?;
-        let handle = rt.block_on(will_server::run(opts))?;
-        crate::ipc::write_port_file(&handle.state.paths, handle.addr.port());
-        let api = Arc::new(Client::new(handle.url(), handle.ui_token.clone()));
+        let api = Arc::new(client_for(&profile));
         let (cmd_tx, cmd_rx) = channel();
+        let (ev_tx, ev_rx) = channel::<ClientEvent>();
         let svc = Arc::new(Self {
             rt,
-            handle: Some(Arc::new(handle)),
-            api,
+            api: RwLock::new(api),
+            profile: RwLock::new(profile),
             ctx: Mutex::new(None),
             cmd_tx,
+            ev_tx,
             events_task: Mutex::new(None),
         });
+        svc.spawn_events();
+        Ok((svc, ev_rx, cmd_rx))
+    }
 
-        // Eventos do servidor (WS /api/events) → canal síncrono lido pela GUI.
-        let (ev_tx, ev_rx) = channel::<ClientEvent>();
-        let weak = Arc::downgrade(&svc);
+    fn spawn_events(self: &Arc<Self>) {
+        if let Some(t) = self.events_task.lock().take() {
+            t.abort();
+        }
+        let weak = Arc::downgrade(self);
         let wake: Arc<dyn Fn() + Send + Sync> = Arc::new(move || {
             if let Some(s) = weak.upgrade() {
                 s.repaint();
             }
         });
-        let task = svc.api.spawn_events(svc.rt.handle(), ev_tx, wake);
-        *svc.events_task.lock() = Some(task);
+        let api = self.api();
+        let task = api.spawn_events(self.rt.handle(), self.ev_tx.clone(), wake);
+        *self.events_task.lock() = Some(task);
+    }
 
-        // Gancho para a segunda instância (`POST /api/ui/show`) enquanto o
-        // servidor vive neste processo.
-        if let Some(h) = &svc.handle {
-            let weak = Arc::downgrade(&svc);
-            let data_dir = h.state.paths.data_dir.clone();
-            *h.state.ui_hook.write() = Some(Arc::new(move |cmd: &str| {
-                if let Some(s) = weak.upgrade() {
-                    if cmd == "show" {
-                        s.send_cmd(UiCommand::Show);
-                    } else if let Some(rest) = cmd.strip_prefix("screenshot") {
-                        let nav = rest.strip_prefix(':').map(String::from);
-                        s.send_cmd(UiCommand::Screenshot(data_dir.join("screenshot.png"), nav));
-                    }
-                }
-            }));
-        }
-        // Serviço residente: SIGINT/SIGTERM/SIGHUP não derrubam o app (só kill
-        // forçado). Registrar o handler substitui a ação padrão de terminar; os
-        // filhos `claude` morrem junto mesmo no kill -9 (PDEATHSIG / Job Object).
-        svc.rt.spawn(async move {
-            loop {
-                if tokio::signal::ctrl_c().await.is_err() {
-                    break;
-                }
-                tracing::warn!(
-                    "SIGINT ignorado: o will-ia é residente; para encerrar use kill -9 (ou o Gerenciador de Tarefas)"
-                );
-            }
-        });
-        #[cfg(unix)]
-        {
-            use tokio::signal::unix::{signal, SignalKind};
-            for (kind, name) in [
-                (SignalKind::terminate(), "SIGTERM"),
-                (SignalKind::hangup(), "SIGHUP"),
-            ] {
-                svc.rt.spawn(async move {
-                    let Ok(mut sig) = signal(kind) else { return };
-                    while sig.recv().await.is_some() {
-                        tracing::warn!(
-                            "{name} ignorado: o will-ia é residente; para encerrar use kill -9"
-                        );
-                    }
-                });
-            }
-        }
-        Ok((svc, ev_rx, cmd_rx))
+    /// Troca de servidor: novo cliente, novo WS de eventos. As páginas devem
+    /// ser recriadas pelo app (snapshot e caches são do servidor anterior).
+    pub fn connect(self: &Arc<Self>, profile: Profile) {
+        *self.api.write() = Arc::new(client_for(&profile));
+        *self.profile.write() = profile;
+        self.spawn_events();
+    }
+
+    pub fn api(&self) -> Api {
+        self.api.read().clone()
+    }
+
+    pub fn profile(&self) -> Profile {
+        self.profile.read().clone()
     }
 
     pub fn set_ctx(&self, ctx: egui::Context) {
@@ -140,17 +124,11 @@ impl Service {
         self.repaint();
     }
 
-    /// Usado pela bandeja `ksni` (Linux); nos outros SOs a bandeja chama `send_cmd`.
-    #[cfg_attr(not(target_os = "linux"), allow(dead_code))]
-    pub fn cmd_sender(&self) -> Sender<UiCommand> {
-        self.cmd_tx.clone()
-    }
-
     pub fn rt(&self) -> &tokio::runtime::Handle {
         self.rt.handle()
     }
 
-    #[cfg_attr(not(target_os = "linux"), allow(dead_code))]
+    #[allow(dead_code)]
     pub fn spawn<F>(&self, fut: F)
     where
         F: Future<Output = ()> + Send + 'static,
@@ -159,9 +137,11 @@ impl Service {
     }
 
     /// Bloqueia a thread da GUI numa chamada ao servidor (só no arranque,
-    /// para o snapshot inicial).
-    pub fn block_on<T>(&self, fut: impl Future<Output = T>) -> T {
-        self.rt.block_on(fut)
+    /// para o snapshot inicial), com limite de tempo.
+    pub fn block_on<T>(&self, fut: impl Future<Output = T>) -> Option<T> {
+        self.rt
+            .block_on(async move { tokio::time::timeout(Duration::from_secs(8), fut).await })
+            .ok()
     }
 
     /// Dispara uma chamada assíncrona ao servidor. O closure recebe o cliente da API.
@@ -172,7 +152,7 @@ impl Service {
     {
         let task = Task::new();
         let inner = task.inner.clone();
-        let state = self.api.clone();
+        let state = self.api();
         let weak = Arc::downgrade(self);
         self.rt.spawn(async move {
             let r = f(state).await;
@@ -184,15 +164,10 @@ impl Service {
         task
     }
 
-    /// Encerra o servidor em processo (se houver) e o laço de eventos.
+    /// Encerra o laço de eventos (o servidor continua no ar: é residente).
     pub fn shutdown(&self) {
         if let Some(t) = self.events_task.lock().take() {
             t.abort();
-        }
-        if let Some(h) = self.handle.clone() {
-            let _ = self.rt.block_on(async move {
-                tokio::time::timeout(Duration::from_secs(8), h.shutdown()).await
-            });
         }
     }
 }
@@ -203,7 +178,7 @@ enum TaskState<T> {
     Taken,
 }
 
-/// Resultado futuro de uma chamada ao serviço, consultado pela GUI.
+/// Resultado de uma chamada assíncrona, consultado pela GUI a cada quadro.
 pub struct Task<T> {
     inner: Arc<Mutex<TaskState<T>>>,
 }

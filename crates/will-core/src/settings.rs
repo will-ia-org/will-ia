@@ -27,6 +27,7 @@ pub struct Settings {
     pub gmail: GmailSettings,
     pub scheduler: SchedulerSettings,
     pub browser: BrowserSettings,
+    pub network: NetworkSettings,
     pub external_mcps: Vec<ExternalMcpServer>,
 }
 
@@ -194,6 +195,8 @@ pub struct KbSettings {
 #[serde(default)]
 pub struct RealtimeSettings {
     pub enabled: bool,
+    /// Sessões de voz simultâneas (uma por usuário conectado) no servidor compartilhado.
+    pub max_sessions: u32,
     pub openai_api_key_ref: Option<String>,
     pub model: String,
     pub voice: String,
@@ -247,6 +250,7 @@ impl Default for RealtimeSettings {
     fn default() -> Self {
         Self {
             enabled: false,
+            max_sessions: 3,
             openai_api_key_ref: None,
             model: "gpt-realtime-mini".into(),
             voice: "alloy".into(),
@@ -539,6 +543,36 @@ impl Default for BrowserSettings {
             traffic_capacity: 500,
             close_browser_on_stop: false,
             allow_agent_browser_tool: true,
+        }
+    }
+}
+
+/// Rede do servidor (`docs/26`, etapa 5). Mudanças exigem reiniciar o servidor.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default)]
+pub struct NetworkSettings {
+    /// Endereço de escuta: `127.0.0.1` (padrão) ou `0.0.0.0`/IP da interface.
+    pub bind: String,
+    /// TLS embutido (rustls). Sem `cert_path`/`key_path`, gera um certificado
+    /// autoassinado em `<data_dir>/tls/`.
+    pub tls: bool,
+    pub cert_path: Option<String>,
+    pub key_path: Option<String>,
+    /// Permitir escutar fora do loopback **sem** TLS (só atrás de VPN/proxy).
+    pub allow_remote_without_tls: bool,
+    /// Nomes/IPs extras no certificado autoassinado (ex.: `192.168.0.10`,
+    /// `servidor.local`); mudar regenera o certificado.
+    pub tls_extra_names: Vec<String>,
+}
+impl Default for NetworkSettings {
+    fn default() -> Self {
+        Self {
+            bind: "127.0.0.1".into(),
+            tls: false,
+            cert_path: None,
+            key_path: None,
+            allow_remote_without_tls: false,
+            tls_extra_names: vec![],
         }
     }
 }

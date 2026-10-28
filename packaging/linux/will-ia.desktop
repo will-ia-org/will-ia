@@ -1,8 +1,8 @@
 [Desktop Entry]
 Type=Application
 Name=will-ia
-Comment=Assistente pessoal: Claude Code + voz + Telegram + MCP
-Exec=will-ia --show
+Comment=Assistente pessoal: Claude Code + voz + Telegram + MCP (app desktop; o servidor `will-ia` fica na bandeja)
+Exec=will-ia-app --show
 Icon=will-ia
 Terminal=false
 Categories=Utility;Office;

@@ -455,6 +455,8 @@ impl BrowserModule {
             .arg("--no-first-run")
             .arg("--no-default-browser-check")
             .arg("--remote-allow-origins=*");
+        // Servidor sem sessão gráfica: headless obrigatório.
+        let headless = headless || !will_platform::has_desktop();
         if headless {
             cmd.arg("--headless=new");
         }

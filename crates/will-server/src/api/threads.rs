@@ -70,7 +70,7 @@ pub async fn turns(
             let (prompt_display, legacy) = will_core::split_attachment_notes(&r.prompt);
             let attachments = if r.attachments.is_empty() { legacy } else { r.attachments.clone() };
             json!({
-                "id": r.id, "thread_id": r.thread_id, "prompt": r.prompt, "prompt_display": prompt_display, "attachments": attachments, "started_at": r.started_at, "finished_at": r.finished_at,
+                "id": r.id, "thread_id": r.thread_id, "author": r.author, "prompt": r.prompt, "prompt_display": prompt_display, "attachments": attachments, "started_at": r.started_at, "finished_at": r.finished_at,
                 "result": text.as_ref().map(|t| json!({"text": t, "is_error": r.is_error, "cost_usd": r.cost_usd, "duration_ms": r.duration_ms, "model": r.model})),
                 "text": text, "is_error": r.is_error, "error_kind": r.error_kind, "merged_into": merged_into, "cost_usd": r.cost_usd, "duration_ms": r.duration_ms, "model": r.model,
                 "error": if r.is_error { text.clone() } else { None },
@@ -188,6 +188,7 @@ async fn stage_attachment(
 
 pub async fn send(
     State(state): State<App>,
+    axum::extract::Extension(me): axum::extract::Extension<will_core::Principal>,
     Path(id): Path<String>,
     Json(body): Json<SendBody>,
 ) -> ApiResult<Value> {
@@ -215,7 +216,7 @@ pub async fn send(
     let mid_turn = state.engine.pending(t) > 0;
     let turn = state
         .host()
-        .send_message_with(t, &prompt, &atts)
+        .send_message_from(t, &prompt, &atts, Some(&me.author()))
         .await
         .map_err(bad)?;
     Ok(Json(json!({ "turn_id": turn, "mid_turn": mid_turn })))

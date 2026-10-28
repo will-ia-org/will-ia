@@ -1,4 +1,4 @@
-//! Orquestrador: implementa ThreadHost/BrainHost e converte eventos do motor em estado + eventos.
+//! Orquestrador: implementa ThreadHost (e BrainHost por usuário, `UserBrain`) e converte eventos do motor em estado + eventos.
 
 use crate::app::AppState;
 use async_trait::async_trait;
@@ -123,45 +123,68 @@ impl Host {
         }
     }
 
-    /// Thread de voz atual, ou uma nova. `title` é o título proposto pela voz;
-    /// sem ele, a thread nasce sem título e recebe o assunto na primeira
-    /// mensagem (`send_message`).
-    pub async fn voice_thread(
+    /// Título da thread de voz de um usuário ("Voz" para o token local).
+    pub fn voice_title(user: &str) -> String {
+        if user == "local" {
+            "Voz".into()
+        } else {
+            format!("Voz · {user}")
+        }
+    }
+
+    /// Thread de voz do usuário: a corrente, senão a última de origem `realtime`
+    /// com o título dele, senão uma nova.
+    pub async fn voice_thread_for(
         &self,
+        user: &str,
         new_thread: bool,
         title: Option<&str>,
     ) -> Result<ThreadSummary, String> {
         if !new_thread {
-            let current = *self.state.voice_thread.read();
+            let current = self.state.voice_threads.read().get(user).copied();
             if let Some(id) = current {
                 if let Ok(t) = self.state.storage.get_thread(id).await {
                     return Ok(self.enrich(t));
                 }
             }
-            if let Ok(Some(t)) = self
-                .state
-                .storage
-                .find_thread_by_origin(&Origin::Realtime)
-                .await
-            {
-                *self.state.voice_thread.write() = Some(t.id);
-                return Ok(self.enrich(t));
+            let wanted = Self::voice_title(user);
+            if let Ok(list) = self.state.storage.list_threads(false).await {
+                if let Some(t) = list
+                    .into_iter()
+                    .filter(|t| t.origin == Origin::Realtime)
+                    .filter(|t| {
+                        t.title.as_deref() == Some(wanted.as_str())
+                            || (user == "local" && t.title.is_none())
+                    })
+                    .max_by_key(|t| t.last_activity_at)
+                {
+                    self.state
+                        .voice_threads
+                        .write()
+                        .insert(user.to_string(), t.id);
+                    return Ok(self.enrich(t));
+                }
             }
         }
+        let title = title
+            .map(str::trim)
+            .filter(|t| !t.is_empty())
+            .map(String::from)
+            .unwrap_or_else(|| Self::voice_title(user));
         let t = self
             .state
             .storage
-            .create_thread(
-                &Origin::Realtime,
-                title.map(str::trim).filter(|t| !t.is_empty()),
-            )
+            .create_thread(&Origin::Realtime, Some(&title))
             .await
             .map_err(|e| e.to_string())?;
-        *self.state.voice_thread.write() = Some(t.id);
         self.state
             .bus
             .emit(Event::ThreadCreated { thread: t.clone() });
-        Ok(t)
+        self.state
+            .voice_threads
+            .write()
+            .insert(user.to_string(), t.id);
+        Ok(self.enrich(t))
     }
 }
 
@@ -222,6 +245,17 @@ impl ThreadHost for Host {
         text: &str,
         attachments: &[will_core::Attachment],
     ) -> Result<TurnId, String> {
+        self.send_message_from(thread, text, attachments, None)
+            .await
+    }
+
+    async fn send_message_from(
+        &self,
+        thread: ThreadId,
+        text: &str,
+        attachments: &[will_core::Attachment],
+        author: Option<&str>,
+    ) -> Result<TurnId, String> {
         let t = self
             .state
             .storage
@@ -248,7 +282,7 @@ impl ThreadHost for Host {
         let turn_id = self
             .state
             .storage
-            .start_turn(thread, text, attachments)
+            .start_turn_by(thread, text, attachments, author)
             .await
             .map_err(|e| e.to_string())?;
         if first_message && will_core::is_placeholder_title(t.title.as_deref()) {
@@ -408,8 +442,15 @@ impl ThreadHost for Host {
     }
 }
 
+/// Cérebro visto por uma sessão de voz de **um** usuário: cada um tem a sua
+/// thread de voz, mas as threads são compartilhadas (`docs/26`, etapa 6).
+pub struct UserBrain {
+    pub host: Arc<Host>,
+    pub user: String,
+}
+
 #[async_trait]
-impl BrainHost for Host {
+impl BrainHost for UserBrain {
     async fn ask_brain(
         &self,
         prompt: &str,
@@ -419,33 +460,51 @@ impl BrainHost for Host {
     ) -> Result<BrainTask, String> {
         let t = match thread.map(str::trim).filter(|q| !q.is_empty()) {
             Some(q) => {
-                let found = self.resolve_thread(q).await?;
-                *self.state.voice_thread.write() = Some(found.id);
+                let found = self.host.resolve_thread(q).await?;
+                self.host
+                    .state
+                    .voice_threads
+                    .write()
+                    .insert(self.user.clone(), found.id);
                 found
             }
-            None => self.voice_thread(new_thread, title).await?,
+            None => {
+                self.host
+                    .voice_thread_for(&self.user, new_thread, title)
+                    .await?
+            }
         };
-        let turn_id = self.send_message(t.id, prompt).await?;
+        let author = format!("voz:{}", self.user);
+        let turn_id = self
+            .host
+            .send_message_from(t.id, prompt, &[], Some(&author))
+            .await?;
         Ok(BrainTask {
             thread_id: t.id,
             turn_id,
         })
     }
     async fn brain_threads(&self) -> Result<Vec<ThreadSummary>, String> {
-        let mut list = self.list_threads().await?;
+        let mut list = self.host.list_threads().await?;
         list.retain(|t| t.status != ThreadStatus::Archived);
         list.sort_by_key(|t| std::cmp::Reverse(t.last_activity_at));
         Ok(list)
     }
     async fn brain_busy(&self) -> bool {
-        let current = *self.state.voice_thread.read();
+        let current = self
+            .host
+            .state
+            .voice_threads
+            .read()
+            .get(&self.user)
+            .copied();
         match current {
-            Some(id) => self.state.engine.pending(id) > 0,
+            Some(id) => self.host.state.engine.pending(id) > 0,
             None => false,
         }
     }
     fn subscribe(&self) -> broadcast::Receiver<Event> {
-        self.state.bus.subscribe()
+        self.host.state.bus.subscribe()
     }
 }
 
@@ -685,7 +744,7 @@ pub fn spawn_bus_persistence(state: Arc<AppState>) {
             match ev {
                 Event::ApprovalRequested { approval } => {
                     let _ = state.storage.record_approval_request(&approval).await;
-                    if state.settings.read().general.notifications {
+                    if state.settings.read().general.notifications && will_platform::has_desktop() {
                         will_platform::notify("will-ia: aprovação necessária", &approval.summary);
                     }
                 }
@@ -702,7 +761,9 @@ pub fn spawn_bus_persistence(state: Arc<AppState>) {
                     }
                 }
                 Event::Notification { title, body } => {
-                    if state.settings.read().general.notifications {
+                    // No servidor só faz sentido com desktop; os apps conectados
+                    // recebem o evento pelo WS e notificam na máquina deles.
+                    if state.settings.read().general.notifications && will_platform::has_desktop() {
                         will_platform::notify(&title, &body);
                     }
                 }

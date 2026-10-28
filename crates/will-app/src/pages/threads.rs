@@ -772,8 +772,22 @@ impl ThreadsPage {
                                 _ => GroupPos::Middle,
                             };
                             let started = turn_dt(t, "started_at");
+                            // Autor (conta que escreveu): no primeiro balão do
+                            // grupo e sempre que muda em relação ao anterior.
+                            let author = ui::s(t, "author");
+                            let show_author = !author.is_empty()
+                                && author != "local"
+                                && (i == 0 || ui::s(prompts[i - 1], "author") != author);
                             ui.push_id(ui::s(t, "id"), |ui| {
-                                user_bubble(ui, pal, &mut acx, t, started.as_ref(), pos);
+                                user_bubble(
+                                    ui,
+                                    pal,
+                                    &mut acx,
+                                    t,
+                                    started.as_ref(),
+                                    pos,
+                                    show_author.then_some(author.as_str()),
+                                );
                             });
                         }
                         let text = ui::s(turn, "text");
@@ -1051,6 +1065,8 @@ fn user_bubble(
     turn: &Value,
     started: Option<&chrono::DateTime<chrono::Utc>>,
     pos: GroupPos,
+    // Conta que escreveu (`turns.author`), quando vale a pena mostrar.
+    author: Option<&str>,
 ) {
     // `prompt_display` vem sem a nota de anexo que o canal acrescenta para o
     // cérebro; os anexos chegam estruturados em `attachments`.
@@ -1091,6 +1107,9 @@ fn user_bubble(
             .show(ui, |ui| {
                 ui.set_max_width(ui.available_width() * 0.72);
                 ui.vertical(|ui| {
+                    if let Some(a) = author {
+                        ui.label(egui::RichText::new(a).size(11.0).color(pal.text_weak));
+                    }
                     if !shown.trim().is_empty() {
                         ui.add(
                             egui::Label::new(egui::RichText::new(&shown).color(pal.text))

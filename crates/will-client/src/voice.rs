@@ -34,7 +34,8 @@ impl VoiceLink {
             client.ws_base(),
             client.token()
         );
-        let (ws, _) = tokio_tungstenite::connect_async(&url)
+        let ws = client
+            .connect_ws(&url)
             .await
             .map_err(|e| format!("áudio da voz: {e}"))?;
         let (mut ws_tx, mut ws_rx) = ws.split();

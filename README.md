@@ -1,15 +1,15 @@
 # will-ia
 
-Assistente pessoal de IA que roda como **aplicação de bandeja** em Windows, Linux e macOS. Ele orquestra o **Claude Code CLI** (cérebro, rodando sobre uma pasta local de conhecimento), a **OpenAI Realtime API** (voz) e um **bot do Telegram** (mensageria), e expõe um **servidor MCP** local com ferramentas para os agentes agirem no mundo do usuário: Telegram, **WhatsApp pessoal**, **Google Agenda** e **Gmail**.
+Assistente pessoal de IA para Windows, Linux e macOS em **dois binários**: o **servidor `will-ia`** (residente, na bandeja quando há desktop; headless em servidor Linux) e o **app `will-ia-app`** (janela nativa, cliente do servidor; abre pela bandeja). Ele orquestra o **Claude Code CLI** (cérebro, rodando sobre uma pasta local de conhecimento), a **OpenAI Realtime API** (voz) e um **bot do Telegram** (mensageria), e expõe um **servidor MCP** local com ferramentas para os agentes agirem no mundo do usuário: Telegram, **WhatsApp pessoal**, **Google Agenda** e **Gmail**.
 
-> Status: **v0.1, pré-release**. Núcleo, API local, motor, MCP, Telegram, Google, WhatsApp (várias contas) e voz compilam e têm testes; a **UI nativa (egui/eframe)** está implementada (ADR-0016) e substitui a antiga UI React + Tauri, já removidas. Documentação completa em [`docs/`](docs/README.md); guia de teste em [`docs/23-guia-de-teste.md`](docs/23-guia-de-teste.md).
+> Status: **v0.1, pré-release**. Núcleo, API local, motor, MCP, Telegram, Google, WhatsApp (várias contas) e voz compilam e têm testes; a **UI nativa (egui/eframe)** está implementada (ADR-0016) e, desde a fase 5 (ADR-0019, [`docs/26`](docs/26-cliente-servidor.md)), é um **app cliente** separado do servidor (etapas 1–3 prontas; contas por pessoa, rede/TLS e voz multiusuário a caminho). Documentação completa em [`docs/`](docs/README.md); guia de teste em [`docs/23-guia-de-teste.md`](docs/23-guia-de-teste.md).
 
 ## Como funciona
 
 ```
- Voz (Realtime, áudio cpal) ─┐                                   ┌─► claude -p (thread A) ─┐
- Telegram ───────────────────┼─► will-ia (Rust: app egui + tray ─┼─► claude -p (thread B) ─┼─► Base de Conhecimento (pasta local)
- Janela nativa (egui) ───────┘        + serviço em processo) ▲   └─► claude -p (thread N) ─┘
+ will-ia-app (janela egui, voz/áudio cpal, PTT) ─ HTTP + WS ─┐          ┌─► claude -p (thread A) ─┐
+ Telegram ──────────────────────────────────────────────────┼─► will-ia ─┼─► claude -p (thread B) ─┼─► Base de Conhecimento (pasta do servidor)
+                                                            │ (servidor)└─► claude -p (thread N) ─┘
                             └──── MCP (localhost) ◄── telegram_* · whatsapp_* · calendar_* · gmail_* · notify_user
                                        │  (políticas: auto / confirmar / desligada)
                                        ├── WhatsApp pareado por QR (só ferramentas, não é canal de entrada)
@@ -32,7 +32,8 @@ Assistente pessoal de IA que roda como **aplicação de bandeja** em Windows, Li
 | Camada | Tecnologia |
 |---|---|
 | Linguagem | Rust (workspace de crates) |
-| App desktop (janela, bandeja, atalho) | `egui`/`eframe` (nativo, sem WebView), `tray-icon` (Windows/macOS) e `ksni` (Linux), `global-hotkey`, `rfd` |
+| App desktop `will-ia-app` (janela, atalho) | `egui`/`eframe` (nativo, sem WebView), cliente HTTP/WS `will-client` (`reqwest` + `tokio-tungstenite`), `global-hotkey`, `rfd` |
+| Servidor `will-ia` (bandeja) | `axum` (API local), `tray-icon` (Windows/macOS) e `ksni` (Linux) com o item "Abrir will-ia" |
 | Motor | Claude Code CLI `-p --input-format stream-json --output-format stream-json` |
 | Voz | OpenAI Realtime API via WebSocket, áudio com `cpal` no app (PCM16 24 kHz) |
 | Telegram | `teloxide` (cliente), long polling, tópicos de fórum |
@@ -58,9 +59,11 @@ will-ia/
 │   ├── will-whatsapp    # pareamento, índice local, ferramentas (whatsapp-rust)
 │   ├── will-realtime    # sessão OpenAI Realtime + handoff ask_brain + pipeline de áudio
 │   ├── will-platform    # autostart, notificações, abrir pasta/URL, which
-│   ├── will-server      # orquestrador, API/WS local (headless/automação), módulos
-│   └── will-desktop     # binário `will-ia`: app egui/eframe, bandeja, hotkey, áudio cpal, indicador de voz, modo `serve`
-├── packaging/           # linux/ (.desktop), systemd/ (user unit), macos/, windows/ — a fazer
+│   ├── will-server      # orquestrador, API/WS (contrato app↔servidor), módulos
+│   ├── will-client      # cliente tipado da API (HTTP + WS de eventos + WS de áudio)
+│   ├── will-ia          # binário `will-ia`: servidor residente, bandeja, lança o app; `serve` headless
+│   └── will-app         # binário `will-ia-app`: app egui/eframe, perfis de conexão, hotkey, áudio cpal, indicador de voz
+├── packaging/           # linux/ (.desktop do app), systemd/ (user unit do servidor), macos/ (Info.plist), portable/ (lançadores)
 ├── tools/fake-claude/   # simulador do `claude -p` para testes
 └── scripts/smoke.sh     # teste ponta a ponta da API (modo headless)
 ```
@@ -75,25 +78,25 @@ will-ia/
 - Rust estável. Linux: `libasound2-dev` e `pkg-config` (ALSA para o `cpal`); nenhuma lib de GUI em tempo de build (X11/Wayland são carregados em runtime). Windows/macOS: nada além do Rust.
 
 ```bash
-cargo build --release -p will-desktop   # → target/release/will-ia
-target/release/will-ia                  # serviço + bandeja + janela (fecha para a bandeja; "Sair" na bandeja)
-target/release/will-ia --show           # força a janela principal
-target/release/will-ia serve            # headless: só serviço + API local (--port, --data-dir, --file-secrets)
+cargo build --release -p will-ia -p will-app   # → target/release/will-ia (servidor) e target/release/will-ia-app (app)
+target/release/will-ia                         # servidor residente + bandeja ("Abrir will-ia" lança o app); --show já abre o app
+target/release/will-ia serve                   # headless: só serviço + API local (--port, --data-dir, --file-secrets); Ctrl+C encerra
+target/release/will-ia info                    # caminhos, URL e token da API local
+target/release/will-ia-app                     # app: conecta no último perfil ou em "Esta máquina"; --url/--token ou --profile para outro servidor
+target/release/will-ia-app screenshot --nav threads   # captura da janela do app (diagnóstico)
 cargo test --workspace
-scripts/smoke.sh                        # ponta a ponta com fake-claude, no modo headless
+scripts/smoke.sh                               # ponta a ponta com fake-claude (will-ia serve)
 ```
 
-Executar `will-ia` com o serviço já no ar apenas mostra a janela da instância ativa e sai.
+Os dois binários ficam **lado a lado** (o servidor acha o app na própria pasta ou no PATH). Executar `will-ia` com o servidor já no ar apenas abre o app e sai; executar `will-ia-app` com o app já aberto só traz a janela para frente. Fechar a janela do app a oculta; o servidor é o processo residente (sem "Sair"; só kill forçado). Detalhes em [`docs/13`](docs/13-plataformas-e-distribuicao.md) e [`docs/26`](docs/26-cliente-servidor.md).
 
 ## Modo portátil (pendrive)
 
-Coloque os binários em `bin/`, os lançadores `packaging/portable/will-ia.sh`/`.cmd` e um arquivo `portable` numa pasta do pendrive: o `will-ia.db` e a pasta `data/` (segredos em arquivo, sessões do WhatsApp, logs) ficam ao lado, e a base de conhecimento pode ser relativa (`workspace/`). Detalhes em [`docs/13`](docs/13-plataformas-e-distribuicao.md) e [`packaging/portable/README.md`](packaging/portable/README.md).
+Coloque os binários (`will-ia-<os>-<arch>` e `will-ia-app-<os>-<arch>`) em `bin/`, os lançadores `packaging/portable/will-ia.sh`/`.cmd` (sobem o servidor e abrem o app) e um arquivo `portable` numa pasta do pendrive: o `will-ia.db` e a pasta `data/` (segredos em arquivo, sessões do WhatsApp, logs) ficam ao lado, e a base de conhecimento pode ser relativa (`workspace/`). Detalhes em [`docs/13`](docs/13-plataformas-e-distribuicao.md) e [`packaging/portable/README.md`](packaging/portable/README.md).
 
 ## Distribuição
 
-Binários prontos em [Releases](https://github.com/will-ia-org/will-ia/releases): Linux x86_64 (`.tar.gz` e `.deb`), Windows x86_64 (`.zip`), macOS Intel e Apple Silicon (`.tar.gz` e `.app`), e o pacote portátil `will-ia-<versão>-portable.zip` para pendrive. Gerados pelo workflow `release.yml` a cada tag `v*`.
-
-Binários por SO gerados no GitHub Actions em matriz paralela: Linux x86_64 (`.tar.gz`, `.deb`, AppImage opcional, com `.desktop` e *user unit* do systemd: `systemctl --user enable --now will-ia`), Windows x86_64 (`.zip` + instalador, autostart via chave `Run`), macOS x86_64 e aarch64 (`.app` em `.dmg`, uma build por arquitetura, Login Item, notarização quando houver certificado). Os workflows e a pasta `packaging/` ainda não existem; detalhes em [`docs/13`](docs/13-plataformas-e-distribuicao.md).
+Binários prontos em [Releases](https://github.com/will-ia-org/will-ia/releases), sempre com `will-ia` **e** `will-ia-app` juntos: Linux x86_64 (`.tar.gz` e `.deb`, com `.desktop` do app e *user unit* do servidor: `systemctl --user enable --now will-ia`), Windows x86_64 (`.zip` com os dois `.exe`), macOS Intel e Apple Silicon (`.tar.gz` e `will-ia.app`, cujo executável principal é o app e leva o servidor ao lado), e o pacote portátil `will-ia-<versão>-portable.zip` para pendrive. Gerados pelo workflow `release.yml` a cada tag `v*`. Instalador Windows, `.dmg` e notarização ficam para depois; detalhes em [`docs/13`](docs/13-plataformas-e-distribuicao.md).
 
 ## Documentação
 

@@ -1,0 +1,38 @@
+[package]
+name = "will-app"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "will-ia-app — app desktop (egui): cliente do servidor will-ia (HTTP/WS), voz e configurações"
+
+[[bin]]
+name = "will-ia-app"
+path = "src/main.rs"
+
+[dependencies]
+will-core.workspace = true
+will-client.workspace = true
+will-platform.workspace = true
+tokio.workspace = true
+directories.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+anyhow.workspace = true
+tracing.workspace = true
+chrono.workspace = true
+bytes.workspace = true
+parking_lot.workspace = true
+clap.workspace = true
+eframe.workspace = true
+egui.workspace = true
+egui_extras.workspace = true
+egui_commonmark.workspace = true
+cpal.workspace = true
+rfd.workspace = true
+global-hotkey.workspace = true
+auto-launch = "0.5"
+qrcode.workspace = true
+image = { version = "0.25", default-features = false, features = ["png", "jpeg", "webp", "gif"] }
+
+[lints]
+workspace = true

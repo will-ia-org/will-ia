@@ -9,6 +9,7 @@ pub mod secrets;
 pub mod settings;
 pub mod telegram;
 pub mod threads;
+pub mod users;
 pub mod whatsapp;
 
 pub use secrets::{AutoSecretStore, SecretStore};

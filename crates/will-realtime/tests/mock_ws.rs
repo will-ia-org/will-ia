@@ -168,6 +168,7 @@ async fn handoff_flow_against_mock_server() {
         host: brain.clone(),
         bus: bus.clone(),
         storage: storage.clone(),
+        owner: None,
     };
     let settings = RealtimeSettings {
         enabled: true,
@@ -429,6 +430,7 @@ async fn brain_result_after_stop_becomes_notification() {
         host: brain.clone(),
         bus: bus.clone(),
         storage,
+        owner: None,
     };
     let settings = RealtimeSettings {
         enabled: true,

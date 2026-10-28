@@ -38,6 +38,17 @@ pub trait ThreadHost: Send + Sync {
         text: &str,
         attachments: &[Attachment],
     ) -> Result<TurnId, String>;
+    /// Igual a [`send_message_with`](Self::send_message_with), registrando o
+    /// autor (`username` do app, `telegram:<user>`, `scheduler`…).
+    async fn send_message_from(
+        &self,
+        thread: ThreadId,
+        text: &str,
+        attachments: &[Attachment],
+        _author: Option<&str>,
+    ) -> Result<TurnId, String> {
+        self.send_message_with(thread, text, attachments).await
+    }
     /// Mata o processo mantendo a sessão (volta com --resume).
     async fn restart_thread(&self, thread: ThreadId) -> Result<(), String>;
     /// Mata o processo e esquece a sessão (começa do zero).

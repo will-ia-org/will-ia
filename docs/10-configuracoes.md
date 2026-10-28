@@ -1,6 +1,6 @@
 # 10 — Configurações (UI e esquema)
 
-Janela nativa (egui/eframe, crate `will-desktop`) com navegação lateral: páginas Dashboard, Threads, Aprovações, Agendamentos, Logs e Configurações (seções abaixo). Cada seção mapeia para um sub-struct de `Settings`. Segredos não ficam em `Settings`: ficam no keyring e `Settings` guarda apenas referências (`secret_ref`).
+Janela nativa (egui/eframe, crate `will-app`, binário `will-ia-app`, cliente do servidor `will-ia`; `docs/26`) com navegação lateral: páginas Dashboard, Threads, Aprovações, Agendamentos, Browser CDP, Logs, Custos, **Conexão** e Configurações (seções abaixo). Cada seção mapeia para um sub-struct de `Settings`. Segredos não ficam em `Settings`: ficam no keyring e `Settings` guarda apenas referências (`secret_ref`).
 
 ## Seções e campos
 
@@ -53,8 +53,9 @@ Ações: **Adicionar token** (abre instrução `claude setup-token`), **Testar**
 | Transcrever e salvar na thread | bool | true |
 | Limite de caracteres falados do cérebro | int | 1500 |
 | Limite de minutos/dia | int opcional | vazio |
+| Sessões simultâneas (`max_sessions`) | int ≥ 1 | 3 |
 
-Painel de sessão na mesma seção: **Iniciar/Parar**, botão **segurar para falar** (PTT), estado (ouvindo / pensando / falando), nível do microfone e transcrições recentes. O indicador flutuante (`docs/07`) acompanha a sessão.
+Painel de sessão na mesma seção: **Iniciar/Parar** (a sessão é a do usuário logado), botão **segurar para falar** (PTT), estado (ouvindo / pensando / falando), nível do microfone e transcrições recentes. O indicador flutuante (`docs/07`) acompanha a sessão. Abaixo, **Sessões no servidor** (`GET /api/voice/status`: `sessions[] {user, active, state}`, `active_sessions / max_sessions`): quem está em sessão de voz agora; quando o teto está cheio, o botão Iniciar fica desabilitado com o motivo ("limite de N sessões atingido"). Dispositivos, atalho e PTT são do app; chave, modelo, persona, preços e teto são do servidor (admin).
 
 ### Telegram
 | Campo | Tipo | Padrão |
@@ -136,6 +137,16 @@ Ações: **Testar bot** (`getMe`), **Descobrir IDs** (instrução `/start`).
 
 Detalhes em [24](24-scheduler.md). A página **Agendamentos** (fora de Configurações) lista e edita os agendamentos.
 
+### Rede (`network`, só admin; vale no próximo início do servidor)
+| Campo | Tipo | Padrão |
+|---|---|---|
+| Endereço de escuta (`bind`) | `127.0.0.1` \| `0.0.0.0` \| IP de uma interface (ex.: IP do Tailscale) | `127.0.0.1` |
+| TLS (`tls`) | bool | false |
+| Certificado / chave (`cert_path`, `key_path`) | caminhos **no servidor** (PEM); vazios = autoassinado gerado em `<data_dir>/tls/` | vazio |
+| Permitir remoto sem TLS (`allow_remote_without_tls`) | bool, com aviso vermelho ("só atrás de VPN/proxy") | false |
+
+Cartão **Certificado em uso** (`GET /api/network/cert`): caminho, impressão digital SHA-256 e o PEM com botão **Copiar** (é o que se cola no perfil dos apps remotos); vazio quando o servidor está em HTTP. Cartão **Estado atual** (`GET /api/health`): esquema (`http`/`https`) e endereço efetivos; aviso quando o `bind` salvo é remoto mas o servidor está em `127.0.0.1` (regra do TLS, `docs/12` regra 16) ou quando TLS foi pedido e o servidor caiu para HTTP (ver `/api/logs`, módulo `network`). Salvar mostra "vale no próximo início do servidor"; `will-ia --bind` sobrepõe o campo. Ver `docs/13` "Servidor headless".
+
 ### Browser CDP (`browser`)
 | Campo | Tipo | Padrão |
 |---|---|---|
@@ -170,16 +181,34 @@ Tabela de ferramentas agrupada por família com coluna **Política** (`auto` / `
 Status dos módulos, base de conhecimento, motor (processos vivos, token ativo) e aprovações pendentes.
 
 ### Threads
-Lista com origem, título, status (🟢🟡⚪❌), última atividade, custo acumulado. Ações por thread: abrir, renomear, reiniciar, zerar, interromper, excluir (com opção de apagar transcrição). Chat com streaming e envio mid-turn: as mensagens enviadas durante um turno aparecem agrupadas ao balão inicial (cantos colados, hora só no último) e não geram "resposta" própria; o servidor grava o turno absorvido com `error_kind = "merged"` e o id do turno pai, e a API expõe `merged_into`. Anexos enviados pelo canal (foto/arquivo do Telegram) aparecem no balão do usuário: miniatura clicável para imagens (JPEG/PNG/WebP/GIF, via `egui_extras` com `file://`), chip "anexo: nome · tamanho" para os demais, clique abre no app padrão; a nota textual que o canal acrescenta ao prompt para o cérebro ("[O usuário enviou um arquivo…]") fica oculta no chat. Na própria tela dá para anexar: botão "Anexar" (diálogo nativo, vários arquivos) ou arrastar arquivos para a janela; os pendentes aparecem como chips removíveis acima da caixa e, ao enviar, o serviço copia cada um para `<kb>/inbox/ui/` (mesmo fluxo do Telegram; dá para mandar só anexos, sem texto). Cada balão traz um rodapé discreto: tempo relativo ("há 5 min"; o hover mostra a data exata), botão "copiar" e, na resposta, um ícone "i" que abre um popover com modelo, duração, custo, início/fim, sessão e id do turno.
+Lista com origem, título, status (🟢🟡⚪❌), última atividade, custo acumulado. Ações por thread: abrir, renomear, reiniciar, zerar, interromper, excluir (com opção de apagar transcrição). Chat com streaming e envio mid-turn: as mensagens enviadas durante um turno aparecem agrupadas ao balão inicial (cantos colados, hora só no último) e não geram "resposta" própria; o servidor grava o turno absorvido com `error_kind = "merged"` e o id do turno pai, e a API expõe `merged_into`. Anexos enviados pelo canal (foto/arquivo do Telegram) aparecem no balão do usuário: miniatura clicável para imagens (JPEG/PNG/WebP/GIF, via `egui_extras` com `file://`), chip "anexo: nome · tamanho" para os demais, clique abre no app padrão; a nota textual que o canal acrescenta ao prompt para o cérebro ("[O usuário enviou um arquivo…]") fica oculta no chat. Na própria tela dá para anexar: botão "Anexar" (diálogo nativo, vários arquivos) ou arrastar arquivos para a janela; os pendentes aparecem como chips removíveis acima da caixa e, ao enviar, o serviço copia cada um para `<kb>/inbox/ui/` (mesmo fluxo do Telegram; dá para mandar só anexos, sem texto). Cada balão traz um rodapé discreto: tempo relativo ("há 5 min"; o hover mostra a data exata), botão "copiar" e, na resposta, um ícone "i" que abre um popover com modelo, duração, custo, início/fim, sessão e id do turno. No balão do usuário aparece o **autor** (`turns.author`: nome do usuário da sessão; "local" para o token da API; omitido quando `null`, como nos turnos vindos do Telegram, voz ou agendamentos, que já trazem a origem no cabeçalho), já que as threads são compartilhadas por todos os usuários do servidor.
 
 ### Aprovações
-Pendentes como cartões (ferramenta, contagem regressiva, resumo gerado pelo serviço, quem pediu, argumentos em chave/valor com rótulos legíveis e JSON completo em "Detalhes", botões Aprovar/Negar) e histórico em tabela com filtros por texto e decisão (quando, ferramenta, resumo, decisão, por onde foi decidida).
+Pendentes como cartões (ferramenta, contagem regressiva, resumo gerado pelo serviço, quem pediu, argumentos em chave/valor com rótulos legíveis e JSON completo em "Detalhes", botões Aprovar/Negar) e histórico em tabela com filtros por texto e decisão (quando, ferramenta, resumo, decisão, por onde/quem decidiu: `decided_via` é `ui:<username>` quando decidido no app, `telegram`/`notification` nos outros canais). Membros também aprovam: as aprovações chegam a todos os apps conectados.
 
 ### Agendamentos (página)
 Lista (nome, gatilho + descrição do cron, fuso, próximo disparo e "em quanto tempo", thread dona com aviso se não existe mais, último resultado, contagem, estado ativo/pausado com motivo, criado por agente/usuário) e ações: editar, pausar/retomar, **Disparar agora**, excluir, histórico de disparos. Formulário com prévia da expressão cron (`/api/schedules/preview`: descrição, fuso, próximas ocorrências, erro de intervalo mínimo) ou data/hora única, fuso e thread dona. Ver [24](24-scheduler.md) (página `pages/schedules.rs`; seção `pages/settings/scheduler.rs`).
 
 ### Browser CDP (página)
-Estado do proxy (`cdp_env` com Copiar, upstream, navegador detectado/lançado, último erro), botões **Lançar navegador** / **Fechar navegador** e testes (`/json/version` no navegador, abrir aba pelo proxy, agent-browser de ponta a ponta); **Tráfego** CDP ao vivo (hora, conexão, sentido, tipo, método, id, bytes, prévia; filtro, contadores, limpar, pausar); **Instalação** (status de Node/npm/agent-browser/Chromium/skill, botões de instalar/atualizar o CLI, baixar Chromium e instalar a skill na KB, saída do trabalho em segundo plano). Ver [25](25-browser-cdp.md).
+Sem desktop no servidor, um aviso fixo "servidor sem tela: navegador sempre headless" e o toggle `headless` fica desabilitado. Estado do proxy (`cdp_env` com Copiar, upstream, navegador detectado/lançado, último erro), botões **Lançar navegador** / **Fechar navegador** e testes (`/json/version` no navegador, abrir aba pelo proxy, agent-browser de ponta a ponta); **Tráfego** CDP ao vivo (hora, conexão, sentido, tipo, método, id, bytes, prévia; filtro, contadores, limpar, pausar); **Instalação** (status de Node/npm/agent-browser/Chromium/skill, botões de instalar/atualizar o CLI, baixar Chromium e instalar a skill na KB, saída do trabalho em segundo plano). Ver [25](25-browser-cdp.md).
+
+### Conexão (página, `pages/connect.rs`)
+A que servidor o app está ligado, **quem está logado** e os **perfis** salvos (`Nav::Connect`; é a página inicial quando não há servidor alcançável ou o perfil não tem sessão válida). Cartões:
+
+- **Servidor atual**: bolinha verde/amarela, nome, URL, "conectado"/"sem conexão", último erro, e o usuário da sessão (`GET /api/auth/me`: nome, `@username`, papel `admin`/`membro`; "Token local (admin)" quando o perfil usa o token da API). Botões **Sair** (`POST /api/auth/logout`, limpa o token do perfil e volta ao formulário) e **Trocar senha** (modal: senha atual + nova + confirmação → `POST /api/auth/password`; mínimo 8 caracteres).
+- **Perfis**: "Esta máquina" (descoberto a cada atualização pelo `api-port` + `ui-session.token` do `data_dir` do servidor local; entra como admin implícito, sem login) e os perfis salvos (nome, URL, usuário; Conectar / Editar / Remover).
+- **Certificado do servidor** (perfis `https://`): campo **CA/certificado (PEM)** (`ca_pem`, colar o PEM que o admin copiou de Configurações → Rede; o app mostra a impressão digital SHA-256 calculada, `will-client::pem_fingerprint`, para conferir com a de `GET /api/health`) e a opção **Aceitar qualquer certificado (inseguro, só testes)** (`insecure`, com aviso vermelho). Erro de TLS na conexão ("certificado não confiável") aponta para este campo. Em "Servidor atual" aparece o esquema e, com TLS, a impressão digital do certificado recebido e se ela bate com a fixada.
+- **Novo perfil / Editar perfil**: nome, URL `http://host:porta` ou `https://…`, **usuário (ou e-mail) + senha**; ao salvar o app faz `POST /api/auth/login` (`client` = `will-ia-app/<versão> <SO>`), guarda **só o token de sessão** no perfil (nunca a senha) e conecta. Erros: 401 "usuário ou senha inválidos", 429 "muitas tentativas; aguarde", sem rota (servidor antigo). Campo alternativo "Token da API" (avançado) para colar o token local de um servidor a que se tem acesso ao disco.
+- **Troca de senha obrigatória**: se o login (ou `GET /api/auth/me`) devolve `must_change_password = true`, o app abre um modal bloqueante "Defina sua nova senha" (sem pedir a atual) antes de liberar as outras páginas; é o caso do `admin` criado na primeira subida (senha em `<data_dir>/admin-initial-password.txt` / `will-ia info`).
+- Sessão inválida/expirada (401 em qualquer chamada ou na reconexão do WS): o app volta para esta página com o perfil selecionado e o aviso "sessão expirada; entre de novo".
+
+Conectar troca o servidor **sem reiniciar o app**: fecha o WS, limpa o snapshot e reconecta; o perfil escolhido vira o `last` de `profiles.json` (`<config>/will-ia-app/profiles.json`, 0600; ver "Perfis do app" em `docs/26`).
+
+### Usuários (página, só admin; `pages/users.rs`)
+Aparece na navegação só quando o `Principal` atual é admin (membros recebem 403 nas rotas e o item some). Tabela de `GET /api/users`: usuário, nome, e-mail, papel, estado (ativo/desativado), último login, "troca de senha pendente". Ações: **Novo usuário** (usuário `[a-z0-9._-]`, nome, e-mail opcional, papel, senha inicial ≥ 8 — gerada aleatoriamente por padrão, com Copiar — e "obrigar troca no primeiro login", ligado por padrão → `POST /api/users`); **Editar** (nome, e-mail, papel → `PATCH`); **Redefinir senha** (`PATCH` com `password`: força troca no próximo login e derruba as sessões); **Desativar / Reativar** (`PATCH active`; `DELETE` também só desativa; a própria conta não pode ser desativada nem rebaixada, o botão fica desabilitado com tooltip); **Sessões** (modal com `GET /api/users/{id}/sessions`: criada em, expira em, último uso, cliente). Usuários desativados ficam listados, em cinza, porque a autoria histórica aponta para eles.
+
+### Navegação por papel
+O menu **Configurações** (todas as seções desta página) e **Usuários** só aparecem para `admin`; para membros ficam Dashboard, Threads, Agendamentos, Browser CDP (sem o cartão Instalação), Aprovações, Logs, Custos e Conexão. O app decide pelo `role` de `GET /api/auth/me` (snapshot) e, por garantia, trata qualquer 403 como "só administradores" num toast. "Esta máquina" com o token local é sempre admin.
 
 ### Logs
 Visor estilo terminal (monoespaçado, uma linha por registro: hora · nível · módulo · mensagem, mesmas cores nos dois temas) com histórico do banco + cauda ao vivo; filtro de texto com destaque, nível mínimo, módulo, seguir, quebrar linhas, data, pausar ao vivo, copiar visíveis, limpar tela e abrir a pasta de logs.
@@ -220,11 +249,11 @@ Assistente em 3 passos: (1) token do Claude + teste; (2) pasta da KB + criar est
 
 ## Interface
 
-egui/eframe em `crates/will-desktop` (ADR-0016). Modo imediato: cada página lê um snapshot de `Arc<AppState>` e dispara ações no runtime tokio; respostas chegam por canais e `request_repaint` dirigido pelos eventos do `EventBus`. Formulários validam espelhando o backend (erros por campo). Sem lógica de negócio na UI. Diálogos nativos: pasta (`rfd`), QR do WhatsApp desenhado na própria janela.
+egui/eframe em `crates/will-app` (ADR-0016, ADR-0019). Modo imediato: cada página lê um snapshot montado por `GET /api/status`, `/api/settings` e `/api/approvals` e mantido pelo WS `/api/events` (reconexão com backoff; banner "desconectado"), e dispara ações no runtime tokio via `will-client`; respostas chegam por canais e `request_repaint` dirigido pelos eventos. Formulários validam espelhando o backend (erros por campo). Sem lógica de negócio na UI. Diálogos nativos só para o que é do app: escolher arquivos a anexar (`rfd`; em loopback também a pasta da KB), QR do WhatsApp desenhado na própria janela. Com servidor remoto, a pasta da KB é escolhida por um modal que navega o disco do servidor (`GET /api/kb/browse`), anexos sobem por `POST /api/uploads` e miniaturas vêm de `GET /api/files`; "Abrir pasta" só aparece quando o servidor é esta máquina.
 
 ## Ajuda, idioma e estado dos módulos
 
-**Ajuda "?".** Títulos de página (`ui::heading_help`) e cartões de seção (`ui::section_help`) podem levar um ícone "?" que abre um modal com introdução, passo a passo numerado, bloco "No terminal" (com Copiar), notas (dúvidas e erros comuns) e links. O conteúdo é estático em `crates/will-desktop/src/help.rs` (uma constante `Help` por assunto: tokens e execução do motor, KB, Telegram, voz, WhatsApp, servidor MCP, políticas, MCPs externos, Google). Nada disso ocupa espaço na página fechada.
+**Ajuda "?".** Títulos de página (`ui::heading_help`) e cartões de seção (`ui::section_help`) podem levar um ícone "?" que abre um modal com introdução, passo a passo numerado, bloco "No terminal" (com Copiar), notas (dúvidas e erros comuns) e links. O conteúdo é estático em `crates/will-app/src/help.rs` (uma constante `Help` por assunto: tokens e execução do motor, KB, Telegram, voz, WhatsApp, servidor MCP, políticas, MCPs externos, Google). Nada disso ocupa espaço na página fechada.
 
 **Idioma (i18n).** Sem crates externas: os textos da UI ficam em pt-BR no código e são a própria chave. `i18n::tr("Salvar")` devolve o texto no idioma corrente; `i18n::trf("Criados: {}", &[&n])` preenche marcadores `{}` em ordem. A tabela `i18n::TABLE` guarda os pares `(pt-BR, en)`; chave ausente devolve o pt-BR. O idioma vem de Geral › Idioma (`settings.general.language`) e o app chama `set_language` a cada quadro a partir do snapshot, então salvar a seção troca a UI inteira no quadro seguinte (exceções: o menu da bandeja em Windows/macOS é construído na inicialização e só atualiza o item de voz). Testes garantem chaves únicas e mesma quantidade de `{}` nos dois idiomas. Não se traduzem ids, nomes de nível de log, URLs, modelos e textos técnicos copiáveis (ex.: `export …`).
 

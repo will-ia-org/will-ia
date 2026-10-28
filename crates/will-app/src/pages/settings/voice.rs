@@ -147,6 +147,49 @@ impl VoicePage {
                         }
                     });
             }
+            // Sessões de voz no servidor (uma por usuário conectado).
+            if let Some(stv) = self.status.data.as_ref() {
+                let max = stv
+                    .get("max_sessions")
+                    .and_then(|x| x.as_u64())
+                    .unwrap_or(0);
+                let active = stv
+                    .get("active_sessions")
+                    .and_then(|x| x.as_u64())
+                    .unwrap_or(0);
+                let sessions: Vec<&Value> = stv
+                    .get("sessions")
+                    .and_then(|x| x.as_array())
+                    .map(|a| a.iter().filter(|s| ui::b(s, "active")).collect())
+                    .unwrap_or_default();
+                if max > 0 || !sessions.is_empty() {
+                    ui.add_space(4.0);
+                    ui.horizontal_wrapped(|ui| {
+                        ui.label(
+                            egui::RichText::new(tr("Sessões no servidor"))
+                                .weak()
+                                .small(),
+                        );
+                        ui::badge(
+                            ui,
+                            &format!("{active}/{max}"),
+                            if max > 0 && active >= max {
+                                Tone::Warning
+                            } else {
+                                Tone::Neutral
+                            },
+                        );
+                        for s in &sessions {
+                            let user = ui::s(s, "user");
+                            let (label, _) = crate::voice::overlay::label_for(&ui::s(s, "state"));
+                            ui::badge(ui, &format!("{user} · {label}"), Tone::Info);
+                        }
+                        if sessions.is_empty() {
+                            ui.label(egui::RichText::new(tr("nenhuma ativa")).weak().small());
+                        }
+                    });
+                }
+            }
             if v.assistant_playing() && !v.barge_in {
                 ui.label(
                     egui::RichText::new(tr(
@@ -437,6 +480,16 @@ impl VoicePage {
                 tr("Limite de minutos/dia"),
                 Some(tr("Vazio = sem limite.")),
                 |ui| ui::optional_u32(ui, &mut r.daily_minutes_limit, tr("sem limite")),
+            );
+            ui::field(
+                ui,
+                tr("Sessões simultâneas"),
+                Some(tr(
+                    "Uma por usuário conectado; cada sessão tem custo próprio na OpenAI.",
+                )),
+                |ui| {
+                    ui::number(ui, &mut r.max_sessions, 1..=50);
+                },
             );
         });
         ui::section_help(
