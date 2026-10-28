@@ -615,6 +615,9 @@ impl ConnectPage {
     fn profiles_tab(&mut self, ui: &mut egui::Ui, cx: &mut Cx, current: &Profile) {
         let mut connect: Option<Profile> = None;
         let mut edit: Option<Profile> = None;
+        // "Esta máquina" é detectado, não salvo: Editar/Entrar abrem o formulário
+        // com URL e token locais e salvam como um perfil novo (editável).
+        let mut edit_local: Option<Profile> = None;
         let local = self.local.clone();
         let saved = self.file.profiles.clone();
         ui::section(ui, tr("Perfis"), |ui| {
@@ -632,6 +635,12 @@ impl ConnectPage {
                                     connect = Some(p.clone());
                                 }
                             });
+                            if ui.button(tr("Editar")).clicked() {
+                                edit_local = Some(p.clone());
+                            }
+                            if ui.button(tr("Entrar")).on_hover_text(tr("Entrar com usuário e senha neste servidor; vira um perfil salvo.")).clicked() {
+                                edit_local = Some(p.clone());
+                            }
                         });
                     });
                 }
@@ -704,6 +713,12 @@ impl ConnectPage {
         });
         if let Some(p) = edit {
             self.open_login(&p);
+        }
+        if let Some(p) = edit_local {
+            self.open_login(&p);
+            // Novo perfil salvo (não sobrescreve o detectado): id novo, nome sugerido.
+            self.edit_id = None;
+            self.name = tr("Este servidor").into();
         }
         if let Some(p) = connect {
             self.connect_to(cx, p);

@@ -1009,6 +1009,8 @@ pub static TABLE: &[(&str, &str)] = &[
     ("Gravação muito curta.", "Recording too short."),
     ("última mensagem {} · {} nas últimas 24 h", "last message {} · {} in the last 24 h"),
     ("nenhuma mensagem indexada", "no indexed message"),
+    ("Entrar com usuário e senha neste servidor; vira um perfil salvo.", "Sign in with user and password on this server; it becomes a saved profile."),
+    ("Este servidor", "This server"),
     ("disponível só quando o servidor é esta máquina", "available only when the server is this machine"),
     ("Conexão com o servidor perdida: {}", "Connection to the server lost: {}"),
     ("Desconectado do servidor; tentando reconectar…", "Disconnected from the server; reconnecting…"),
