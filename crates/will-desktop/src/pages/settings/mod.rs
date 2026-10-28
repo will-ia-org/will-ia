@@ -1,6 +1,7 @@
 //! Configurações: estado compartilhado (rascunho × salvo, segredos presentes,
 //! salvamento por seção) e despacho para cada seção.
 
+pub mod browser;
 pub mod engine;
 pub mod external;
 pub mod general;
@@ -230,6 +231,7 @@ fn section_label(s: &str) -> &str {
         "gmail" => tr("Gmail"),
         "external_mcps" => tr("MCPs externos"),
         "scheduler" => tr("Agendamentos"),
+        "browser" => tr("Browser CDP"),
         other => other,
     }
 }
@@ -247,6 +249,7 @@ pub struct SettingsPages {
     pub whatsapp: whatsapp::WhatsAppPage,
     pub google: google::GooglePage,
     pub scheduler: scheduler::SchedulerPage,
+    pub browser: browser::BrowserPage,
 }
 
 impl SettingsPages {
@@ -285,6 +288,7 @@ impl SettingsPages {
             SettingsSection::WhatsApp => self.whatsapp.ui(ui, cx, st),
             SettingsSection::Google => self.google.ui(ui, cx, st),
             SettingsSection::Scheduler => self.scheduler.ui(ui, cx, st),
+            SettingsSection::Browser => self.browser.ui(ui, cx, st),
         }
     }
 }

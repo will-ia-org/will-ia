@@ -238,6 +238,22 @@ impl WillApp {
                         .error(trf("Agendamento \"{}\" falhou: {}", &[name, &why]));
                 }
             }
+            Event::Browser { state, detail } => {
+                // Só os marcos que interessam a quem não está na página; o resto
+                // (ws_open/ws_closed, listening) aparece na própria página.
+                let text = match state.as_str() {
+                    "launched" => Some(tr("Browser CDP: navegador lançado.")),
+                    "browser_up" => Some(tr("Browser CDP: navegador respondendo.")),
+                    "closed" => Some(tr("Browser CDP: navegador fechado.")),
+                    _ => None,
+                };
+                if let Some(t) = text {
+                    match detail {
+                        Some(d) if !d.is_empty() => self.toasts.info(format!("{t} {d}")),
+                        _ => self.toasts.info(t),
+                    }
+                }
+            }
             _ => {}
         }
         self.pages.on_event(&ev);
@@ -392,6 +408,7 @@ impl WillApp {
                     (Nav::Dashboard, tr("Início").into()),
                     (Nav::Threads, tr("Threads").into()),
                     (Nav::Schedules, tr("Agendamentos").into()),
+                    (Nav::Browser, tr("Browser CDP").into()),
                     (
                         Nav::Approvals,
                         if pending > 0 {

@@ -320,3 +320,28 @@ pub const SCHEDULER: Help = Help {
     code: "",
     links: &[("Sintaxe cron (crontab.guru)", "https://crontab.guru/")],
 };
+
+// ---------- Browser CDP ----------
+
+pub const BROWSER: Help = Help {
+    title: "Browser CDP",
+    intro: "O will-ia expõe aos agentes um proxy local do Chrome DevTools Protocol. O agente usa o CLI agent-browser, que fala com o proxy em 127.0.0.1:<porta do proxy>; o proxy repassa tudo ao navegador real (por padrão 127.0.0.1:9222) e, se ninguém responde lá, sobe o navegador sozinho. Você não configura nada no agente: cada processo do claude já recebe a variável AGENT_BROWSER_CDP apontando para o proxy.",
+    steps: &[
+        ("Instalar o agent-browser", "Precisa de Node.js 18+. Em Instalação, clique em \"Instalar tudo\": roda npm i -g agent-browser e, ao terminar, copia a skill para a base de conhecimento. Se não tiver Chrome, use \"Baixar Chromium do agent-browser\"."),
+        ("Skill na base de conhecimento", "A skill fica em <kb>/.claude/skills/agent-browser/SKILL.md e ensina o agente a usar o CLI (abrir páginas, clicar, preencher, capturar tela). Sem ela o agente até consegue usar o CLI, mas não sabe que ele existe."),
+        ("Testar", "Em Testes: \"Testar navegador\" consulta /json/version direto no navegador; \"Abrir aba de teste pelo proxy\" passa pelo proxy e valida a reescrita das URLs e o fallback de lançamento; \"Testar agent-browser de ponta a ponta\" roda o CLI como o agente faria."),
+        ("Acompanhar", "Em Tráfego CDP você vê, ao vivo, cada comando que o agente manda (→) e cada resposta ou evento que o navegador devolve (←). Clique numa linha para ver o conteúdo inteiro."),
+    ],
+    notes: &[
+        ("Portas 9223 → 9222", "O proxy escuta em 9223 (porta do proxy) e fala com o navegador em 9222 (porta do navegador, o --remote-debugging-port do Chrome). Mude as duas nas configurações se já estiverem em uso."),
+        ("Perfil dedicado (Chrome 136+)", "O Chrome ignora --remote-debugging-port no perfil padrão. Por isso o lançamento automático usa sempre um perfil próprio (<data_dir>/browser-profile, ou a Pasta do perfil que você escolher). Logins feitos nesse perfil ficam guardados entre execuções."),
+        ("Usar um navegador já aberto", "Abra o seu Chrome com --remote-debugging-port=9222 --user-data-dir=<pasta> e o proxy o encontra; nesse caso \"Fechar navegador\" não se aplica (só fechamos o que nós lançamos)."),
+        ("Headless", "Ligado, o navegador roda sem janela. Desligado, você vê o agente navegar; útil para depurar e para logins com 2FA."),
+        ("Ferramenta permitida", "\"Liberar o CLI agent-browser\" adiciona Bash(agent-browser:*) às ferramentas permitidas do claude, para o agente rodar o CLI sem pedir permissão em modo acceptEdits."),
+    ],
+    code: "npm i -g agent-browser\nagent-browser install        # Chromium do agent-browser (opcional)\nagent-browser --version",
+    links: &[
+        ("agent-browser (GitHub)", "https://github.com/vercel-labs/agent-browser"),
+        ("Chrome: remote debugging port e perfil", "https://developer.chrome.com/blog/remote-debugging-port"),
+    ],
+};

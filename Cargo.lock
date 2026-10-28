@@ -8569,6 +8569,28 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "626c4bac6755d76ffc12cb01b2eac751db1996b9e0041de9aa02c8c211ddc82c"
 
 [[package]]
+name = "will-browser"
+version = "0.1.2"
+dependencies = [
+ "axum",
+ "chrono",
+ "futures",
+ "parking_lot",
+ "regex",
+ "reqwest 0.13.5",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "thiserror 2.0.21",
+ "tokio",
+ "tokio-tungstenite 0.30.0",
+ "tokio-util",
+ "tracing",
+ "will-core",
+ "will-platform",
+]
+
+[[package]]
 name = "will-core"
 version = "0.1.2"
 dependencies = [
@@ -8791,6 +8813,7 @@ dependencies = [
  "tracing-appender",
  "tracing-subscriber",
  "uuid",
+ "will-browser",
  "will-core",
  "will-engine",
  "will-google",

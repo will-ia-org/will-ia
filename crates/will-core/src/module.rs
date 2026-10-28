@@ -12,6 +12,7 @@ pub enum Module {
     Calendar,
     Gmail,
     Scheduler,
+    Browser,
 }
 
 impl Module {
@@ -26,6 +27,7 @@ impl Module {
             Module::Calendar => "calendar",
             Module::Gmail => "gmail",
             Module::Scheduler => "scheduler",
+            Module::Browser => "browser",
         }
     }
     pub fn all() -> &'static [Module] {
@@ -39,6 +41,7 @@ impl Module {
             Module::Calendar,
             Module::Gmail,
             Module::Scheduler,
+            Module::Browser,
         ]
     }
 }

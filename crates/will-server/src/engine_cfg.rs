@@ -28,6 +28,13 @@ pub fn build(
     for (k, v) in external_env {
         env.insert(k.clone(), v.clone());
     }
+    // Browser CDP: o agent-browser fala com o proxy local sem flag nenhuma.
+    if settings.browser.enabled {
+        env.insert(
+            "AGENT_BROWSER_CDP".into(),
+            format!("http://127.0.0.1:{}", settings.browser.listen_port),
+        );
+    }
     let cwd = settings
         .kb
         .path
@@ -36,6 +43,12 @@ pub fn build(
         .unwrap_or_else(|| paths.data_dir.join("kb-nao-configurada"));
     let mcp_config_path = Some(cwd.join(".mcp.json")).filter(|p| p.exists());
     let mut allowed = e.allowed_tools.clone();
+    if settings.browser.enabled
+        && settings.browser.allow_agent_browser_tool
+        && !allowed.iter().any(|t| t.starts_with("Bash(agent-browser"))
+    {
+        allowed.push("Bash(agent-browser:*)".into());
+    }
     for ext in settings.external_mcps.iter().filter(|x| x.enabled) {
         match &ext.allowed_tools {
             Some(list) if ext.auto_allow_tools => {

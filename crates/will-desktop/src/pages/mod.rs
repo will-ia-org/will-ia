@@ -2,6 +2,7 @@
 //! um [`Cx`] com o serviço, o snapshot global e os toasts.
 
 pub mod approvals;
+pub mod browser;
 pub mod costs;
 pub mod dashboard;
 pub mod logs;
@@ -30,10 +31,11 @@ pub enum SettingsSection {
     WhatsApp,
     Google,
     Scheduler,
+    Browser,
 }
 
 impl SettingsSection {
-    pub const ALL: [SettingsSection; 10] = [
+    pub const ALL: [SettingsSection; 11] = [
         SettingsSection::General,
         SettingsSection::Engine,
         SettingsSection::Kb,
@@ -44,6 +46,7 @@ impl SettingsSection {
         SettingsSection::WhatsApp,
         SettingsSection::Google,
         SettingsSection::Scheduler,
+        SettingsSection::Browser,
     ];
     /// Rótulo no idioma corrente da UI.
     pub fn label(self) -> &'static str {
@@ -58,6 +61,7 @@ impl SettingsSection {
             SettingsSection::WhatsApp => tr("WhatsApp"),
             SettingsSection::Google => tr("Google"),
             SettingsSection::Scheduler => tr("Agendamentos"),
+            SettingsSection::Browser => tr("Browser CDP"),
         }
     }
     /// Módulo cujo status aparece como ponto colorido no menu.
@@ -70,6 +74,7 @@ impl SettingsSection {
             SettingsSection::WhatsApp => Some(Module::WhatsApp),
             SettingsSection::Google => Some(Module::Google),
             SettingsSection::Scheduler => Some(Module::Scheduler),
+            SettingsSection::Browser => Some(Module::Browser),
             _ => None,
         }
     }
@@ -80,6 +85,7 @@ pub enum Nav {
     Dashboard,
     Threads,
     Schedules,
+    Browser,
     Approvals,
     Logs,
     Costs,
@@ -87,14 +93,15 @@ pub enum Nav {
 }
 
 impl Nav {
-    /// `dashboard`, `threads`, `schedules`, `approvals`, `logs`, `costs`, `general`,
-    /// `engine`, `kb`, `voice`, `telegram`, `mcp`, `external`, `whatsapp`, `google`,
-    /// `scheduler`.
+    /// `dashboard`, `threads`, `schedules`, `browser`, `approvals`, `logs`, `costs`,
+    /// `general`, `engine`, `kb`, `voice`, `telegram`, `mcp`, `external`, `whatsapp`,
+    /// `google`, `scheduler`, `browser-settings`.
     pub fn parse(s: &str) -> Option<Nav> {
         Some(match s {
             "dashboard" => Nav::Dashboard,
             "threads" => Nav::Threads,
             "schedules" => Nav::Schedules,
+            "browser" => Nav::Browser,
             "approvals" => Nav::Approvals,
             "logs" => Nav::Logs,
             "costs" => Nav::Costs,
@@ -108,6 +115,7 @@ impl Nav {
             "whatsapp" => Nav::Settings(SettingsSection::WhatsApp),
             "google" => Nav::Settings(SettingsSection::Google),
             "scheduler" => Nav::Settings(SettingsSection::Scheduler),
+            "browser-settings" => Nav::Settings(SettingsSection::Browser),
             _ => return None,
         })
     }
@@ -139,6 +147,7 @@ pub struct Pages {
     pub dashboard: dashboard::DashboardPage,
     pub threads: threads::ThreadsPage,
     pub schedules: schedules::SchedulesPage,
+    pub browser: browser::BrowserPage,
     pub approvals: approvals::ApprovalsPage,
     pub logs: logs::LogsPage,
     pub costs: costs::CostsPage,
@@ -150,6 +159,7 @@ impl Pages {
         self.dashboard.on_event(ev);
         self.threads.on_event(ev);
         self.schedules.on_event(ev);
+        self.browser.on_event(ev);
         self.approvals.on_event(ev);
         self.logs.on_event(ev);
         self.costs.on_event(ev);
@@ -161,6 +171,7 @@ impl Pages {
             Nav::Dashboard => self.dashboard.ui(ui, cx),
             Nav::Threads => self.threads.ui(ui, cx),
             Nav::Schedules => self.schedules.ui(ui, cx),
+            Nav::Browser => self.browser.ui(ui, cx),
             Nav::Approvals => self.approvals.ui(ui, cx),
             Nav::Logs => self.logs.ui(ui, cx),
             Nav::Costs => self.costs.ui(ui, cx),

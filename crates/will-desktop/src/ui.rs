@@ -358,6 +358,7 @@ pub fn module_name(m: will_core::Module) -> &'static str {
         M::Calendar => tr("Agenda"),
         M::Gmail => tr("Gmail"),
         M::Scheduler => tr("Agendamentos"),
+        M::Browser => tr("Browser CDP"),
     }
 }
 

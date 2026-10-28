@@ -17,6 +17,7 @@ pub async fn start_all(state: &Arc<AppState>) {
     let _ = crate::mcp_json::write(state).await;
     start_realtime(state).await;
     start_scheduler(state);
+    start_browser(state).await;
     #[cfg(feature = "google")]
     start_google(state).await;
     #[cfg(feature = "telegram")]
@@ -129,6 +130,10 @@ pub async fn stop_all(state: &Arc<AppState>) {
     }
     if let Some(sch) = state.scheduler.read().clone() {
         sch.stop();
+    }
+    let browser = state.browser.read().clone();
+    if let Some(b) = browser {
+        b.stop().await;
     }
     if let Some(m) = state.mcp.lock().await.take() {
         m.stop();
@@ -280,6 +285,30 @@ pub async fn refresh_engine(state: &Arc<AppState>, restart_live: bool) -> usize 
     } else {
         state.engine.set_config(cfg);
         0
+    }
+}
+
+/// Browser CDP: proxy em loopback + lançamento do navegador sob demanda.
+pub async fn start_browser(state: &Arc<AppState>) {
+    let cfg = state.settings().browser;
+    let existing = state.browser.read().clone();
+    match existing {
+        Some(m) => {
+            m.set_kb_path(state.kb_path());
+            m.update_config(cfg).await;
+        }
+        None => {
+            let m = will_browser::BrowserModule::new(
+                will_browser::BrowserDeps {
+                    bus: state.bus.clone(),
+                    data_dir: state.paths.data_dir.clone(),
+                    kb_path: parking_lot::RwLock::new(state.kb_path()),
+                },
+                cfg,
+            );
+            *state.browser.write() = Some(m.clone());
+            m.start().await;
+        }
     }
 }
 
@@ -542,6 +571,9 @@ pub async fn apply_section(state: &Arc<AppState>, section: &str) {
         "kb" => {
             let _ = crate::mcp_json::write(state).await;
             register_core_tools(state);
+            if let Some(b) = state.browser.read().clone() {
+                b.set_kb_path(state.kb_path());
+            }
             refresh_engine(state, true).await;
             recompute_engine_status(state);
             #[cfg(feature = "telegram")]
@@ -562,6 +594,10 @@ pub async fn apply_section(state: &Arc<AppState>, section: &str) {
         }
         "realtime" => start_realtime(state).await,
         "scheduler" => start_scheduler(state),
+        "browser" => {
+            start_browser(state).await;
+            refresh_engine(state, false).await;
+        }
         #[cfg(feature = "telegram")]
         "telegram" => start_telegram(state).await,
         #[cfg(feature = "google")]

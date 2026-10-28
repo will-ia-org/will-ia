@@ -120,6 +120,28 @@ Corpo de `POST`/`PUT` = `ScheduleInput` (`name`, `message`, `cron` **ou** `run_a
 
 Eventos relacionados no WS `/api/events`: `ScheduleFired { schedule_id, thread_id, name, ok, detail }`, `SchedulesChanged`, `Notification`, `ModuleStatus { module: "scheduler" }`. Seção de settings: `PUT /api/settings { "section": "scheduler", "value": SchedulerSettings }`.
 
+### Browser CDP
+`503` `Browser CDP não iniciado` se o módulo não existe. Ver [25](25-browser-cdp.md).
+
+| Método | Rota | Descrição |
+|---|---|---|
+| GET | `/api/browser/status` | `BrowserStatus`: `enabled`, `listening`, `listen_url`, `cdp_env`, `upstream`, `upstream_up`, `upstream_browser`, `launched { pid, path, headless, started_at }`, `launching`, `connections`, `active_connections`, `counters`, `last_seq`, `last_error`, `resolved_browser`, `user_data_dir` |
+| GET | `/api/browser/detect` | `{ browsers: [{ name, path }] }` (Chrome, Chromium, Brave, Edge, Chromium do agent-browser) |
+| GET | `/api/browser/traffic?after=&limit=` | `{ entries: [TrafficEntry { seq, at, conn, dir, id, method, session_id, kind, preview, bytes }], last_seq, counters }` (`limit` 1–1000, padrão 200; `after` = último `seq` visto) |
+| POST | `/api/browser/traffic/clear` | `{ ok }` |
+| POST | `/api/browser/launch` | garante o upstream (lança o navegador se preciso) → `BrowserStatus`; `400` com o motivo |
+| POST | `/api/browser/close` | fecha o navegador lançado pelo serviço → `BrowserStatus` |
+| POST | `/api/browser/test/upstream` | `GET /json/version` direto no navegador → `{ ok, version }` (não lança) |
+| POST | `/api/browser/test/new-tab` | `{ url? }` (padrão `about:blank`) → `PUT /json/new` **pelo proxy** → `{ ok, target }` |
+| POST | `/api/browser/test/agent-browser` | `agent-browser --cdp http://127.0.0.1:<listen_port> --session will-ia-test open about:blank` → `{ ok, output }` (sempre `200`) |
+| GET | `/api/browser/install/status` | `InstallStatus { node, node_version, npm, npm_version, agent_browser, agent_browser_version, agent_browser_chrome, kb_path, skill_in_kb, skill_in_kb_path, warnings }` |
+| GET | `/api/browser/install/job` | `Job { name, running, started_at, finished_at, ok, output }` (um trabalho por vez; saída = últimas 6000 caracteres) |
+| POST | `/api/browser/install/agent-browser` | inicia `npm install -g agent-browser@latest` → `Job`; `400` se já há trabalho ou sem `npm` |
+| POST | `/api/browser/install/chromium` | inicia `agent-browser install` → `Job` |
+| POST | `/api/browser/install/skill` | copia o `SKILL.md` do CLI para `<kb>/.claude/skills/agent-browser/` (fallback `npx -y skills add …` em segundo plano) → `{ ok, path, job }` |
+
+Eventos no WS `/api/events`: `Browser { state: listening | launched | browser_up | closed | ws_open | ws_closed, detail }`, `ModuleStatus { module: "browser" }`. Seção de settings: `PUT /api/settings { "section": "browser", "value": BrowserSettings }`.
+
 ### Google
 | Método | Rota | Descrição |
 |---|---|---|

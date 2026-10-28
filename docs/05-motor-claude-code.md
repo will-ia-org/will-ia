@@ -71,6 +71,7 @@ Variáveis de ambiente do processo filho:
 | `WILL_IA_THREAD_ID` | id interno da thread |
 | `WILL_IA_ORIGIN` | `ui` / `telegram` / `realtime` |
 | `WILL_IA_MCP_URL` | URL do servidor MCP local (para scripts em `tools/`) |
+| `AGENT_BROWSER_CDP` | `http://127.0.0.1:<browser.listen_port>` (padrão 9223): proxy CDP do serviço, lido pelo CLI `agent-browser`; só quando o módulo Browser CDP está habilitado (`docs/25`) |
 
 ### Allowlist padrão (modo `acceptEdits`)
 
@@ -82,7 +83,7 @@ Bash(ls *) Bash(cat *) Bash(mkdir *)
 mcp__will_ia__*
 ```
 
-Editável nas configurações. Negações detectadas no stream geram um aviso na UI ("o agente tentou X e foi bloqueado").
+Editável nas configurações. Com o módulo Browser CDP habilitado e `allow_agent_browser_tool` ligado, o serviço acrescenta `Bash(agent-browser:*)` (se a lista ainda não tiver uma entrada `Bash(agent-browser…`), para o agente navegar pelo CLI sem pedir permissão (`docs/25`). Negações detectadas no stream geram um aviso na UI ("o agente tentou X e foi bloqueado").
 
 ## Protocolo stream-json
 

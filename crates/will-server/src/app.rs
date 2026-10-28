@@ -58,6 +58,7 @@ pub struct AppState {
     pub module_status: RwLock<HashMap<Module, ModuleStatus>>,
     pub realtime: RwLock<Option<Arc<will_realtime::RealtimeManager>>>,
     pub scheduler: RwLock<Option<Arc<will_scheduler::SchedulerModule>>>,
+    pub browser: RwLock<Option<Arc<will_browser::BrowserModule>>>,
     #[cfg(feature = "telegram")]
     pub telegram: tokio::sync::RwLock<Option<Arc<will_telegram::TelegramModule>>>,
     #[cfg(feature = "google")]
@@ -190,6 +191,7 @@ pub async fn start(opts: RunOptions) -> anyhow::Result<ServerHandle> {
         module_status: RwLock::new(HashMap::new()),
         realtime: RwLock::new(None),
         scheduler: RwLock::new(None),
+        browser: RwLock::new(None),
         #[cfg(feature = "telegram")]
         telegram: tokio::sync::RwLock::new(None),
         #[cfg(feature = "google")]

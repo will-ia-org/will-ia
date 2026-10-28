@@ -26,6 +26,7 @@ pub struct Settings {
     pub calendar: CalendarSettings,
     pub gmail: GmailSettings,
     pub scheduler: SchedulerSettings,
+    pub browser: BrowserSettings,
     pub external_mcps: Vec<ExternalMcpServer>,
 }
 
@@ -487,6 +488,57 @@ impl Default for SchedulerSettings {
             timezone: None,
             max_schedules: 100,
             min_interval_minutes: 5,
+        }
+    }
+}
+
+/// Browser CDP: proxy local do Chrome DevTools Protocol para o agent-browser
+/// (`docs/25`). O agente recebe `AGENT_BROWSER_CDP=http://127.0.0.1:<listen_port>`;
+/// o proxy repassa ao navegador em `upstream_host:upstream_port` e, se nada
+/// estiver escutando, sobe o navegador com `--remote-debugging-port`.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default)]
+pub struct BrowserSettings {
+    pub enabled: bool,
+    /// Porta em que o proxy escuta (loopback).
+    pub listen_port: u16,
+    /// Navegador real (CDP). Lançamento automático só para loopback.
+    pub upstream_host: String,
+    pub upstream_port: u16,
+    /// Subir o navegador quando ninguém responde no upstream.
+    pub auto_launch: bool,
+    /// Caminho do executável; `None` = detectar (Chrome, Chromium, Brave, Edge, Chromium do agent-browser).
+    pub browser_path: Option<String>,
+    pub headless: bool,
+    /// Perfil dedicado (Chrome 136+ ignora a depuração remota no perfil padrão). `None` = `<data_dir>/browser-profile`.
+    pub user_data_dir: Option<String>,
+    /// Argumentos extras na linha de comando do navegador.
+    pub extra_args: Vec<String>,
+    /// Quanto esperar o navegador responder depois de lançado.
+    pub launch_wait_secs: u32,
+    /// Capacidade do log de tráfego CDP em memória (mensagens).
+    pub traffic_capacity: u32,
+    /// Fechar o navegador que nós lançamos ao desligar o módulo.
+    pub close_browser_on_stop: bool,
+    /// Adicionar `Bash(agent-browser:*)` às ferramentas permitidas do claude.
+    pub allow_agent_browser_tool: bool,
+}
+impl Default for BrowserSettings {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            listen_port: 9223,
+            upstream_host: "127.0.0.1".into(),
+            upstream_port: 9222,
+            auto_launch: true,
+            browser_path: None,
+            headless: false,
+            user_data_dir: None,
+            extra_args: vec![],
+            launch_wait_secs: 20,
+            traffic_capacity: 500,
+            close_browser_on_stop: false,
+            allow_agent_browser_tool: true,
         }
     }
 }

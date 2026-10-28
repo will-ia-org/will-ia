@@ -26,6 +26,7 @@
 | 22 | [API local](22-api-local.md) | REST/WS interno (headless, automação, segunda instância); não serve UI |
 | 23 | [Guia de teste](23-guia-de-teste.md) | Como compilar, rodar e testar cada módulo |
 | 24 | [Agendamentos](24-scheduler.md) | Scheduler: cron/único por thread, laço de disparo, recriação da thread dona, ferramentas `schedule_*` |
+| 25 | [Browser CDP](25-browser-cdp.md) | Proxy local do Chrome DevTools Protocol para o agent-browser: `AGENT_BROWSER_CDP`, lançamento do navegador sob demanda, log de tráfego, instalação do CLI e da skill |
 | — | [ADRs](adr/README.md) | Decisões arquiteturais |
 
 ## Projeto de referência

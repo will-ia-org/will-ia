@@ -2,6 +2,7 @@
 //! a interface é o app desktop (`will-desktop`), que chama estes handlers
 //! diretamente; a API HTTP atende o modo headless, automação e a segunda instância.
 
+pub mod browser;
 pub mod engine;
 pub mod integrations;
 pub mod kb;
@@ -164,6 +165,26 @@ pub fn router(state: App) -> Router {
                 .delete(schedules::delete),
         )
         .route("/schedules/{id}/run", post(schedules::run_now))
+        .route("/browser/status", get(browser::status))
+        .route("/browser/detect", get(browser::detect))
+        .route("/browser/traffic", get(browser::traffic))
+        .route("/browser/traffic/clear", post(browser::traffic_clear))
+        .route("/browser/launch", post(browser::launch))
+        .route("/browser/close", post(browser::close))
+        .route("/browser/test/upstream", post(browser::test_upstream))
+        .route("/browser/test/new-tab", post(browser::test_new_tab))
+        .route(
+            "/browser/test/agent-browser",
+            post(browser::test_agent_browser),
+        )
+        .route("/browser/install/status", get(browser::install_status))
+        .route("/browser/install/job", get(browser::install_job))
+        .route(
+            "/browser/install/agent-browser",
+            post(browser::install_agent_browser),
+        )
+        .route("/browser/install/chromium", post(browser::install_chromium))
+        .route("/browser/install/skill", post(browser::install_skill))
         .route("/telegram/test", post(integrations::telegram_test))
         .route("/telegram/status", get(integrations::telegram_status))
         .route("/voice/start", post(integrations::voice_start))

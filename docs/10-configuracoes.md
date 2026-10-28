@@ -136,6 +136,24 @@ Ações: **Testar bot** (`getMe`), **Descobrir IDs** (instrução `/start`).
 
 Detalhes em [24](24-scheduler.md). A página **Agendamentos** (fora de Configurações) lista e edita os agendamentos.
 
+### Browser CDP (`browser`)
+| Campo | Tipo | Padrão |
+|---|---|---|
+| Habilitar (`enabled`) | bool (desligado = sem `AGENT_BROWSER_CDP` nem allowlist no `claude`) | true |
+| Porta do proxy (`listen_port`) | u16, loopback; é o valor de `AGENT_BROWSER_CDP` | 9223 |
+| Navegador real (`upstream_host`, `upstream_port`) | host + porta do CDP; lançamento automático só para loopback | `127.0.0.1` / 9222 |
+| Lançar navegador automaticamente (`auto_launch`) | bool | true |
+| Executável do navegador (`browser_path`) | path opcional; select entre os detectados (`/api/browser/detect`) ou caminho manual; vazio = detectar (Chrome, Chromium, Brave, Edge, Chromium do agent-browser) | vazio |
+| Headless (`headless`) | bool (`--headless=new`) | false |
+| Perfil (`user_data_dir`) | path opcional; vazio = `<data_dir>/browser-profile` (Chrome 136+ exige perfil dedicado) | vazio |
+| Argumentos extras (`extra_args`) | lista de strings | `[]` |
+| Espera após lançar (`launch_wait_secs`) | segundos (mín. efetivo 3) | 20 |
+| Capacidade do log de tráfego (`traffic_capacity`) | mensagens em memória (mín. 10) | 500 |
+| Fechar navegador ao parar (`close_browser_on_stop`) | bool; só o navegador lançado pelo serviço | false |
+| Liberar `Bash(agent-browser:*)` (`allow_agent_browser_tool`) | bool (allowlist do modo `acceptEdits`) | true |
+
+Detalhes em [25](25-browser-cdp.md). A página **Browser CDP** (fora de Configurações) mostra estado, tráfego ao vivo, testes e instalação do agent-browser/Chromium/skill.
+
 ### MCPs externos
 | Campo | Tipo |
 |---|---|
@@ -160,6 +178,9 @@ Pendentes como cartões (ferramenta, contagem regressiva, resumo gerado pelo ser
 ### Agendamentos (página)
 Lista (nome, gatilho + descrição do cron, fuso, próximo disparo e "em quanto tempo", thread dona com aviso se não existe mais, último resultado, contagem, estado ativo/pausado com motivo, criado por agente/usuário) e ações: editar, pausar/retomar, **Disparar agora**, excluir, histórico de disparos. Formulário com prévia da expressão cron (`/api/schedules/preview`: descrição, fuso, próximas ocorrências, erro de intervalo mínimo) ou data/hora única, fuso e thread dona. Ver [24](24-scheduler.md) (página `pages/schedules.rs`; seção `pages/settings/scheduler.rs`).
 
+### Browser CDP (página)
+Estado do proxy (`cdp_env` com Copiar, upstream, navegador detectado/lançado, último erro), botões **Lançar navegador** / **Fechar navegador** e testes (`/json/version` no navegador, abrir aba pelo proxy, agent-browser de ponta a ponta); **Tráfego** CDP ao vivo (hora, conexão, sentido, tipo, método, id, bytes, prévia; filtro, contadores, limpar, pausar); **Instalação** (status de Node/npm/agent-browser/Chromium/skill, botões de instalar/atualizar o CLI, baixar Chromium e instalar a skill na KB, saída do trabalho em segundo plano). Ver [25](25-browser-cdp.md).
+
 ### Logs
 Visor estilo terminal (monoespaçado, uma linha por registro: hora · nível · módulo · mensagem, mesmas cores nos dois temas) com histórico do banco + cauda ao vivo; filtro de texto com destaque, nível mínimo, módulo, seguir, quebrar linhas, data, pausar ao vivo, copiar visíveis, limpar tela e abrir a pasta de logs.
 
@@ -180,6 +201,7 @@ pub struct Settings {
     pub calendar: CalendarSettings,
     pub gmail: GmailSettings,
     pub scheduler: SchedulerSettings,
+    pub browser: BrowserSettings,     // proxy CDP para o agent-browser (docs/25)
     pub external_mcps: Vec<ExternalMcpServer>,
 }
 ```
@@ -190,7 +212,7 @@ pub struct Settings {
 
 ## Aplicação a quente
 
-`SettingsChanged { section }` → Orchestrator decide: `general` (sem reinício), `engine` (aplica nos próximos spawns; troca de token derruba vivos), `kb` (derruba todos os processos; nova pasta vale no próximo spawn), `realtime`/`telegram`/`mcp`/`whatsapp`/`google` (stop + start do módulo); `scheduler` (`update_config`: liga/desliga o laço e reaplica limites/fuso sem reiniciar); mudanças em `calendar`/`gmail` que exigem escopo novo disparam reautorização incremental.
+`SettingsChanged { section }` → Orchestrator decide: `general` (sem reinício), `engine` (aplica nos próximos spawns; troca de token derruba vivos), `kb` (derruba todos os processos; nova pasta vale no próximo spawn), `realtime`/`telegram`/`mcp`/`whatsapp`/`google` (stop + start do módulo); `scheduler` (`update_config`: liga/desliga o laço e reaplica limites/fuso sem reiniciar); `browser` (`update_config` reinicia o listener só se porta/`enabled` mudaram; `refresh_engine` para que `AGENT_BROWSER_CDP`/allowlist valham no próximo spawn; mudar `kb` atualiza a pasta da skill); mudanças em `calendar`/`gmail` que exigem escopo novo disparam reautorização incremental.
 
 ## Onboarding (primeira execução)
 
@@ -210,7 +232,7 @@ egui/eframe em `crates/will-desktop` (ADR-0016). Modo imediato: cada página lê
 
 | Cor | Estado | Significado |
 |---|---|---|
-| verde | `Running` → "pronto" | habilitado, configurado e operacional, mesmo ocioso (motor: token ativo + KB ok; voz: habilitada + chave; Google: conta conectada; Telegram: polling no ar; WhatsApp: conta conectada; MCP: ouvindo). O Início acrescenta detalhes ("N processo(s) vivo(s)", "em sessão", "N conta(s)") |
+| verde | `Running` → "pronto" | habilitado, configurado e operacional, mesmo ocioso (motor: token ativo + KB ok; voz: habilitada + chave; Google: conta conectada; Telegram: polling no ar; WhatsApp: conta conectada; MCP: ouvindo; Browser CDP: proxy escutando, mesmo sem navegador aberto). O Início acrescenta detalhes ("N processo(s) vivo(s)", "em sessão", "N conta(s)") |
 | azul | `Starting` → "iniciando" | transição |
 | amarelo | `Degraded(motivo)` → "atenção · motivo" | habilitado, mas falta algo ou algo falha; o motivo é sempre mostrado |
 | vermelho | `Error(motivo)` → "erro · motivo" | falhou ao subir ou erro fatal |

@@ -15,6 +15,7 @@
 | Conta Google (Agenda, Gmail) | e-mail enviado/compromisso alterado por injeção; vazamento de refresh token | `confirmar` em `gmail_send`/`gmail_modify`/escritas de agenda; "só destinatários já vistos" opcional; refresh token no keyring; escopos mínimos e incrementais; revogação real |
 | MCPs externos | servidor malicioso/comprometido recebe dados ou induz ações | catálogo explícito; teste prévio; allowlist por ferramenta; segredos isolados por servidor; aviso na UI |
 | Conteúdo de e-mail/mensagens | prompt injection direcionada ao agente | tratado como dado; `CLAUDE.md` da KB orienta; aprovação humana nas ações externas (ADR-0013) |
+| Navegador do agente (Browser CDP) | outro processo local controla o navegador pela porta CDP; páginas injetam instruções; agente age na web em nome do usuário | proxy e navegador só em loopback; perfil **dedicado** separado do pessoal; conteúdo de página é dado (regra 11); `Bash(agent-browser:*)` desligável; só o navegador lançado pelo serviço é fechado por ele |
 
 ## Regras de implementação
 
@@ -32,6 +33,7 @@
 12. **MCPs externos**: segredos nunca no `.mcp.json` (sempre `${WILL_MCP_*}` + keyring); servidores stdio executam com o ambiente mínimo do spawn; a UI avisa que um MCP externo recebe o que o agente lhe envia e que não há aprovação humana interposta (só allowlist por ferramenta).
 13. **Caminhos**: toda ferramenta que recebe ou devolve `path` resolve canonicamente e exige prefixo da KB.
 14. **API local**: o token em `<data_dir>/ui-session.token` (0600) protege só a API HTTP em `127.0.0.1` (modo headless, automação, `POST /api/ui/show` da segunda instância). A UI nativa roda no mesmo processo do serviço e não usa token nem rede.
+15. **Proxy CDP** (`docs/25`, ADR-0018): escuta só em `127.0.0.1:<listen_port>` e lança o navegador só se o upstream também é loopback. O proxy **não autentica**, exatamente como o CDP do Chrome em `--remote-debugging-port`: qualquer processo do mesmo usuário pode controlar aquele navegador. Por isso o navegador lançado usa um **perfil dedicado** (`<data_dir>/browser-profile`), nunca o perfil pessoal (cookies, senhas), e `--remote-allow-origins=*` só vale para ele. O proxy não interpreta comandos; o log de tráfego fica em memória (prévias de 400 caracteres) e é dado não confiável. Nenhum segredo do serviço vai para o navegador nem para os trabalhos de instalação (`npm`/`npx`/`agent-browser`).
 
 ## Modo bypass
 

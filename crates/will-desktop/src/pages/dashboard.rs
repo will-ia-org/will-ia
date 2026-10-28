@@ -75,6 +75,8 @@ impl DashboardPage {
             }
             // Agendamentos: `Running` = "pronto" (o relógio está rodando); sem detalhe extra.
             Module::Scheduler => base,
+            // Browser CDP: `Running` = proxy escutando; o detalhe fica na própria página.
+            Module::Browser => base,
             _ => base,
         }
     }

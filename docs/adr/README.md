@@ -21,3 +21,4 @@ Formato: contexto → decisão → consequências. Numeração sequencial; nunca
 | [0015](0015-ui-http-local-tauri-casca.md) | UI servida por HTTP local; Tauri como casca fina | Substituída pela 0016 |
 | [0016](0016-ui-nativa-egui.md) | UI nativa com egui/eframe; binário único em modo daemon (`will-ia`, `--show`, `serve`) | Aceita |
 | [0017](0017-scheduler-revive-threads.md) | Scheduler como módulo de ferramentas; disparo pelo stdin da thread dona; recriação da thread apagada (origem + sessão); perdidos ignorados | Aceita |
+| [0018](0018-browser-cdp-proxy.md) | Navegação pelo agent-browser via skill + `AGENT_BROWSER_CDP`; proxy CDP em loopback com lançamento do navegador sob demanda (perfil dedicado) | Aceita |

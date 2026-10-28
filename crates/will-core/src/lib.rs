@@ -126,6 +126,11 @@ pub enum Event {
     },
     /// Lista de agendamentos mudou (criado/editado/removido/pausado); a UI recarrega.
     SchedulesChanged,
+    /// Estado do Browser CDP (proxy no ar, navegador lançado/fechado, upstream caiu…).
+    Browser {
+        state: String,
+        detail: Option<String>,
+    },
     /// Custo de IA registrado (voz, Claude…): `summary` já vem pronto para mostrar.
     CostRecorded {
         source: String,

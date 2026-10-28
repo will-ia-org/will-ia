@@ -19,7 +19,7 @@ Convenção de identificação: `RF-<módulo>-<nº>`. Prioridade: **M** (Must, M
 
 | ID | Requisito | Prio |
 |---|---|---|
-| RF-CFG-01 | A janela principal (nativa, egui) deve ter navegação lateral com páginas Dashboard, Threads, Aprovações, Agendamentos, Logs e Configurações com seções: Geral, Motor Claude, Base de Conhecimento, Voz (Realtime), Telegram, MCP, MCPs externos, WhatsApp, Google (Conta, Agenda, Gmail), Agendamentos. | M |
+| RF-CFG-01 | A janela principal (nativa, egui) deve ter navegação lateral com páginas Dashboard, Threads, Aprovações, Agendamentos, Logs e Configurações com seções: Geral, Motor Claude, Base de Conhecimento, Voz (Realtime), Telegram, MCP, MCPs externos, WhatsApp, Google (Conta, Agenda, Gmail), Agendamentos, Browser CDP. | M |
 | RF-CFG-02 | **Geral:** autostart, idioma da UI, nível de log, notificações. | M |
 | RF-CFG-03 | **Motor Claude:** lista de tokens de subscription (apelido + token), com exatamente um marcado como *ativo*; modelo padrão; modo de permissão (`acceptEdits` ou `bypassPermissions`); limite de processos simultâneos; orçamento máximo por turno (USD, opcional); timeout por turno. | M |
 | RF-CFG-04 | **Base de Conhecimento:** caminho da pasta; validação de existência e permissão de escrita; botão para abrir no explorador de arquivos; botão para criar a estrutura inicial (`.claude/`, `tools/`, etc.) se não existir. | M |
@@ -178,6 +178,20 @@ Convenção de identificação: `RF-<módulo>-<nº>`. Prioridade: **M** (Must, M
 | RF-SCH-07 | Página **Agendamentos** na UI: lista com próximo disparo, thread dona, estado e histórico; formulário com prévia da expressão cron (próximas ocorrências e descrição); pausar/retomar, **Disparar agora** e excluir. Seção **Configurações → Agendamentos** com os campos de `SchedulerSettings`. | S |
 | RF-SCH-08 | API local: `GET/POST /api/schedules`, `GET /api/schedules/preview`, `GET/PUT/DELETE /api/schedules/{id}`, `POST /api/schedules/{id}/run`. Cada disparo registra um `ScheduleRun` (últimos 50) e emite `ScheduleFired`/`SchedulesChanged`. | S |
 | RF-SCH-09 | Ao disparar em thread de origem UI/voz, notificação nativa (`notify_on_fire`, padrão ligado); em thread do Telegram não, pois a resposta já vai para o tópico. | S |
+
+## RF-BRW — Browser CDP (proxy para o agent-browser; não é canal)
+
+| ID | Requisito | Prio |
+|---|---|---|
+| RF-BRW-01 | O serviço deve subir um **proxy CDP** em `127.0.0.1:<listen_port>` (padrão 9223) que repassa ao navegador real em `<upstream_host>:<upstream_port>` (padrão `127.0.0.1:9222`): HTTP de descoberta (`/json*`) com `Host` em loopback e reescrita de `host:porta` nas URLs devolvidas, e WebSocket bidirecional. | S |
+| RF-BRW-02 | Todo processo `claude` recebe `AGENT_BROWSER_CDP=http://127.0.0.1:<listen_port>` enquanto o módulo está habilitado e, se `allow_agent_browser_tool`, `Bash(agent-browser:*)` na allowlist de `acceptEdits`; o agente não configura porta nem `--cdp`. | S |
+| RF-BRW-03 | Se ninguém responde no upstream e `auto_launch` está ligado (só upstream loopback), o proxy **lança o navegador** (`--remote-debugging-port`, perfil dedicado em `<data_dir>/browser-profile`, `--no-first-run`, `--no-default-browser-check`, `--remote-allow-origins=*`, `--headless=new` opcional, `extra_args`, `about:blank`), espera até `launch_wait_secs` e só então repassa. Um trinco garante um único lançamento sob concorrência; falhas voltam como `502` com motivo em pt-BR. | S |
+| RF-BRW-04 | Detecção do navegador por SO (Chrome, Chromium, Brave, Edge e o Chromium do `agent-browser doctor --json`), com `browser_path` manual opcional; visível ou headless. | S |
+| RF-BRW-05 | Log de tráfego CDP em memória (`traffic_capacity`, padrão 500) classificando `command`/`response`/`event`/`error`, com contadores e prévia de 400 caracteres, exibido ao vivo na página Browser CDP (`GET /api/browser/traffic?after=`). | S |
+| RF-BRW-06 | Página Browser CDP → Instalação: status de Node/npm/agent-browser/Chromium/skill; botões `npm install -g agent-browser@latest`, `agent-browser install` e "Instalar skill na base de conhecimento" (copia o `SKILL.md` de `agent-browser skills path` para `<kb>/.claude/skills/agent-browser/`; fallback `npx -y skills add vercel-labs/agent-browser -a claude-code -y` na KB). Trabalhos em segundo plano com saída acompanhada; ferramentas do Node achadas no PATH e em nvm/volta/fnm/npm global. | S |
+| RF-BRW-07 | Testes na página: `/json/version` direto no navegador; abrir aba pelo proxy (`PUT /json/new`); agent-browser de ponta a ponta (`--cdp http://127.0.0.1:<listen_port> --session will-ia-test open about:blank`); Lançar/Fechar navegador (só o lançado pelo serviço). | S |
+| RF-BRW-08 | Processos lançados (navegador, instalações) seguem a regra do serviço residente (`hide_console`, `die_with_parent`, `attach_to_job`, grupo de processos); `close_browser_on_stop` opcional. O módulo não cria threads, não expõe ferramentas MCP e só grava na KB a skill, por clique do usuário. Só loopback; o proxy não autentica (modelo do CDP local). | S |
+| RF-BRW-09 | API local `/api/browser/*` (status, detect, traffic, launch, close, test/*, install/*) e seção `browser` de `Settings` aplicada a quente (listener reinicia só se porta/enabled mudam; env/allowlist valem no próximo spawn). | S |
 
 ## RF-LOG — Observabilidade
 
