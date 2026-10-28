@@ -5,13 +5,11 @@ use super::SettingsState;
 use crate::help;
 use crate::i18n::{tr, trf};
 use crate::pages::Cx;
-use crate::service::{j, Loader};
+use crate::service::Loader;
 use crate::ui::{self, SecretAction, SecretField, Tone};
 use crate::voice::audio;
-use axum::extract::{Query, State};
 use serde_json::Value;
 use will_core::Event;
-use will_server::api::integrations as api;
 
 #[derive(Default)]
 pub struct VoicePage {
@@ -42,16 +40,14 @@ impl VoicePage {
 
     pub fn ui(&mut self, ui: &mut egui::Ui, cx: &mut Cx, st: &mut SettingsState) {
         if self.transcripts.stale(std::time::Duration::from_secs(30)) {
-            self.transcripts.start(cx.svc.call(|s| async move {
-                j(api::voice_transcripts(State(s), Query(api::Limit { limit: Some(50) })).await)
+            self.transcripts.start(cx.svc.call(|c| async move {
+                c.voice_transcripts(&[("limit", "50".to_string())]).await
             }));
         }
         self.transcripts.poll();
         if self.status.stale(std::time::Duration::from_secs(60)) {
-            self.status.start(
-                cx.svc
-                    .call(|s| async move { j(api::voice_status(State(s)).await) }),
-            );
+            self.status
+                .start(cx.svc.call(|c| async move { c.voice_status().await }));
         }
         self.status.poll();
         if self.devices.is_none() {

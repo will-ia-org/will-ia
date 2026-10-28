@@ -2,7 +2,7 @@
 //! do agent-browser (CLI, Chromium e skill na base de conhecimento), testes de
 //! ponta a ponta e o tráfego CDP ao vivo num visor estilo terminal.
 //!
-//! Dados: handlers de `will_server::api::browser` (chamados em processo). O
+//! Dados: rotas `/api/browser/*` (`docs/22`) via `will_client`. O
 //! tráfego é buscado por polling a cada 1 s (`after` = última `seq` vista) e
 //! mantido localmente até [`TRAFFIC_MAX`] mensagens; o status recarrega sozinho
 //! a cada [`Event::Browser`].
@@ -10,16 +10,13 @@
 use super::{Cx, Nav, SettingsSection};
 use crate::help;
 use crate::i18n::{tr, trf};
-use crate::service::{j, Loader, Task};
+use crate::service::{Loader, Task};
 use crate::ui::{self, Tone};
-use axum::extract::{Query, State};
-use axum::Json;
 use egui::{Color32, FontId, RichText, TextFormat};
 use serde_json::Value;
 use std::collections::HashSet;
 use std::time::{Duration, Instant};
 use will_core::Event;
-use will_server::api::browser as api;
 
 /// Teto de mensagens CDP guardadas localmente.
 const TRAFFIC_MAX: usize = 1000;
@@ -217,16 +214,14 @@ impl BrowserPage {
     // ---------- chamadas ----------
 
     fn reload_status(&mut self, cx: &Cx) {
-        self.status.start(
-            cx.svc
-                .call(|s| async move { j(api::status(State(s)).await) }),
-        );
+        self.status
+            .start(cx.svc.call(|c| async move { c.browser_status().await }));
     }
 
     fn reload_install(&mut self, cx: &Cx) {
         self.install.start(
             cx.svc
-                .call(|s| async move { j(api::install_status(State(s)).await) }),
+                .call(|c| async move { c.browser_install_status().await }),
         );
     }
 
@@ -234,36 +229,30 @@ impl BrowserPage {
         self.last_job_poll = Some(Instant::now());
         self.job.start(
             cx.svc
-                .call(|s| async move { j(api::install_job(State(s)).await) }),
+                .call(|c| async move { c.browser_install_job().await }),
         );
     }
 
     fn poll_traffic(&mut self, cx: &Cx) {
         self.last_traffic_poll = Some(Instant::now());
         let after = self.last_seq;
-        self.traffic.start(cx.svc.call(move |s| async move {
-            j(api::traffic(
-                State(s),
-                Query(api::TrafficQuery {
-                    after: Some(after),
-                    limit: Some(TRAFFIC_PAGE),
-                }),
-            )
-            .await)
-        }));
+        self.traffic.start(
+            cx.svc
+                .call(move |c| async move { c.browser_traffic(after, TRAFFIC_PAGE).await }),
+        );
     }
 
     fn start_install(&mut self, cx: &Cx, step: &'static str) {
         let task = match step {
             "agent-browser" => cx
                 .svc
-                .call(|s| async move { j(api::install_agent_browser(State(s)).await) }),
+                .call(|c| async move { c.browser_install_agent_browser().await }),
             "chromium" => cx
                 .svc
-                .call(|s| async move { j(api::install_chromium(State(s)).await) }),
+                .call(|c| async move { c.browser_install_chromium().await }),
             _ => cx
                 .svc
-                .call(|s| async move { j(api::install_skill(State(s)).await) }),
+                .call(|c| async move { c.browser_install_skill().await }),
         };
         self.install_task = Some((step, task));
     }
@@ -767,15 +756,10 @@ impl BrowserPage {
         });
 
         if do_launch {
-            self.launch = Some(
-                cx.svc
-                    .call(|s| async move { j(api::launch(State(s)).await) }),
-            );
+            self.launch = Some(cx.svc.call(|c| async move { c.browser_launch().await }));
         }
         if do_close {
-            let task = cx
-                .svc
-                .call(|s| async move { j(api::close(State(s)).await) });
+            let task = cx.svc.call(|c| async move { c.browser_close().await });
             self.actions
                 .push((tr("Navegador fechado.").to_string(), task));
         }
@@ -1122,23 +1106,20 @@ impl BrowserPage {
         if run_upstream {
             self.test_upstream.start(
                 cx.svc
-                    .call(|s| async move { j(api::test_upstream(State(s)).await) }),
+                    .call(|c| async move { c.browser_test_upstream().await }),
             );
         }
         if run_tab {
-            let url = self.test_tab_url.trim().to_string();
-            let body = Some(Json(api::NewTabBody {
-                url: Some(url).filter(|u| !u.is_empty()),
-            }));
+            let url = Some(self.test_tab_url.trim().to_string()).filter(|u| !u.is_empty());
             self.test_tab.start(
                 cx.svc
-                    .call(move |s| async move { j(api::test_new_tab(State(s), body).await) }),
+                    .call(move |c| async move { c.browser_test_new_tab(url.as_deref()).await }),
             );
         }
         if run_agent {
             self.test_agent.start(
                 cx.svc
-                    .call(|s| async move { j(api::test_agent_browser(State(s)).await) }),
+                    .call(|c| async move { c.browser_test_agent_browser().await }),
             );
         }
     }
@@ -1248,7 +1229,7 @@ impl BrowserPage {
             self.last_seq = 0;
             self.clear_task = Some(
                 cx.svc
-                    .call(|s| async move { j(api::traffic_clear(State(s)).await) }),
+                    .call(|c| async move { c.browser_traffic_clear().await }),
             );
         }
     }

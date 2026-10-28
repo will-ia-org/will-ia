@@ -13,7 +13,7 @@ use std::collections::VecDeque;
 use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering};
 use std::sync::Arc;
 use std::time::Instant;
-use will_realtime::{AudioOut, RealtimeManager};
+use will_client::{AudioOut, VoiceLink};
 
 pub const TARGET_RATE: u32 = 24_000;
 const FRAME_MS: usize = 100;
@@ -168,10 +168,10 @@ fn find_device(host: &cpal::Host, name: Option<&str>, input: bool) -> Option<cpa
 }
 
 impl AudioPipeline {
-    /// Abre os dois streams e liga a saída ao `RealtimeManager`.
+    /// Abre os dois streams e liga a saída ao `VoiceLink` (WS de áudio do servidor).
     pub fn start(
         rt_handle: &tokio::runtime::Handle,
-        manager: Arc<RealtimeManager>,
+        manager: Arc<VoiceLink>,
         input_name: Option<&str>,
         output_name: Option<&str>,
         start_muted: bool,

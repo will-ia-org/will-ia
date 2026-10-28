@@ -10,10 +10,11 @@ use std::future::Future;
 use std::sync::mpsc::{channel, Receiver, Sender};
 use std::sync::Arc;
 use std::time::Duration;
-use will_core::Event;
-use will_server::{AppState, RunOptions, ServerHandle};
+use will_client::{Client, ClientEvent};
+use will_server::{RunOptions, ServerHandle};
 
-pub type App = Arc<AppState>;
+/// Cliente da API local, compartilhado pelas páginas (`Service::call`).
+pub type Api = Arc<Client>;
 
 /// Comandos vindos de fora da GUI (bandeja, atalho global, segunda instância).
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -31,69 +32,66 @@ pub enum UiCommand {
 
 pub struct Service {
     rt: tokio::runtime::Runtime,
-    pub handle: Arc<ServerHandle>,
-    pub state: App,
+    /// Servidor em processo (etapa 1 da separação: ainda um binário só). `None`
+    /// quando o app conecta num servidor externo.
+    handle: Option<Arc<ServerHandle>>,
+    /// Cliente HTTP/WS da API: **todo** acesso da UI ao serviço passa por ele,
+    /// mesmo em loopback (`docs/26`).
+    pub api: Api,
     ctx: Mutex<Option<egui::Context>>,
     cmd_tx: Sender<UiCommand>,
+    events_task: Mutex<Option<tokio::task::JoinHandle<()>>>,
 }
 
 impl Service {
-    /// Sobe o runtime e o serviço; bloqueia até a API local estar no ar.
+    /// Sobe o runtime e o serviço em processo; conecta o cliente em loopback.
     pub fn start(
         opts: RunOptions,
-    ) -> anyhow::Result<(Arc<Self>, Receiver<Event>, Receiver<UiCommand>)> {
+    ) -> anyhow::Result<(Arc<Self>, Receiver<ClientEvent>, Receiver<UiCommand>)> {
         let rt = tokio::runtime::Builder::new_multi_thread()
             .enable_all()
             .thread_name("will-rt")
             .build()?;
         let handle = rt.block_on(will_server::run(opts))?;
-        let state = handle.state.clone();
-        crate::ipc::write_port_file(&state.paths, handle.addr.port());
+        crate::ipc::write_port_file(&handle.state.paths, handle.addr.port());
+        let api = Arc::new(Client::new(handle.url(), handle.ui_token.clone()));
         let (cmd_tx, cmd_rx) = channel();
         let svc = Arc::new(Self {
             rt,
-            handle: Arc::new(handle),
-            state,
+            handle: Some(Arc::new(handle)),
+            api,
             ctx: Mutex::new(None),
             cmd_tx,
+            events_task: Mutex::new(None),
         });
 
-        // Eventos do barramento → canal síncrono lido pela GUI.
-        let (ev_tx, ev_rx) = channel::<Event>();
-        let mut bus_rx = svc.state.bus.subscribe();
+        // Eventos do servidor (WS /api/events) → canal síncrono lido pela GUI.
+        let (ev_tx, ev_rx) = channel::<ClientEvent>();
         let weak = Arc::downgrade(&svc);
-        svc.rt.spawn(async move {
-            loop {
-                match bus_rx.recv().await {
-                    Ok(ev) => {
-                        if ev_tx.send(ev).is_err() {
-                            break;
-                        }
-                        if let Some(s) = weak.upgrade() {
-                            s.repaint();
-                        }
-                    }
-                    Err(tokio::sync::broadcast::error::RecvError::Lagged(n)) => {
-                        tracing::warn!(n, "GUI perdeu eventos do barramento");
-                    }
-                    Err(_) => break,
-                }
-            }
-        });
-
-        // Gancho para a segunda instância (`POST /api/ui/show`).
-        let weak = Arc::downgrade(&svc);
-        *svc.state.ui_hook.write() = Some(Arc::new(move |cmd: &str| {
+        let wake: Arc<dyn Fn() + Send + Sync> = Arc::new(move || {
             if let Some(s) = weak.upgrade() {
-                if cmd == "show" {
-                    s.send_cmd(UiCommand::Show);
-                } else if let Some(rest) = cmd.strip_prefix("screenshot") {
-                    let nav = rest.strip_prefix(':').map(String::from);
-                    let p = s.state.paths.data_dir.join("screenshot.png");
-                    s.send_cmd(UiCommand::Screenshot(p, nav));
-                }
+                s.repaint();
             }
-        }));
+        });
+        let task = svc.api.spawn_events(svc.rt.handle(), ev_tx, wake);
+        *svc.events_task.lock() = Some(task);
+
+        // Gancho para a segunda instância (`POST /api/ui/show`) enquanto o
+        // servidor vive neste processo.
+        if let Some(h) = &svc.handle {
+            let weak = Arc::downgrade(&svc);
+            let data_dir = h.state.paths.data_dir.clone();
+            *h.state.ui_hook.write() = Some(Arc::new(move |cmd: &str| {
+                if let Some(s) = weak.upgrade() {
+                    if cmd == "show" {
+                        s.send_cmd(UiCommand::Show);
+                    } else if let Some(rest) = cmd.strip_prefix("screenshot") {
+                        let nav = rest.strip_prefix(':').map(String::from);
+                        s.send_cmd(UiCommand::Screenshot(data_dir.join("screenshot.png"), nav));
+                    }
+                }
+            }));
+        }
         // Serviço residente: SIGINT/SIGTERM/SIGHUP não derrubam o app (só kill
         // forçado). Registrar o handler substitui a ação padrão de terminar; os
         // filhos `claude` morrem junto mesmo no kill -9 (PDEATHSIG / Job Object).
@@ -160,15 +158,21 @@ impl Service {
         self.rt.spawn(fut);
     }
 
-    /// Dispara uma chamada assíncrona ao serviço. O closure recebe o `AppState`.
-    pub fn call<T, Fut>(self: &Arc<Self>, f: impl FnOnce(App) -> Fut + Send + 'static) -> Task<T>
+    /// Bloqueia a thread da GUI numa chamada ao servidor (só no arranque,
+    /// para o snapshot inicial).
+    pub fn block_on<T>(&self, fut: impl Future<Output = T>) -> T {
+        self.rt.block_on(fut)
+    }
+
+    /// Dispara uma chamada assíncrona ao servidor. O closure recebe o cliente da API.
+    pub fn call<T, Fut>(self: &Arc<Self>, f: impl FnOnce(Api) -> Fut + Send + 'static) -> Task<T>
     where
         T: Send + 'static,
         Fut: Future<Output = Result<T, String>> + Send + 'static,
     {
         let task = Task::new();
         let inner = task.inner.clone();
-        let state = self.state.clone();
+        let state = self.api.clone();
         let weak = Arc::downgrade(self);
         self.rt.spawn(async move {
             let r = f(state).await;
@@ -180,12 +184,16 @@ impl Service {
         task
     }
 
-    /// Encerra serviço e runtime (com limite de tempo).
+    /// Encerra o servidor em processo (se houver) e o laço de eventos.
     pub fn shutdown(&self) {
-        let h = self.handle.clone();
-        let _ = self.rt.block_on(async move {
-            tokio::time::timeout(Duration::from_secs(8), h.shutdown()).await
-        });
+        if let Some(t) = self.events_task.lock().take() {
+            t.abort();
+        }
+        if let Some(h) = self.handle.clone() {
+            let _ = self.rt.block_on(async move {
+                tokio::time::timeout(Duration::from_secs(8), h.shutdown()).await
+            });
+        }
     }
 }
 
@@ -292,9 +300,4 @@ impl<T> Loader<T> {
                 .map(|t| t.elapsed() > max_age)
                 .unwrap_or(true)
     }
-}
-
-/// Converte o resultado de um handler axum em `Result<Value, String>`.
-pub fn j<T>(r: Result<axum::Json<T>, will_server::api::ApiError>) -> Result<T, String> {
-    r.map(|x| x.0).map_err(|e| e.1)
 }

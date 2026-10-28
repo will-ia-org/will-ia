@@ -51,6 +51,7 @@ pub async fn status(State(state): State<App>) -> ApiResult<Value> {
         "mcp_url": *state.mcp_url.read(),
         "secrets_backend": state.secrets.backend(),
         "data_dir": state.paths.data_dir,
+        "logs_dir": state.paths.logs_dir,
         "portable_root": state.paths.portable_root,
         "db_path": state.paths.db_path(),
         "onboarding_done": settings.general.onboarding_done,

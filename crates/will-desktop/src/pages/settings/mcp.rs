@@ -5,15 +5,12 @@ use super::SettingsState;
 use crate::help;
 use crate::i18n::{tr, trf};
 use crate::pages::Cx;
-use crate::service::{j, Loader, Task};
+use crate::service::{Loader, Task};
 use crate::ui::{self, Tone};
-use axum::extract::{Path, Query, State};
-use axum::Json;
 use serde_json::Value;
 use std::collections::BTreeMap;
 use will_core::settings::ToolPolicySetting;
 use will_core::{Event, Module};
-use will_server::api::mcp as api;
 
 #[derive(Default)]
 pub struct McpPage {
@@ -72,23 +69,20 @@ impl McpPage {
     }
 
     fn reload_tools(&mut self, cx: &Cx) {
-        self.tools.start(
-            cx.svc
-                .call(|s| async move { j(api::tools(State(s)).await) }),
-        );
+        self.tools
+            .start(cx.svc.call(|c| async move { c.mcp_tools().await }));
     }
 
     fn reload_calls(&mut self, cx: &Cx) {
-        self.calls.start(cx.svc.call(|s| async move {
-            j(api::calls(State(s), Query(api::Limit { limit: Some(100) })).await)
-        }));
+        self.calls.start(
+            cx.svc
+                .call(|c| async move { c.mcp_calls(&[("limit", "100".to_string())]).await }),
+        );
     }
 
     fn reload_script_token(&mut self, cx: &Cx) {
-        self.script_token.start(
-            cx.svc
-                .call(|s| async move { j(api::script_token(State(s)).await) }),
-        );
+        self.script_token
+            .start(cx.svc.call(|c| async move { c.mcp_script_token().await }));
     }
 
     fn poll(&mut self, cx: &mut Cx, st: &mut SettingsState) {
@@ -153,10 +147,10 @@ impl McpPage {
             }
         }
         let n = name.to_string();
-        let policy = Some(value.to_string());
-        let t = cx.svc.call(move |s| async move {
-            j(api::set_policy(State(s), Path(n), Json(api::PolicyBody { policy })).await)
-        });
+        let policy = value.to_string();
+        let t = cx
+            .svc
+            .call(move |c| async move { c.mcp_set_policy(&n, &policy).await });
         self.policy_task = Some((name.to_string(), t));
     }
 
@@ -241,7 +235,7 @@ impl McpPage {
                     self.confirm_rotate = None;
                     self.rotate_task = Some(
                         cx.svc
-                            .call(|s| async move { j(api::rotate_script_token(State(s)).await) }),
+                            .call(|c| async move { c.mcp_rotate_script_token().await }),
                     );
                 }
                 Some(false) => self.confirm_rotate = None,
@@ -266,7 +260,13 @@ impl McpPage {
                 ui.label(tr("Módulo:"));
                 ui::badge(ui, &ui::module_label(&status), ui::tone_for_module(&status));
             });
-            let url = cx.svc.state.mcp_url.read().clone();
+            // URL do servidor MCP vem com o token de scripts (`GET /api/mcp/script-token`).
+            let url = self
+                .script_token
+                .data
+                .as_ref()
+                .map(|v| ui::s(v, "url"))
+                .unwrap_or_default();
             ui.horizontal(|ui| {
                 ui.label(tr("URL:"));
                 if url.is_empty() {

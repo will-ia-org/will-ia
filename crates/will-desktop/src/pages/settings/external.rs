@@ -6,14 +6,11 @@ use super::SettingsState;
 use crate::help;
 use crate::i18n::{tr, trf};
 use crate::pages::{Cx, Nav, SettingsSection};
-use crate::service::{j, Loader, Task};
+use crate::service::{Loader, Task};
 use crate::ui::{self, Tone};
-use axum::extract::{Path, State};
-use axum::Json;
 use serde_json::{json, Map, Value};
 use will_core::settings::mcp_secret_env_name;
 use will_core::Event;
-use will_server::api::mcp as api;
 
 /// Linha chave/valor de `env` ou `headers` no editor.
 #[derive(Default, Clone)]
@@ -208,10 +205,8 @@ impl ExternalPage {
     }
 
     fn reload(&mut self, cx: &Cx) {
-        self.list.start(
-            cx.svc
-                .call(|s| async move { j(api::external_list(State(s)).await) }),
-        );
+        self.list
+            .start(cx.svc.call(|c| async move { c.external_mcps().await }));
     }
 
     fn poll(&mut self, cx: &mut Cx) {
@@ -322,9 +317,9 @@ impl ExternalPage {
 
     fn put(&mut self, cx: &Cx, name: String, body: Value, toggle: bool) {
         let n = name.clone();
-        let t = cx.svc.call(move |s| async move {
-            j(api::external_put(State(s), Path(n), Json(body)).await)
-        });
+        let t = cx
+            .svc
+            .call(move |c| async move { c.external_put(&n, body).await });
         if toggle {
             self.toggle_task = Some((name, t));
         } else {
@@ -343,7 +338,7 @@ impl ExternalPage {
             }
             let importing = self.import_task.is_some();
             if ui.add_enabled(!importing, egui::Button::new(tr("Importar do Claude (~/.claude.json)"))).on_hover_text(tr("Lê os servidores do escopo de usuário do Claude Code e traz para o catálogo.")).clicked() {
-                self.import_task = Some(cx.svc.call(|s| async move { j(api::external_import_claude(State(s)).await) }));
+                self.import_task = Some(cx.svc.call(|c| async move { c.external_import_claude().await }));
             }
             if ui.add_enabled(!importing, egui::Button::new(if self.show_import_json { tr("Fechar JSON") } else { tr("Importar JSON") })).clicked() {
                 self.show_import_json = !self.show_import_json;
@@ -376,14 +371,8 @@ impl ExternalPage {
                         .clicked()
                     {
                         let text = self.import_json_buf.clone();
-                        self.import_task = Some(cx.svc.call(move |s| async move {
-                            j(api::external_import_json(
-                                State(s),
-                                Json(api::ImportJson {
-                                    json: Value::String(text),
-                                }),
-                            )
-                            .await)
+                        self.import_task = Some(cx.svc.call(move |c| async move {
+                            c.external_import_json(json!({ "json": text })).await
                         }));
                     }
                     if ui.button(tr("Cancelar")).clicked() {
@@ -435,9 +424,8 @@ impl ExternalPage {
                     let n = name.clone();
                     self.delete_task = Some((
                         name,
-                        cx.svc.call(move |s| async move {
-                            j(api::external_delete(State(s), Path(n)).await)
-                        }),
+                        cx.svc
+                            .call(move |c| async move { c.external_delete(&n).await }),
                     ));
                 }
             }
@@ -569,7 +557,7 @@ impl ExternalPage {
                 let busy = testing || toggling || deleting;
                 if ui.add_enabled(!busy, egui::Button::new(tr("Testar"))).on_hover_text(tr("Sobe o servidor (ou conecta na URL), lista as ferramentas e encerra. Até 45 s.")).clicked() {
                     let n = name.clone();
-                    self.test_task = Some((name.clone(), cx.svc.call(move |s| async move { j(api::external_test(State(s), Path(n)).await) })));
+                    self.test_task = Some((name.clone(), cx.svc.call(move |c| async move { c.external_test(&n).await })));
                 }
                 if testing {
                     ui.spinner();

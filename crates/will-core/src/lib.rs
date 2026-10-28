@@ -31,8 +31,9 @@ pub use thread::{
 };
 pub use tools::{ToolContext, ToolError, ToolOutput, ToolPolicy, ToolProvider, ToolSpec, WillTool};
 
-/// Eventos difundidos pelo serviço (UI, canais e módulos assinam).
-#[derive(Debug, Clone, serde::Serialize)]
+/// Eventos difundidos pelo serviço (UI, canais e módulos assinam). Também é o
+/// formato do WS `/api/events`, por isso desserializa (o app é um cliente).
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum Event {
     ThreadCreated {

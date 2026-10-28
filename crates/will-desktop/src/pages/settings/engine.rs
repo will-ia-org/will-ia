@@ -5,14 +5,11 @@ use super::SettingsState;
 use crate::help;
 use crate::i18n::{tr, trf};
 use crate::pages::Cx;
-use crate::service::{j, Loader, Task};
+use crate::service::{Loader, Task};
 use crate::ui::{self, Tone};
-use axum::extract::{Path, State};
-use axum::Json;
 use serde_json::Value;
 use will_core::settings::PermissionMode;
 use will_core::Event;
-use will_server::api::engine as api;
 
 #[derive(Default)]
 pub struct EnginePage {
@@ -41,10 +38,8 @@ impl EnginePage {
     }
 
     fn reload_tokens(&mut self, cx: &Cx) {
-        self.tokens.start(
-            cx.svc
-                .call(|s| async move { j(api::list_tokens(State(s)).await) }),
-        );
+        self.tokens
+            .start(cx.svc.call(|c| async move { c.engine_tokens().await }));
     }
 
     fn poll(&mut self, cx: &mut Cx) {
@@ -194,8 +189,8 @@ impl EnginePage {
                                     let id2 = id.clone();
                                     self.test_task = Some((
                                         id.clone(),
-                                        cx.svc.call(move |s| async move {
-                                            j(api::test_token(State(s), Path(id2)).await)
+                                        cx.svc.call(move |c| async move {
+                                            c.test_engine_token(&id2).await
                                         }),
                                     ));
                                 }
@@ -210,8 +205,8 @@ impl EnginePage {
                                     let id2 = id.clone();
                                     self.activate_task = Some((
                                         id.clone(),
-                                        cx.svc.call(move |s| async move {
-                                            j(api::activate_token(State(s), Path(id2)).await)
+                                        cx.svc.call(move |c| async move {
+                                            c.activate_engine_token(&id2).await
                                         }),
                                     ));
                                 }
@@ -245,16 +240,16 @@ impl EnginePage {
                         {
                             let label = self.new_label.clone();
                             let token = self.new_token.clone();
-                            self.add_task = Some(cx.svc.call(move |s| async move {
-                                j(api::add_token(
-                                    State(s),
-                                    Json(api::AddToken {
-                                        label,
-                                        token,
-                                        activate: Some(true),
-                                    }),
+                            self.add_task = Some(cx.svc.call(move |c| async move {
+                                c.post(
+                                    "engine/tokens",
+                                    Some(serde_json::json!({
+                                        "label": label,
+                                        "token": token,
+                                        "activate": true,
+                                    })),
                                 )
-                                .await)
+                                .await
                             }));
                         }
                         if ui
@@ -263,16 +258,16 @@ impl EnginePage {
                         {
                             let label = self.new_label.clone();
                             let token = self.new_token.clone();
-                            self.add_task = Some(cx.svc.call(move |s| async move {
-                                j(api::add_token(
-                                    State(s),
-                                    Json(api::AddToken {
-                                        label,
-                                        token,
-                                        activate: Some(false),
-                                    }),
+                            self.add_task = Some(cx.svc.call(move |c| async move {
+                                c.post(
+                                    "engine/tokens",
+                                    Some(serde_json::json!({
+                                        "label": label,
+                                        "token": token,
+                                        "activate": false,
+                                    })),
                                 )
-                                .await)
+                                .await
                             }));
                         }
                         if ui.button(tr("Cancelar")).clicked() {
@@ -300,9 +295,10 @@ impl EnginePage {
             if let Some(ok) = ui::confirm_modal(ui.ctx(), &c) {
                 self.confirm_delete = None;
                 if ok {
-                    self.delete_task = Some(cx.svc.call(move |s| async move {
-                        j(api::delete_token(State(s), Path(id)).await)
-                    }));
+                    self.delete_task = Some(
+                        cx.svc
+                            .call(move |c| async move { c.delete_engine_token(&id).await }),
+                    );
                 }
             }
         }
@@ -321,10 +317,8 @@ impl EnginePage {
                         let w = (ui.available_width() - 110.0).max(160.0);
                         ui.add(egui::TextEdit::singleline(&mut e.claude_bin).desired_width(w));
                         if ui.button(tr("Verificar")).clicked() {
-                            self.check.start(
-                                cx.svc
-                                    .call(|s| async move { j(api::check(State(s)).await) }),
-                            );
+                            self.check
+                                .start(cx.svc.call(|c| async move { c.engine_check().await }));
                         }
                     });
                     if self.check.loading() {

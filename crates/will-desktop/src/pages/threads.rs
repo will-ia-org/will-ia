@@ -4,14 +4,11 @@
 
 use super::Cx;
 use crate::i18n::{tr, trf};
-use crate::service::{j, Loader, Task};
+use crate::service::{Loader, Task};
 use crate::ui::{self, Tone};
-use axum::extract::{Path, Query, State};
-use axum::Json;
 use serde_json::Value;
 use std::collections::HashMap;
 use will_core::{EngineDelta, Event, ThreadId, ThreadStatus, ThreadSummary, TurnResult};
-use will_server::api::threads as api;
 
 #[derive(Default)]
 struct LiveTurn {
@@ -206,14 +203,15 @@ fn turn_info_body(ui: &mut egui::Ui, pal: &ui::Palette, turn: &Value) {
 impl ThreadsPage {
     fn reload_list(&mut self, cx: &Cx) {
         self.list
-            .start(cx.svc.call(|s| async move { j(api::list(State(s)).await) }));
+            .start(cx.svc.call(|c| async move { c.threads().await }));
     }
 
     fn reload_turns(&mut self, cx: &Cx, id: ThreadId) {
         self.turns_for = Some(id);
         let sid = id.to_string();
-        self.turns.start(cx.svc.call(move |s| async move {
-            j(api::turns(State(s), Path(sid), Query(api::Limit { limit: Some(200) })).await)
+        self.turns.start(cx.svc.call(move |c| async move {
+            c.get_q(&format!("threads/{sid}/turns"), &[("limit", "200".into())])
+                .await
         }));
     }
 
@@ -365,14 +363,10 @@ impl ThreadsPage {
             .map(|p| p.display().to_string())
             .collect();
         let sid = id.to_string();
-        self.send_task = Some(cx.svc.call(move |s| async move {
-            j(api::send(
-                State(s),
-                Path(sid),
-                Json(api::SendBody { text, attachments }),
-            )
-            .await)
-        }));
+        self.send_task = Some(
+            cx.svc
+                .call(move |c| async move { c.send_message(&sid, &text, attachments).await }),
+        );
         self.focus_input = true;
     }
 
@@ -381,13 +375,13 @@ impl ThreadsPage {
         let t: Task<Value> = match what {
             "Reiniciar" => cx
                 .svc
-                .call(move |s| async move { j(api::restart(State(s), Path(sid)).await) }),
+                .call(move |c| async move { c.restart_thread(&sid).await }),
             "Reset" => cx
                 .svc
-                .call(move |s| async move { j(api::reset(State(s), Path(sid)).await) }),
+                .call(move |c| async move { c.reset_thread(&sid).await }),
             "Interromper" => cx
                 .svc
-                .call(move |s| async move { j(api::interrupt(State(s), Path(sid)).await) }),
+                .call(move |c| async move { c.interrupt_thread(&sid).await }),
             _ => return,
         };
         self.action_task = Some((what, t));
@@ -406,7 +400,7 @@ impl ThreadsPage {
                 ui.horizontal(|ui| {
                     ui.label(egui::RichText::new(tr("Threads")).font(ui::semibold(16.0)));
                     if ui.add_enabled(self.create_task.is_none(), egui::Button::new(tr("+ Nova")).small()).clicked() {
-                        self.create_task = Some(cx.svc.call(|s| async move { j(api::create(State(s), None).await) }));
+                        self.create_task = Some(cx.svc.call(|c| async move { c.create_thread(None).await }));
                     }
                     if ui.add(egui::Button::new("↺").small()).on_hover_text(tr("Atualizar")).clicked() {
                         self.list.loaded_at = None;
@@ -508,14 +502,8 @@ impl ThreadsPage {
                     let sid = id.to_string();
                     self.action_task = Some((
                         "Apagar",
-                        cx.svc.call(move |s| async move {
-                            j(api::delete_one(
-                                State(s),
-                                Path(sid),
-                                Query(api::DeleteQuery { purge: Some(purge) }),
-                            )
-                            .await)
-                        }),
+                        cx.svc
+                            .call(move |c| async move { c.delete_thread(&sid, purge).await }),
                     ));
                     self.selected = None;
                 }
@@ -542,18 +530,11 @@ impl ThreadsPage {
                     if ui.button(tr("OK")).clicked() || enter {
                         let title = buf.clone();
                         let sid = t.id.to_string();
-                        self.action_task =
-                            Some((
-                                "Renomear",
-                                cx.svc.call(move |s| async move {
-                                    j(api::rename(
-                                        State(s),
-                                        Path(sid),
-                                        Json(api::RenameBody { title }),
-                                    )
-                                    .await)
-                                }),
-                            ));
+                        self.action_task = Some((
+                            "Renomear",
+                            cx.svc
+                                .call(move |c| async move { c.rename_thread(&sid, &title).await }),
+                        ));
                         self.rename_buf = None;
                     } else if ui.button(tr("Cancelar")).clicked() {
                         self.rename_buf = None;
@@ -655,6 +636,8 @@ impl ThreadsPage {
         let has_live = live.is_some();
         let dark = ui.visuals().dark_mode;
         let pal = ui::palette(dark);
+        // Anexos são caminhos do servidor: abrir/miniatura só em loopback.
+        let local = cx.snap.server_is_local;
         let toasts = &mut *cx.toasts;
         egui::ScrollArea::vertical()
             .id_salt(("chat", t.id))
@@ -691,7 +674,7 @@ impl ThreadsPage {
                             };
                             let started = turn_dt(t, "started_at");
                             ui.push_id(ui::s(t, "id"), |ui| {
-                                user_bubble(ui, pal, toasts, t, started.as_ref(), pos);
+                                user_bubble(ui, pal, toasts, t, started.as_ref(), pos, local);
                             });
                         }
                         let text = ui::s(turn, "text");
@@ -959,6 +942,7 @@ fn user_bubble(
     turn: &Value,
     started: Option<&chrono::DateTime<chrono::Utc>>,
     pos: GroupPos,
+    local: bool,
 ) {
     // `prompt_display` vem sem a nota de anexo que o canal acrescenta para o
     // cérebro; os anexos chegam estruturados em `attachments`.
@@ -1007,7 +991,7 @@ fn user_bubble(
                         );
                     }
                     for a in &atts {
-                        attachment_view(ui, pal, toasts, a);
+                        attachment_view(ui, pal, toasts, a, local);
                     }
                     ui.add_space(2.0);
                     // rodapé: uma linha, discreto (copiar + tempo relativo).
@@ -1052,14 +1036,19 @@ fn fmt_size(bytes: u64) -> String {
 
 /// Anexo dentro do balão do usuário: miniatura clicável para imagens, chip com
 /// nome e tamanho para os demais. O clique abre o arquivo no app padrão.
+/// `local` = o servidor é esta máquina: só então o caminho existe aqui e dá
+/// para ler a miniatura ou abrir o arquivo (`docs/26`, etapa 2 traz a API).
 fn attachment_view(
     ui: &mut egui::Ui,
     pal: &ui::Palette,
     toasts: &mut ui::Toasts,
     a: &will_core::Attachment,
+    local: bool,
 ) {
     let path = std::path::Path::new(&a.path);
-    let exists = path.is_file();
+    // Remoto: não dá para conferir o disco do servidor; o chip fica clicável
+    // e o clique explica a limitação.
+    let exists = !local || path.is_file();
     let size = fmt_size(a.size);
     let mut caption = a.name.clone();
     if !size.is_empty() {
@@ -1074,7 +1063,7 @@ fn attachment_view(
     const THUMB: egui::Vec2 = egui::vec2(320.0, 240.0);
     // Miniatura só quando a imagem já decodificou: o tamanho vem do arquivo
     // (não do espaço disponível, que varia dentro do balão) e é limitado a THUMB.
-    let thumb = (a.is_image() && exists)
+    let thumb = (local && a.is_image() && exists)
         .then(|| {
             let img = egui::Image::new(format!("file://{}", a.path));
             match img.load_for_size(ui.ctx(), THUMB) {
@@ -1119,7 +1108,9 @@ fn attachment_view(
         .clicked()
     };
     if clicked {
-        if let Err(e) = will_platform::open_path(path) {
+        if !local {
+            toasts.info(tr("disponível só quando o servidor é esta máquina"));
+        } else if let Err(e) = will_platform::open_path(path) {
             toasts.error(trf("não consegui abrir o arquivo: {}", &[&e]));
         }
     }

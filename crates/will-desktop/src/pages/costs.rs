@@ -3,12 +3,10 @@
 
 use super::Cx;
 use crate::i18n::{tr, trf};
-use crate::service::{j, Loader};
+use crate::service::Loader;
 use crate::ui::{self, Tone};
-use axum::extract::{Query, State};
 use serde_json::Value;
 use will_core::Event;
-use will_server::api::system;
 
 #[derive(Default)]
 pub struct CostsPage {
@@ -81,26 +79,14 @@ impl CostsPage {
             Some(self.source.clone())
         };
         let s1 = source.clone();
-        self.summary.start(cx.svc.call(move |s| async move {
-            j(system::costs_summary(
-                State(s),
-                Query(system::CostsQuery {
-                    limit: None,
-                    source: s1,
-                }),
-            )
-            .await)
-        }));
-        self.rows.start(cx.svc.call(move |s| async move {
-            j(system::costs(
-                State(s),
-                Query(system::CostsQuery {
-                    limit: Some(300),
-                    source,
-                }),
-            )
-            .await)
-        }));
+        self.summary.start(
+            cx.svc
+                .call(move |c| async move { c.costs_summary(s1.as_deref()).await }),
+        );
+        self.rows.start(
+            cx.svc
+                .call(move |c| async move { c.costs(Some(300), source.as_deref()).await }),
+        );
     }
 
     pub fn ui(&mut self, ui: &mut egui::Ui, cx: &mut Cx) {

@@ -5,14 +5,11 @@ use super::SettingsState;
 use crate::help;
 use crate::i18n::{tr, trf};
 use crate::pages::Cx;
-use crate::service::{j, Loader, Task};
+use crate::service::{Loader, Task};
 use crate::ui::{self, Tone};
-use axum::extract::{Path, State};
-use axum::Json;
-use serde_json::Value;
+use serde_json::{json, Value};
 use std::collections::HashMap;
 use will_core::Event;
-use will_server::api::integrations as api;
 
 #[derive(Default)]
 pub struct WhatsAppPage {
@@ -42,10 +39,8 @@ impl WhatsAppPage {
     }
 
     fn reload(&mut self, cx: &Cx) {
-        self.status.start(
-            cx.svc
-                .call(|s| async move { j(api::wa_status(State(s)).await) }),
-        );
+        self.status
+            .start(cx.svc.call(|c| async move { c.wa_status().await }));
     }
 
     fn poll(&mut self, cx: &mut Cx) {
@@ -178,7 +173,7 @@ impl WhatsAppPage {
                                 if ui.button(tr("OK")).clicked() {
                                     let new_label = buf.clone();
                                     let id2 = id.clone();
-                                    self.action_task = Some((tr("Renomear").into(), cx.svc.call(move |s| async move { j(api::wa_account_patch(State(s), Path(id2), Some(Json(api::AccountPatch { label: Some(new_label), enabled: None }))).await) })));
+                                    self.action_task = Some((tr("Renomear").into(), cx.svc.call(move |c| async move { c.wa_account_patch(&id2, json!({ "label": new_label })).await })));
                                     self.rename = None;
                                 } else if ui.button(tr("cancelar")).clicked() {
                                     self.rename = None;
@@ -215,19 +210,19 @@ impl WhatsAppPage {
                         let mut en = ui::b(a, "enabled");
                         if ui.checkbox(&mut en, tr("usar nas ferramentas")).changed() {
                             let id2 = id.clone();
-                            self.action_task = Some((tr("Conta").into(), cx.svc.call(move |s| async move { j(api::wa_account_patch(State(s), Path(id2), Some(Json(api::AccountPatch { label: None, enabled: Some(en) }))).await) })));
+                            self.action_task = Some((tr("Conta").into(), cx.svc.call(move |c| async move { c.wa_account_patch(&id2, json!({ "enabled": en })).await })));
                         }
                         if state != "connected" {
                             if ui.add_enabled(!busy && enabled_saved, egui::Button::new(tr("Parear por QR"))).clicked() {
                                 let id2 = id.clone();
-                                self.pair_task = Some(cx.svc.call(move |s| async move { j(api::wa_pair(State(s), Some(Json(api::PairBody { account_id: Some(id2), phone: None, label: None }))).await) }));
+                                self.pair_task = Some(cx.svc.call(move |c| async move { c.wa_pair(Some(json!({ "account_id": id2 }))).await }));
                             }
                             if ui.add_enabled(!busy && enabled_saved, egui::Button::new(tr("Parear por código"))).clicked() {
                                 self.show_code_pair = Some(id.clone());
                             }
                             if ui::b(a, "has_session") && ui.add_enabled(!busy, egui::Button::new(tr("Reconectar"))).clicked() {
                                 let id2 = id.clone();
-                                self.action_task = Some((tr("Reconectar").into(), cx.svc.call(move |s| async move { j(api::wa_reconnect(State(s), Json(api::AccountIdBody { account_id: id2 })).await) })));
+                                self.action_task = Some((tr("Reconectar").into(), cx.svc.call(move |c| async move { c.wa_reconnect(Some(json!({ "account_id": id2 }))).await })));
                             }
                         }
                         if ui.add_enabled(!busy, egui::Button::new(tr("Desvincular / remover"))).clicked() {
@@ -283,16 +278,8 @@ impl WhatsAppPage {
                         Some(self.new_label.trim().to_string())
                     };
                     self.new_label.clear();
-                    self.pair_task = Some(cx.svc.call(move |s| async move {
-                        j(api::wa_pair(
-                            State(s),
-                            Some(Json(api::PairBody {
-                                account_id: None,
-                                phone: None,
-                                label,
-                            })),
-                        )
-                        .await)
+                    self.pair_task = Some(cx.svc.call(move |c| async move {
+                        c.wa_pair(Some(json!({ "label": label }))).await
                     }));
                 }
                 if ui
@@ -333,16 +320,13 @@ impl WhatsAppPage {
                         } else {
                             Some(self.new_label.trim().to_string())
                         };
-                        self.pair_task = Some(cx.svc.call(move |s| async move {
-                            j(api::wa_pair(
-                                State(s),
-                                Some(Json(api::PairBody {
-                                    account_id,
-                                    phone,
-                                    label,
-                                })),
-                            )
-                            .await)
+                        self.pair_task = Some(cx.svc.call(move |c| async move {
+                            c.wa_pair(Some(json!({
+                                "account_id": account_id,
+                                "phone": phone,
+                                "label": label,
+                            })))
+                            .await
                         }));
                     }
                     if ui.button(tr("Cancelar")).clicked() {
@@ -378,16 +362,13 @@ impl WhatsAppPage {
                     let (clear, remove) = (self.clear_index, self.remove_account);
                     self.action_task = Some((
                         tr("Desvincular").into(),
-                        cx.svc.call(move |s| async move {
-                            j(api::wa_unlink(
-                                State(s),
-                                Json(api::UnlinkBody {
-                                    account_id: id,
-                                    clear_index: Some(clear),
-                                    remove: Some(remove),
-                                }),
-                            )
-                            .await)
+                        cx.svc.call(move |c| async move {
+                            c.wa_unlink(Some(json!({
+                                "account_id": id,
+                                "clear_index": clear,
+                                "remove": remove,
+                            })))
+                            .await
                         }),
                     ));
                 }

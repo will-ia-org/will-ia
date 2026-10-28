@@ -8,10 +8,12 @@ use crate::service::{Service, UiCommand};
 use crate::tray::Tray;
 use crate::ui::{self, Toasts, Tone};
 use crate::voice::VoiceController;
+use serde_json::Value;
 use std::sync::mpsc::Receiver;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
-use will_core::{Event, Module};
+use will_client::ClientEvent;
+use will_core::{Event, Module, Settings};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum StartWindow {
@@ -22,7 +24,9 @@ pub enum StartWindow {
 
 pub fn run(opts: will_server::RunOptions, start: StartWindow) -> anyhow::Result<()> {
     let (svc, ev_rx, cmd_rx) = Service::start(opts)?;
-    let onboarding_done = svc.state.settings().general.onboarding_done;
+    // Snapshot inicial pela API (o app é cliente mesmo em loopback).
+    let snap = initial_snapshot(&svc);
+    let onboarding_done = snap.settings.general.onboarding_done;
     let visible = match start {
         StartWindow::Shown => true,
         StartWindow::Hidden => false,
@@ -45,16 +49,77 @@ pub fn run(opts: will_server::RunOptions, start: StartWindow) -> anyhow::Result<
     let result = eframe::run_native(
         "will-ia",
         options,
-        Box::new(move |cc| Ok(Box::new(WillApp::new(cc, svc2, ev_rx, cmd_rx, visible)))),
+        Box::new(move |cc| {
+            Ok(Box::new(WillApp::new(
+                cc, svc2, snap, ev_rx, cmd_rx, visible,
+            )))
+        }),
     );
     tracing::info!("janela encerrada; desligando o serviço");
     svc.shutdown();
     result.map_err(|e| anyhow::anyhow!("GUI: {e}"))
 }
 
+/// Lê `/api/status`, `/api/settings` e `/api/approvals` de uma vez (bloqueante;
+/// só no arranque). Falhas viram snapshot vazio com `connected = false`.
+fn initial_snapshot(svc: &Arc<Service>) -> Snapshot {
+    let api = svc.api.clone();
+    let (status, settings, approvals) =
+        svc.block_on(async move { tokio::join!(api.status(), api.settings(), api.approvals()) });
+    let mut snap = Snapshot {
+        api_url: svc.api.base_url().to_string(),
+        server_is_local: svc.api.is_local(),
+        ..Default::default()
+    };
+    if let Ok(s) = settings {
+        if let Ok(st) = serde_json::from_value::<Settings>(s) {
+            snap.settings = st;
+        }
+    }
+    if let Ok(st) = status {
+        apply_status(&mut snap, &st);
+        snap.connected = true;
+    }
+    if let Ok(a) = approvals {
+        if let Ok(list) = serde_json::from_value(a.get("pending").cloned().unwrap_or(a.clone())) {
+            snap.pending_approvals = list;
+        }
+    }
+    snap
+}
+
+/// Copia para o snapshot o que vem de `/api/status`: módulos e caminhos do servidor.
+pub fn apply_status(snap: &mut Snapshot, st: &Value) {
+    if let Some(m) = st.get("modules").and_then(|m| m.as_object()) {
+        for (k, v) in m {
+            if let (Some(module), Ok(status)) = (
+                Module::all().iter().find(|x| x.as_str() == k).copied(),
+                serde_json::from_value::<will_core::ModuleStatus>(v.clone()),
+            ) {
+                snap.modules.insert(module, status);
+            }
+        }
+    }
+    let path = |k: &str| {
+        st.get(k)
+            .and_then(|v| v.as_str())
+            .map(std::path::PathBuf::from)
+    };
+    if let Some(p) = path("data_dir") {
+        snap.data_dir = p;
+    }
+    if let Some(p) = path("logs_dir") {
+        snap.logs_dir = p;
+    }
+    if let Some(p) = path("db_path") {
+        snap.db_path = p;
+    }
+    snap.portable_root = path("portable_root");
+}
+
 pub struct WillApp {
     svc: Arc<Service>,
-    ev_rx: Receiver<Event>,
+    ev_rx: Receiver<ClientEvent>,
     cmd_rx: Receiver<UiCommand>,
     pub nav: Nav,
     pub snap: Snapshot,
@@ -70,13 +135,18 @@ pub struct WillApp {
     pending_hide: bool,
     /// Captura agendada (caminho, quadros restantes) para dar tempo à navegação.
     pending_screenshot: Option<(std::path::PathBuf, u8)>,
+    /// Recarga das settings do snapshot depois de `SettingsChanged`.
+    settings_task: Option<crate::service::Task<Value>>,
+    /// Recarga de status/aprovações depois de reconectar.
+    resync_task: Option<crate::service::Task<(Value, Value)>>,
 }
 
 impl WillApp {
     fn new(
         cc: &eframe::CreationContext<'_>,
         svc: Arc<Service>,
-        ev_rx: Receiver<Event>,
+        snap: Snapshot,
+        ev_rx: Receiver<ClientEvent>,
         cmd_rx: Receiver<UiCommand>,
         visible: bool,
     ) -> Self {
@@ -85,17 +155,8 @@ impl WillApp {
         crate::ui::setup(&cc.egui_ctx);
         let tray = Tray::new(&svc);
         let hotkeys = Hotkeys::new(&svc);
-        let settings = svc.state.settings();
+        let settings = snap.settings.clone();
         crate::i18n::set_language(&settings.general.language);
-        let snap = Snapshot {
-            settings: settings.clone(),
-            modules: svc.state.module_status.read().clone(),
-            pending_approvals: svc.state.approvals.pending(),
-            portable_root: svc.state.paths.portable_root.clone(),
-            data_dir: svc.state.paths.data_dir.clone(),
-            db_path: svc.state.paths.db_path(),
-            api_url: svc.handle.url(),
-        };
         let mut voice = VoiceController::new();
         voice.apply_settings(&settings.realtime);
         let mut pages = Pages::default();
@@ -122,6 +183,8 @@ impl WillApp {
             hotkey_applied: None,
             pending_hide: false,
             pending_screenshot: None,
+            settings_task: None,
+            resync_task: None,
         };
         if !app.tray.available() {
             app.toasts.info(tr(
@@ -197,8 +260,7 @@ impl WillApp {
                 self.snap.pending_approvals.retain(|a| a.id != *approval_id);
             }
             Event::SettingsChanged { .. } => {
-                self.snap.settings = self.svc.state.settings();
-                self.voice.apply_settings(&self.snap.settings.realtime);
+                self.settings_task = Some(self.svc.call(|c| async move { c.settings().await }));
                 self.pages.settings.state.load(&self.svc);
             }
             Event::Voice { state, detail } => {
@@ -321,7 +383,54 @@ impl WillApp {
             events.push(ev);
         }
         for ev in events {
-            self.handle_event(ev);
+            match ev {
+                ClientEvent::Event(ev) => self.handle_event(ev),
+                ClientEvent::Connected => {
+                    let was = self.snap.connected;
+                    self.snap.connected = true;
+                    if !was {
+                        // Ressincroniza o que pode ter mudado enquanto estávamos fora.
+                        self.resync_task = Some(self.svc.call(|c| async move {
+                            let st = c.status().await?;
+                            let ap = c.approvals().await?;
+                            Ok((st, ap))
+                        }));
+                        self.settings_task =
+                            Some(self.svc.call(|c| async move { c.settings().await }));
+                    }
+                }
+                ClientEvent::Disconnected(why) => {
+                    if self.snap.connected {
+                        self.toasts
+                            .error(trf("Conexão com o servidor perdida: {}", &[&why]));
+                    }
+                    self.snap.connected = false;
+                }
+            }
+        }
+        if let Some(t) = &self.settings_task {
+            if let Some(r) = t.take() {
+                self.settings_task = None;
+                if let Ok(v) = r {
+                    if let Ok(st) = serde_json::from_value::<Settings>(v) {
+                        self.snap.settings = st;
+                        self.voice.apply_settings(&self.snap.settings.realtime);
+                    }
+                }
+            }
+        }
+        if let Some(t) = &self.resync_task {
+            if let Some(r) = t.take() {
+                self.resync_task = None;
+                if let Ok((st, ap)) = r {
+                    apply_status(&mut self.snap, &st);
+                    if let Ok(list) =
+                        serde_json::from_value(ap.get("pending").cloned().unwrap_or(ap))
+                    {
+                        self.snap.pending_approvals = list;
+                    }
+                }
+            }
         }
         let mut cmds = Vec::new();
         while let Ok(c) = self.cmd_rx.try_recv() {
@@ -712,6 +821,19 @@ impl eframe::App for WillApp {
             .resizable(false)
             .show(ui, |ui| self.nav_panel(ui));
 
+        // Faixa de conexão: o app é cliente do servidor (loopback ou remoto).
+        if !self.snap.connected {
+            egui::Panel::top("conn-banner").show(ui, |ui| {
+                ui.horizontal(|ui| {
+                    ui.spinner();
+                    ui.colored_label(
+                        Tone::Warning.color(ui.visuals().dark_mode),
+                        tr("Desconectado do servidor; tentando reconectar…"),
+                    );
+                    ui.label(egui::RichText::new(&self.snap.api_url).weak().small());
+                });
+            });
+        }
         // Faixa de aprovações pendentes.
         if !self.snap.pending_approvals.is_empty() && self.nav != Nav::Approvals {
             let n = self.snap.pending_approvals.len();

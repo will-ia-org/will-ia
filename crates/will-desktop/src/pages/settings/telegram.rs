@@ -5,12 +5,10 @@ use super::SettingsState;
 use crate::help;
 use crate::i18n::{tr, trf};
 use crate::pages::Cx;
-use crate::service::{j, Loader, Task};
+use crate::service::{Loader, Task};
 use crate::ui::{self, SecretAction, SecretField, Tone};
-use axum::extract::State;
 use serde_json::Value;
 use will_core::{Event, Module};
-use will_server::api::integrations as api;
 
 const VOICES: [&str; 10] = [
     "alloy", "ash", "ballad", "coral", "echo", "sage", "shimmer", "verse", "marin", "cedar",
@@ -40,10 +38,8 @@ impl TelegramPage {
     }
 
     fn reload_status(&mut self, cx: &Cx) {
-        self.status.start(
-            cx.svc
-                .call(|s| async move { j(api::telegram_status(State(s)).await) }),
-        );
+        self.status
+            .start(cx.svc.call(|c| async move { c.telegram_status().await }));
     }
 
     fn poll(&mut self, cx: &mut Cx) {
@@ -99,10 +95,7 @@ impl TelegramPage {
                     .on_disabled_hover_text(tr("Salve o token do bot primeiro."))
                     .clicked()
                 {
-                    self.test_task = Some(
-                        cx.svc
-                            .call(|s| async move { j(api::telegram_test(State(s), None).await) }),
-                    );
+                    self.test_task = Some(cx.svc.call(|c| async move { c.telegram_test().await }));
                 }
                 if testing {
                     ui.spinner();

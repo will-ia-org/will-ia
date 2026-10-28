@@ -3,16 +3,12 @@
 
 use super::Cx;
 use crate::i18n::{tr, trf};
-use crate::service::{j, Loader, Task};
+use crate::service::{Loader, Task};
 use crate::ui::{self, Tone};
-use axum::extract::{Path, Query, State};
-use axum::Json;
 use egui::RichText;
 use serde_json::Value;
 use std::collections::HashMap;
 use will_core::{ApprovalRequest, Event, ThreadId, ThreadSummary};
-use will_server::api::mcp as api;
-use will_server::api::threads as threads_api;
 
 /// Largura da coluna de chaves na lista de argumentos do cartão.
 const ARG_KEY_WIDTH: f32 = 150.0;
@@ -49,32 +45,25 @@ impl ApprovalsPage {
 
     fn send_decision(&mut self, cx: &Cx, id: String, decision: &'static str) {
         let id2 = id.clone();
-        let task = cx.svc.call(move |s| async move {
-            j(api::decide(
-                State(s),
-                Path(id2),
-                Json(api::DecideBody {
-                    decision: decision.into(),
-                }),
-            )
-            .await)
+        let task = cx.svc.call(move |c| async move {
+            c.decide_approval(&id2, serde_json::json!({ "decision": decision }))
+                .await
         });
         self.decide.push((id, task));
     }
 
     fn poll(&mut self, cx: &mut Cx) {
         if self.history.stale(std::time::Duration::from_secs(60)) {
-            self.history.start(cx.svc.call(|s| async move {
-                j(api::approvals_history(State(s), Query(api::Limit { limit: Some(100) })).await)
-            }));
+            self.history
+                .start(cx.svc.call(|c| async move {
+                    c.approvals_history(&[("limit", "100".into())]).await
+                }));
         }
         self.history.poll();
 
         if self.threads.stale(std::time::Duration::from_secs(120)) {
-            self.threads.start(
-                cx.svc
-                    .call(|s| async move { j(threads_api::list(State(s)).await) }),
-            );
+            self.threads
+                .start(cx.svc.call(|c| async move { c.threads().await }));
         }
         if self.threads.poll() {
             if let Some(v) = &self.threads.data {

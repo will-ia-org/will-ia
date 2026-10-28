@@ -5,18 +5,13 @@
 use super::{Cx, Nav, SettingsSection};
 use crate::help;
 use crate::i18n::{tr, trf};
-use crate::service::{j, Loader, Task};
+use crate::service::{Loader, Task};
 use crate::ui::{self, Tone};
-use axum::extract::{Path, Query, State};
-use axum::Json;
 use egui::RichText;
-use serde_json::Value;
+use serde_json::{json, Value};
 use std::collections::HashSet;
 use std::time::{Duration, Instant};
 use will_core::{Event, ThreadSummary};
-use will_scheduler::ScheduleInput;
-use will_server::api::schedules as api;
-use will_server::api::threads as threads_api;
 
 /// Acima disso a mensagem do cartão é cortada, com "mais…" para expandir.
 const MESSAGE_PREVIEW_CHARS: usize = 300;
@@ -106,8 +101,9 @@ impl Form {
         self.save.as_ref().is_some_and(|t| t.pending())
     }
 
-    /// Valida o formulário e monta o corpo da chamada (criação ou edição).
-    fn input(&self) -> Result<ScheduleInput, String> {
+    /// Valida o formulário e monta o corpo da chamada (criação ou edição):
+    /// JSON com os campos de `ScheduleInput` (`docs/22`), sem os ausentes.
+    fn input(&self) -> Result<Value, String> {
         if self.name.trim().is_empty() {
             return Err(tr("Dê um nome ao agendamento.").into());
         }
@@ -128,16 +124,20 @@ impl Form {
             }
             (None, Some(self.run_at.trim().to_string()))
         };
-        Ok(ScheduleInput {
-            name: Some(self.name.trim().to_string()),
-            message: Some(self.message.trim().to_string()),
-            cron,
-            run_at,
-            // `Some("")` limpa o fuso na edição (volta ao padrão).
-            timezone: Some(self.timezone.trim().to_string()),
-            enabled: None,
-            thread_id: Some(self.thread_id.trim().to_string()),
-        })
+        let mut body = json!({
+            "name": self.name.trim(),
+            "message": self.message.trim(),
+            // `""` limpa o fuso na edição (volta ao padrão).
+            "timezone": self.timezone.trim(),
+            "thread_id": self.thread_id.trim(),
+        });
+        if let Some(c) = cron {
+            body["cron"] = Value::String(c);
+        }
+        if let Some(at) = run_at {
+            body["run_at"] = Value::String(at);
+        }
+        Ok(body)
     }
 
     /// Debounce da prévia do cron: pede ao serviço ~600 ms depois da última
@@ -172,16 +172,9 @@ impl Form {
             self.changed_at = None;
             let cron = self.cron.trim().to_string();
             let timezone = Some(self.timezone.trim().to_string()).filter(|t| !t.is_empty());
-            self.preview.start(cx.svc.call(move |s| async move {
-                j(api::preview(
-                    State(s),
-                    Query(api::PreviewQuery {
-                        cron,
-                        timezone,
-                        n: Some(PREVIEW_COUNT),
-                    }),
-                )
-                .await)
+            self.preview.start(cx.svc.call(move |c| async move {
+                c.schedule_preview(&cron, timezone.as_deref(), PREVIEW_COUNT)
+                    .await
             }));
         }
         // Ocupado com uma prévia anterior: tenta de novo no próximo quadro.
@@ -202,9 +195,8 @@ impl SchedulesPage {
     }
 
     fn reload(&mut self, cx: &Cx) {
-        self.list.start(cx.svc.call(|s| async move {
-            j(api::list(State(s), Query(api::ListQuery { thread_id: None })).await)
-        }));
+        self.list
+            .start(cx.svc.call(|c| async move { c.schedules(None).await }));
     }
 
     fn push_action(&mut self, done_text: String, task: Task<Value>) {
@@ -212,17 +204,8 @@ impl SchedulesPage {
     }
 
     fn update_enabled(&mut self, cx: &Cx, id: String, enabled: bool) {
-        let id2 = id.clone();
-        let task = cx.svc.call(move |s| async move {
-            j(api::update(
-                State(s),
-                Path(id2),
-                Json(ScheduleInput {
-                    enabled: Some(enabled),
-                    ..Default::default()
-                }),
-            )
-            .await)
+        let task = cx.svc.call(move |c| async move {
+            c.update_schedule(&id, json!({ "enabled": enabled })).await
         });
         let text = if enabled {
             tr("Agendamento retomado.")
@@ -235,14 +218,14 @@ impl SchedulesPage {
     fn run_now(&mut self, cx: &Cx, id: String, name: &str) {
         let task = cx
             .svc
-            .call(move |s| async move { j(api::run_now(State(s), Path(id)).await) });
+            .call(move |c| async move { c.run_schedule(&id).await });
         self.push_action(trf("\"{}\" disparado agora.", &[&name]), task);
     }
 
     fn delete(&mut self, cx: &Cx, id: String, name: &str) {
         let task = cx
             .svc
-            .call(move |s| async move { j(api::delete(State(s), Path(id)).await) });
+            .call(move |c| async move { c.delete_schedule(&id).await });
         self.push_action(trf("\"{}\" excluído.", &[&name]), task);
     }
 
@@ -253,10 +236,8 @@ impl SchedulesPage {
         self.list.poll();
 
         if self.threads.stale(Duration::from_secs(120)) {
-            self.threads.start(
-                cx.svc
-                    .call(|s| async move { j(threads_api::list(State(s)).await) }),
-            );
+            self.threads
+                .start(cx.svc.call(|c| async move { c.threads().await }));
         }
         if self.threads.poll() {
             if let Some(v) = &self.threads.data {
@@ -571,12 +552,12 @@ impl SchedulesPage {
             match f.input() {
                 Ok(input) => {
                     let task = match f.editing.clone() {
-                        Some(id) => cx.svc.call(move |s| async move {
-                            j(api::update(State(s), Path(id), Json(input)).await)
-                        }),
-                        None => cx.svc.call(move |s| async move {
-                            j(api::create(State(s), Json(input)).await)
-                        }),
+                        Some(id) => cx
+                            .svc
+                            .call(move |c| async move { c.update_schedule(&id, input).await }),
+                        None => cx
+                            .svc
+                            .call(move |c| async move { c.create_schedule(input).await }),
                     };
                     f.save = Some(task);
                 }

@@ -967,6 +967,11 @@ pub static TABLE: &[(&str, &str)] = &[
     ("não foi possível registrar '{}': {}", "could not register '{}': {}"),
     ("atalho inválido '{}': {}", "invalid hotkey '{}': {}"),
     // ---------- voice/ (sessão, indicador flutuante, áudio) ----------
+    ("Abrir pasta: disponível só quando o servidor é esta máquina.", "Open folder: available only when the server is this machine."),
+    ("A pasta fica no servidor; abra-a por lá (o app está conectado a um servidor remoto).", "The folder is on the server; open it there (the app is connected to a remote server)."),
+    ("disponível só quando o servidor é esta máquina", "available only when the server is this machine"),
+    ("Conexão com o servidor perdida: {}", "Connection to the server lost: {}"),
+    ("Desconectado do servidor; tentando reconectar…", "Disconnected from the server; reconnecting…"),
     ("Sessão de voz iniciada.", "Voice session started."),
     ("Sessão aberta, mas o áudio falhou: {}", "Session open, but audio failed: {}"),
     ("Sessão de voz encerrada.", "Voice session ended."),

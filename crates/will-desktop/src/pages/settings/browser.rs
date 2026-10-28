@@ -6,12 +6,10 @@ use super::SettingsState;
 use crate::help;
 use crate::i18n::tr;
 use crate::pages::{Cx, Nav};
-use crate::service::{j, Loader};
+use crate::service::Loader;
 use crate::ui;
-use axum::extract::State;
 use serde_json::Value;
 use will_core::Module;
-use will_server::api::browser as api;
 
 /// Valor do seletor de navegador quando o usuário quer digitar um caminho.
 const CUSTOM_PATH: &str = "__custom__";
@@ -31,10 +29,8 @@ pub struct BrowserPage {
 impl BrowserPage {
     pub fn ui(&mut self, ui: &mut egui::Ui, cx: &mut Cx, st: &mut SettingsState) {
         if self.detect.stale(std::time::Duration::from_secs(300)) {
-            self.detect.start(
-                cx.svc
-                    .call(|s| async move { j(api::detect(State(s)).await) }),
-            );
+            self.detect
+                .start(cx.svc.call(|c| async move { c.browser_detect().await }));
         }
         self.detect.poll();
 

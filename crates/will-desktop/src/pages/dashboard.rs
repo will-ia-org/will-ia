@@ -2,13 +2,11 @@
 
 use super::{Cx, Nav, SettingsSection};
 use crate::i18n::{tr, trf};
-use crate::service::{j, Loader, Service};
+use crate::service::{Loader, Service};
 use crate::ui::{self, Tone};
-use axum::extract::State;
 use serde_json::Value;
 use std::sync::Arc;
 use will_core::{Event, Module};
-use will_server::api::{integrations, system};
 
 #[derive(Default)]
 pub struct DashboardPage {
@@ -23,11 +21,10 @@ impl DashboardPage {
             return;
         }
         self.status
-            .start(svc.call(|s| async move { j(system::status(State(s)).await) }));
+            .start(svc.call(|c| async move { c.status().await }));
         if !self.google_accounts.busy() {
-            self.google_accounts.start(
-                svc.call(|s| async move { j(integrations::google_accounts(State(s)).await) }),
-            );
+            self.google_accounts
+                .start(svc.call(|c| async move { c.google_accounts().await }));
         }
     }
 

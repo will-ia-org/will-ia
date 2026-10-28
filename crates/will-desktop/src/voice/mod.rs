@@ -4,13 +4,13 @@ pub mod audio;
 pub mod overlay;
 
 use crate::i18n::{tr, trf};
-use crate::service::{j, Service, Task};
+use crate::service::{Service, Task};
 use audio::AudioPipeline;
 use overlay::Shared;
 use serde_json::Value;
 use std::sync::Arc;
+use will_client::VoiceLink;
 use will_core::settings::RealtimeSettings;
-use will_realtime::RealtimeManager;
 
 pub struct VoiceController {
     pub overlay: Shared,
@@ -26,7 +26,9 @@ pub struct VoiceController {
     pub sound_cues: bool,
     pub last_error: Option<String>,
     pub live_transcripts: Vec<(String, String)>,
-    start_task: Option<Task<Value>>,
+    /// Sessão aberta no servidor + WS de áudio deste app.
+    link: Option<Arc<VoiceLink>>,
+    start_task: Option<Task<Arc<VoiceLink>>>,
     stop_task: Option<Task<Value>>,
     level_smooth: f32,
     /// Mensagens de controle da sessão (`transcript`, `state`) vindas do `RealtimeManager`.
@@ -51,6 +53,7 @@ impl VoiceController {
             sound_cues: true,
             last_error: None,
             live_transcripts: Vec::new(),
+            link: None,
             start_task: None,
             stop_task: None,
             level_smooth: 0.0,
@@ -65,7 +68,7 @@ impl VoiceController {
         self.pipeline.as_ref().map(|p| p.stats()).unwrap_or((0, 0))
     }
 
-    fn subscribe_controls(&mut self, svc: &Arc<Service>, m: &Arc<RealtimeManager>) {
+    fn subscribe_controls(&mut self, svc: &Arc<Service>, m: &Arc<VoiceLink>) {
         if let Some(t) = self.ctrl_task.take() {
             t.abort();
         }
@@ -75,7 +78,7 @@ impl VoiceController {
         let task = svc.rt().spawn(async move {
             loop {
                 match sub.recv().await {
-                    Ok(will_realtime::AudioOut::Control(v)) => {
+                    Ok(will_client::AudioOut::Control(v)) => {
                         if tx.send(v).is_err() {
                             break;
                         }
@@ -136,18 +139,16 @@ impl VoiceController {
             || self.stop_task.as_ref().is_some_and(|t| t.pending())
     }
 
-    fn manager(svc: &Arc<Service>) -> Option<Arc<RealtimeManager>> {
-        svc.state.realtime.read().clone()
-    }
-
-    /// Abre a sessão (no serviço) e o áudio (aqui).
+    /// Abre a sessão (no servidor) e o WS de áudio; o pipeline cpal abre aqui
+    /// quando a tarefa termina (`tick`).
     pub fn start(&mut self, svc: &Arc<Service>) {
         if self.busy() {
             return;
         }
         self.last_error = None;
-        self.start_task = Some(svc.call(|st| async move {
-            j(will_server::api::integrations::voice_start(axum::extract::State(st)).await)
+        self.start_task = Some(svc.call(|c| async move {
+            c.voice_start().await?;
+            VoiceLink::connect(&c).await
         }));
     }
 
@@ -174,9 +175,8 @@ impl VoiceController {
             t.abort();
         }
         self.ctrl_rx = None;
-        self.stop_task = Some(svc.call(|st| async move {
-            j(will_server::api::integrations::voice_stop(axum::extract::State(st)).await)
-        }));
+        self.link = None;
+        self.stop_task = Some(svc.call(|c| async move { c.voice_stop().await }));
     }
 
     pub fn toggle(&mut self, svc: &Arc<Service>) {
@@ -188,7 +188,7 @@ impl VoiceController {
     }
 
     /// Push-to-talk: pressionar abre o microfone e avisa o serviço; soltar envia.
-    pub fn set_ptt(&mut self, svc: &Arc<Service>, down: bool) {
+    pub fn set_ptt(&mut self, _svc: &Arc<Service>, down: bool) {
         if !self.session_active {
             return;
         }
@@ -197,13 +197,13 @@ impl VoiceController {
         if let Some(p) = &self.pipeline {
             p.set_muted(self.ptt_mode && !down);
         }
-        if let Some(m) = Self::manager(svc) {
+        if let Some(m) = &self.link {
             m.ptt(down);
         }
     }
 
-    pub fn commit(&self, svc: &Arc<Service>) {
-        if let Some(m) = Self::manager(svc) {
+    pub fn commit(&self, _svc: &Arc<Service>) {
+        if let Some(m) = &self.link {
             m.commit();
         }
     }
@@ -234,9 +234,10 @@ impl VoiceController {
             if let Some(r) = t.take() {
                 self.start_task = None;
                 match r {
-                    Ok(_) => {
+                    Ok(m) => {
                         self.session_active = true;
-                        if let Some(m) = Self::manager(svc) {
+                        self.link = Some(m.clone());
+                        {
                             self.subscribe_controls(svc, &m);
                             let p = AudioPipeline::start(
                                 svc.rt(),
@@ -315,6 +316,7 @@ impl VoiceController {
                 }
                 self.session_active = false;
                 self.pipeline = None;
+                self.link = None;
                 self.ptt_down = false;
             }
             "error" => {

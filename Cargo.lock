@@ -8591,6 +8591,23 @@ dependencies = [
 ]
 
 [[package]]
+name = "will-client"
+version = "0.1.2"
+dependencies = [
+ "bytes",
+ "futures",
+ "parking_lot",
+ "reqwest 0.13.5",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.21",
+ "tokio",
+ "tokio-tungstenite 0.30.0",
+ "tracing",
+ "will-core",
+]
+
+[[package]]
 name = "will-core"
 version = "0.1.2"
 dependencies = [
@@ -8634,10 +8651,9 @@ dependencies = [
  "tokio",
  "tracing",
  "tray-icon",
+ "will-client",
  "will-core",
  "will-platform",
- "will-realtime",
- "will-scheduler",
  "will-server",
 ]
 

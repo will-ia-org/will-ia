@@ -15,15 +15,12 @@ pub mod whatsapp;
 
 use super::{Cx, SettingsSection};
 use crate::i18n::{tr, trf};
-use crate::service::{j, Loader, Service, Task};
+use crate::service::{Loader, Service, Task};
 use crate::ui;
-use axum::extract::{Path, State};
-use axum::Json;
 use serde_json::Value;
 use std::collections::BTreeMap;
 use std::sync::Arc;
 use will_core::Settings;
-use will_server::api::system;
 
 /// Estado compartilhado por todas as seções.
 #[derive(Default)]
@@ -44,7 +41,7 @@ impl SettingsState {
             return;
         }
         self.loader
-            .start(svc.call(|st| async move { j(system::get_settings(State(st)).await) }));
+            .start(svc.call(|c| async move { c.settings().await }));
     }
 
     /// Consome tarefas pendentes. Deve rodar a cada quadro antes de desenhar.
@@ -151,33 +148,21 @@ impl SettingsState {
         let value = Self::section_value(&self.draft, section);
         let sec = section.to_string();
         let sec2 = sec.clone();
-        let t = svc.call(move |st| async move {
-            j(system::put_settings(
-                State(st),
-                Json(system::PutSettings {
-                    section: sec2,
-                    value,
-                }),
-            )
-            .await)
-        });
+        let t = svc.call(move |c| async move { c.put_settings(&sec2, value).await });
         self.save_task = Some((sec, t));
     }
 
     pub fn set_secret(&mut self, svc: &Arc<Service>, key: &str, value: String) {
         let k = key.to_string();
         let k2 = k.clone();
-        let t = svc.call(move |st| async move {
-            j(system::set_secret(State(st), Json(system::SetSecret { key: k2, value })).await)
-        });
+        let t = svc.call(move |c| async move { c.set_secret(&k2, &value).await });
         self.secret_task = Some((k, t));
     }
 
     pub fn delete_secret(&mut self, svc: &Arc<Service>, key: &str) {
         let k = key.to_string();
         let k2 = k.clone();
-        let t =
-            svc.call(move |st| async move { j(system::delete_secret(State(st), Path(k2)).await) });
+        let t = svc.call(move |c| async move { c.delete_secret(&k2).await });
         self.secret_task = Some((k, t));
     }
 

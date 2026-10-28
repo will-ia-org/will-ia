@@ -140,7 +140,11 @@ impl GeneralPage {
                     ui.horizontal(|ui| {
                         ui::mono(ui, &cx.snap.data_dir.display().to_string());
                         if ui.button(tr("abrir")).clicked() {
-                            if let Err(e) = will_platform::open_path(&cx.snap.data_dir) {
+                            if !cx.snap.server_is_local {
+                                cx.toasts.info(tr(
+                                    "A pasta fica no servidor; abra-a por lá (o app está conectado a um servidor remoto).",
+                                ));
+                            } else if let Err(e) = will_platform::open_path(&cx.snap.data_dir) {
                                 cx.toasts.error(e);
                             }
                         }

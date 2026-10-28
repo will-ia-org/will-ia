@@ -5,15 +5,12 @@ use super::SettingsState;
 use crate::help;
 use crate::i18n::{tr, trf};
 use crate::pages::Cx;
-use crate::service::{j, Loader, Task};
+use crate::service::{Loader, Task};
 use crate::ui::{self, SecretAction, SecretField, Tone};
-use axum::extract::{Path, State};
-use axum::Json;
-use serde_json::Value;
+use serde_json::{json, Value};
 use std::collections::BTreeMap;
 use std::time::Duration;
 use will_core::{Event, Module};
-use will_server::api::integrations as api;
 
 /// Chave padrão do segredo no cofre (o `client_secret_ref` pode apontar para outra).
 const DEFAULT_SECRET_KEY: &str = "google_client_secret";
@@ -79,23 +76,21 @@ impl GooglePage {
     }
 
     fn reload_accounts(&mut self, cx: &Cx) {
-        self.accounts.start(
-            cx.svc
-                .call(|s| async move { j(api::google_accounts(State(s)).await) }),
-        );
+        self.accounts
+            .start(cx.svc.call(|c| async move { c.google_accounts().await }));
     }
 
     fn reload_calendars(&mut self, cx: &Cx) {
         self.calendars.start(
             cx.svc
-                .call(|s| async move { j(api::google_calendars(State(s)).await) }),
+                .call(|c| async move { c.google_calendars(&[]).await }),
         );
     }
 
     fn refresh_calendars(&mut self, cx: &Cx) {
         self.calendars.start(
             cx.svc
-                .call(|s| async move { j(api::google_calendars_refresh(State(s)).await) }),
+                .call(|c| async move { c.google_calendars_refresh().await }),
         );
     }
 
@@ -107,16 +102,16 @@ impl GooglePage {
         enabled: bool,
         default_for_create: bool,
     ) {
-        self.flags_task = Some(cx.svc.call(move |s| async move {
-            j(api::google_calendar_flags(
-                State(s),
-                Path((account, calendar_id)),
-                Json(api::CalFlags {
-                    enabled,
-                    default_for_create: Some(default_for_create),
+        self.flags_task = Some(cx.svc.call(move |c| async move {
+            c.google_calendar_flags(
+                &account,
+                &calendar_id,
+                json!({
+                    "enabled": enabled,
+                    "default_for_create": default_for_create,
                 }),
             )
-            .await)
+            .await
         }));
     }
 
@@ -362,8 +357,8 @@ impl GooglePage {
                                     let id2 = id.clone();
                                     self.reauth_task = Some((
                                         id.clone(),
-                                        cx.svc.call(move |s| async move {
-                                            j(api::google_reauthorize(State(s), Path(id2)).await)
+                                        cx.svc.call(move |c| async move {
+                                            c.google_reauthorize(&id2).await
                                         }),
                                     ));
                                 }
@@ -431,15 +426,12 @@ impl GooglePage {
                                 .filter(|(_, on)| **on)
                                 .map(|((k, _), _)| k.to_string())
                                 .collect();
-                            self.connect_task = Some(cx.svc.call(move |s| async move {
-                                j(api::google_connect(
-                                    State(s),
-                                    Some(Json(api::ConnectBody {
-                                        scopes: Some(scopes),
-                                        open_browser: Some(true),
-                                    })),
-                                )
-                                .await)
+                            self.connect_task = Some(cx.svc.call(move |c| async move {
+                                c.google_connect(Some(json!({
+                                    "scopes": scopes,
+                                    "open_browser": true,
+                                })))
+                                .await
                             }));
                         }
                         if ui.button(tr("Cancelar")).clicked() {
@@ -482,9 +474,10 @@ impl GooglePage {
             if let Some(ok) = ui::confirm_modal(ui.ctx(), &c) {
                 self.confirm_disconnect = None;
                 if ok {
-                    self.disconnect_task = Some(cx.svc.call(move |s| async move {
-                        j(api::google_disconnect(State(s), Path(id)).await)
-                    }));
+                    self.disconnect_task = Some(
+                        cx.svc
+                            .call(move |c| async move { c.google_disconnect(&id).await }),
+                    );
                 }
             }
         }

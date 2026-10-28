@@ -9,15 +9,13 @@
 
 use super::Cx;
 use crate::i18n::{tr, trf};
-use crate::service::{j, Loader};
+use crate::service::Loader;
 use crate::ui::{self, Tone};
-use axum::extract::{Query, State};
 use egui::{Color32, FontId, TextFormat};
 use serde_json::Value;
 use std::collections::HashSet;
 use std::hash::{Hash, Hasher};
 use will_core::Event;
-use will_server::api::system;
 
 /// Quantas linhas pedir ao banco por recarga (o servidor limita a 2000).
 const HISTORY_LIMIT: i64 = 1000;
@@ -243,26 +241,24 @@ impl LogsPage {
     }
 
     fn reload(&mut self, cx: &Cx) {
-        let module = if self.module.is_empty() {
-            None
-        } else {
-            Some(self.module.clone())
-        };
+        // Valores vazios são omitidos da query pelo cliente.
+        let module = self.module.clone();
         // `level` no servidor é igualdade exata; só vale a pena quando o mínimo
         // é ERROR (único nível sem nada acima).
-        let level = (self.min_level == Level::Error).then(|| "error".to_string());
+        let level = if self.min_level == Level::Error {
+            "error".to_string()
+        } else {
+            String::new()
+        };
         self.live.clear();
         self.generation += 1;
-        self.history.start(cx.svc.call(move |s| async move {
-            j(system::logs(
-                State(s),
-                Query(system::LogsQuery {
-                    limit: Some(HISTORY_LIMIT),
-                    module,
-                    level,
-                }),
-            )
-            .await)
+        self.history.start(cx.svc.call(move |c| async move {
+            c.logs(&[
+                ("limit", HISTORY_LIMIT.to_string()),
+                ("module", module),
+                ("level", level),
+            ])
+            .await
         }));
     }
 
@@ -457,9 +453,15 @@ impl LogsPage {
                 self.generation += 1;
             }
             if ui.button(tr("Abrir pasta de logs")).clicked() {
-                let dir = cx.svc.state.paths.logs_dir.clone();
-                if let Err(e) = will_platform::open_path(&dir) {
-                    cx.toasts.error(e);
+                if cx.snap.server_is_local {
+                    let dir = cx.snap.logs_dir.clone();
+                    if let Err(e) = will_platform::open_path(&dir) {
+                        cx.toasts.error(e);
+                    }
+                } else {
+                    cx.toasts.info(tr(
+                        "Abrir pasta: disponível só quando o servidor é esta máquina.",
+                    ));
                 }
             }
         });

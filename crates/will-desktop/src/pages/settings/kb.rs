@@ -4,11 +4,9 @@ use super::SettingsState;
 use crate::help;
 use crate::i18n::{tr, trf};
 use crate::pages::Cx;
-use crate::service::{j, Loader, Task};
+use crate::service::{Loader, Task};
 use crate::ui;
-use axum::extract::State;
 use serde_json::Value;
-use will_server::api::kb as api;
 
 #[derive(Default)]
 pub struct KbPage {
@@ -22,10 +20,8 @@ pub struct KbPage {
 impl KbPage {
     pub fn ui(&mut self, ui: &mut egui::Ui, cx: &mut Cx, st: &mut SettingsState) {
         if self.status.stale(std::time::Duration::from_secs(20)) {
-            self.status.start(
-                cx.svc
-                    .call(|s| async move { j(api::status(State(s)).await) }),
-            );
+            self.status
+                .start(cx.svc.call(|c| async move { c.kb_status().await }));
         }
         self.status.poll();
         if self.mcp_json.poll() {
@@ -90,7 +86,7 @@ impl KbPage {
                                 Some(path.trim().to_string())
                             };
                         }
-                        if ui.button(tr("Escolher…")).clicked() {
+                        if cx.snap.server_is_local && ui.button(tr("Escolher…")).clicked() {
                             let mut dlg = rfd::FileDialog::new()
                                 .set_title(tr("Pasta da base de conhecimento"));
                             if let Some(p) = kb
@@ -111,7 +107,12 @@ impl KbPage {
                         {
                             path = "workspace".into();
                             kb.path = Some(path.clone());
-                            if let Some(root) = &cx.snap.portable_root {
+                            if let Some(root) = cx
+                                .snap
+                                .portable_root
+                                .as_ref()
+                                .filter(|_| cx.snap.server_is_local)
+                            {
                                 let _ = std::fs::create_dir_all(root.join("workspace"));
                             }
                         }
@@ -197,27 +198,22 @@ impl KbPage {
                     )
                     .clicked()
                 {
-                    self.scaffold = Some(
-                        cx.svc
-                            .call(|s| async move { j(api::scaffold(State(s)).await) }),
-                    );
+                    self.scaffold = Some(cx.svc.call(|c| async move { c.kb_scaffold().await }));
                 }
                 if ui
                     .add_enabled(has, egui::Button::new(tr("Abrir pasta")))
                     .clicked()
                 {
                     let svc = cx.svc.clone();
-                    let t: Task<Value> = svc.call(|s| async move { j(api::open(State(s)).await) });
+                    let t: Task<Value> = svc.call(|c| async move { c.kb_open().await });
                     drop(t);
                 }
                 if ui
                     .add_enabled(has, egui::Button::new(tr("Ver .mcp.json")))
                     .clicked()
                 {
-                    self.mcp_json.start(
-                        cx.svc
-                            .call(|s| async move { j(api::mcp_json(State(s)).await) }),
-                    );
+                    self.mcp_json
+                        .start(cx.svc.call(|c| async move { c.kb_mcp_json().await }));
                 }
                 if ui.button(tr("Atualizar")).clicked() {
                     self.status.loaded_at = None;

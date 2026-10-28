@@ -129,8 +129,13 @@ pub struct Snapshot {
     pub pending_approvals: Vec<ApprovalRequest>,
     pub portable_root: Option<PathBuf>,
     pub data_dir: PathBuf,
+    pub logs_dir: PathBuf,
     pub db_path: PathBuf,
     pub api_url: String,
+    /// O servidor é esta máquina (loopback): ações locais como "abrir pasta" valem.
+    pub server_is_local: bool,
+    /// Conexão com o servidor (WS de eventos) no ar.
+    pub connected: bool,
 }
 
 pub struct Cx<'a> {
