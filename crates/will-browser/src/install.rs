@@ -209,6 +209,18 @@ impl Installer {
         args: Vec<String>,
         cwd: Option<PathBuf>,
     ) -> Result<(), String> {
+        self.spawn_job_then(name, bin, args, cwd, None)
+    }
+
+    /// Como [`spawn_job`](Self::spawn_job), com um passo extra executado se o comando terminar bem.
+    fn spawn_job_then(
+        &self,
+        name: &str,
+        bin: PathBuf,
+        args: Vec<String>,
+        cwd: Option<PathBuf>,
+        on_success: Option<Box<dyn FnOnce() -> Result<(), String> + Send>>,
+    ) -> Result<(), String> {
         self.start(name)?;
         let job = self.job.clone();
         let bus = self.bus.clone();
@@ -261,7 +273,15 @@ impl Installer {
                 tokio::time::timeout(std::time::Duration::from_secs(900), child.wait()).await;
             let _ = t1.await;
             let _ = t2.await;
-            let ok = matches!(status, Ok(Ok(s)) if s.success());
+            let mut ok = matches!(status, Ok(Ok(s)) if s.success());
+            if ok {
+                if let Some(f) = on_success {
+                    if let Err(e) = f() {
+                        Self::append(&job, &format!("[pós-instalação falhou: {e}]"));
+                        ok = false;
+                    }
+                }
+            }
             match &status {
                 Ok(Ok(s)) => Self::append(&job, &format!("[saída: {s}]")),
                 Ok(Err(e)) => Self::append(&job, &format!("[erro: {e}]")),
@@ -323,7 +343,13 @@ impl Installer {
             if let Ok(Ok(out)) =
                 tokio::time::timeout(std::time::Duration::from_secs(15), cmd.output()).await
             {
-                let dir = String::from_utf8_lossy(&out.stdout).trim().to_string();
+                // `skills path` imprime uma linha por diretório (skills, skill-data): a primeira é a das skills.
+                let dir = String::from_utf8_lossy(&out.stdout)
+                    .lines()
+                    .map(str::trim)
+                    .find(|l| !l.is_empty())
+                    .unwrap_or_default()
+                    .to_string();
                 let src = Path::new(&dir).join("agent-browser").join("SKILL.md");
                 if src.is_file() {
                     let dst = skill_path_in_kb(kb);
@@ -345,7 +371,9 @@ impl Installer {
         let npx = find_node_tool("npx").ok_or(
             "nem agent-browser nem npx encontrados; instale o Node.js e o agent-browser primeiro",
         )?;
-        self.spawn_job(
+        let dst = skill_path_in_kb(kb);
+        let dst2 = dst.clone();
+        self.spawn_job_then(
             "npx skills add",
             npx,
             vec![
@@ -358,7 +386,8 @@ impl Installer {
                 "-y".into(),
             ],
             Some(kb.to_path_buf()),
+            Some(Box::new(move || append_will_ia_notes(&dst2))),
         )?;
-        Ok(skill_path_in_kb(kb).to_string_lossy().to_string())
+        Ok(dst.to_string_lossy().to_string())
     }
 }
