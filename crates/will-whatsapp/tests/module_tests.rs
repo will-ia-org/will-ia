@@ -550,7 +550,8 @@ async fn incoming_messages_are_indexed_and_searchable() {
     assert_eq!(msgs.len(), 2);
     assert_eq!(msgs[0]["message_id"], "m1");
     assert_eq!(msgs[1]["message_id"], "m2");
-    assert_eq!(v["chat_name"], "Contato 5511");
+    // O nome da agenda (ContactUpdate) prevalece sobre o push name no chat.
+    assert_eq!(v["chat_name"], "Ana Lima");
     assert!(v["next_before"].is_null());
     assert_eq!(v["account"], ACC1);
 

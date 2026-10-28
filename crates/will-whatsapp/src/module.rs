@@ -759,6 +759,9 @@ impl WhatsAppModule {
         let t = token.clone();
         tokio::spawn(async move { me.event_loop(t).await });
         let me = Arc::clone(self);
+        let me2 = self.clone();
+        let token2 = token.clone();
+        tokio::spawn(async move { me2.identity_loop(token2).await });
         tokio::spawn(async move { me.prune_loop(token).await });
     }
 
@@ -783,6 +786,52 @@ impl WhatsAppModule {
             }
         }
         *self.events.lock().await = Some(rx);
+    }
+
+    /// Importa o mapa LID → telefone da sessão e religa nomes de agenda a
+    /// chats/contatos LID (o WhatsApp endereça contatos por LID desde 2025).
+    pub async fn sync_identities(&self, acc: &WaAccount) {
+        let maps = acc.backend.lid_mappings().await;
+        let st = &self.deps.storage;
+        let mut n = 0usize;
+        for (lid, phone) in &maps {
+            let c = WaContact {
+                account_id: acc.id.clone(),
+                jid: format!("{lid}@lid"),
+                phone: Some(phone.clone()),
+                name: None,
+                push_name: None,
+            };
+            if st.wa_upsert_contact(&c).await.is_ok() {
+                n += 1;
+            }
+        }
+        match st.wa_relink_names(&acc.id).await {
+            Ok((chats, contacts)) => {
+                if chats > 0 || contacts > 0 || n > 0 {
+                    tracing::info!(account = %acc.id, mappings = n, chats, contacts, "identidades LID religadas");
+                }
+            }
+            Err(e) => tracing::warn!("wa_relink_names: {e}"),
+        }
+    }
+
+    /// A cada 15 min religa identidades LID ↔ telefone ↔ nome (mapa novo da
+    /// sessão, nomes de agenda que chegaram depois do chat).
+    async fn identity_loop(self: Arc<Self>, token: CancellationToken) {
+        loop {
+            // Primeira passada imediata: o mapa LID → telefone está no store da
+            // sessão mesmo sem conexão ativa.
+            for acc in self.accounts() {
+                if acc.has_session() {
+                    self.sync_identities(&acc).await;
+                }
+            }
+            tokio::select! {
+                _ = token.cancelled() => break,
+                _ = tokio::time::sleep(Duration::from_secs(15 * 60)) => {}
+            }
+        }
     }
 
     async fn prune_loop(self: Arc<Self>, token: CancellationToken) {
@@ -881,6 +930,7 @@ impl WhatsAppModule {
                 self.emit("code", json!({"account_id": acc.id, "code": code}));
             }
             BackendEvent::Connected { me } => {
+                self.sync_identities(acc).await;
                 let phone = me
                     .get("phone")
                     .and_then(|p| p.as_str())
@@ -976,6 +1026,10 @@ impl WhatsAppModule {
                 c.account_id = acc.id.clone();
                 if let Err(e) = self.deps.storage.wa_upsert_contact(&c).await {
                     tracing::warn!("wa_upsert_contact: {e}");
+                }
+                // Nome da agenda chegou pelo JID de telefone: propaga ao LID/chat.
+                if c.name.is_some() {
+                    let _ = self.deps.storage.wa_relink_names(&acc.id).await;
                 }
             }
             BackendEvent::GroupUpdate {

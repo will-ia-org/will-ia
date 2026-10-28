@@ -150,6 +150,16 @@ impl RealBackend {
 
 #[async_trait::async_trait]
 impl WhatsAppBackend for RealBackend {
+    async fn lid_mappings(&self) -> Vec<(String, String)> {
+        match will_storage::whatsapp::read_lid_mappings(&self.store_path).await {
+            Ok(v) => v,
+            Err(e) => {
+                tracing::debug!(error = %e, "lid_pn_mapping indisponível");
+                vec![]
+            }
+        }
+    }
+
     fn kind(&self) -> &'static str {
         "real"
     }
@@ -490,6 +500,17 @@ impl Shared {
             WaEvent::LoggedOut(_) => {
                 self.connected.store(false, Ordering::SeqCst);
                 out.push(BackendEvent::LoggedOut);
+            }
+            // Outra conexão usou as mesmas credenciais; a biblioteca desliga a
+            // reconexão automática e, em geral, o servidor passa a responder 401.
+            WaEvent::StreamReplaced(_) => {
+                self.connected.store(false, Ordering::SeqCst);
+                tracing::warn!(
+                    "sessão do WhatsApp substituída por outra conexão (conflict=replaced)"
+                );
+                out.push(BackendEvent::Disconnected {
+                    reason: "sessão substituída por outra conexão com as mesmas credenciais".into(),
+                });
             }
             WaEvent::Messages(batch) => {
                 for m in batch.messages.iter() {

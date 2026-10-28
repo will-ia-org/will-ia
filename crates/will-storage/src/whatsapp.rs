@@ -505,6 +505,27 @@ impl Storage {
         )
     }
 
+    /// Religa nomes entre identidades: contato LID ganha o nome da agenda do
+    /// contato de telefone com o mesmo número; chat 1:1 ganha o nome (ou push
+    /// name) do seu contato. Devolve quantos chats/contatos mudaram.
+    pub async fn wa_relink_names(&self, account_id: &str) -> Result<(u64, u64)> {
+        let c = sqlx::query(
+            "UPDATE wa_contacts SET name = (SELECT pn.name FROM wa_contacts pn WHERE pn.account_id = wa_contacts.account_id AND pn.phone = wa_contacts.phone AND pn.jid NOT LIKE '%@lid' AND pn.name IS NOT NULL AND pn.name != '' LIMIT 1)              WHERE account_id = ? AND jid LIKE '%@lid' AND (name IS NULL OR name = '') AND phone IS NOT NULL              AND EXISTS (SELECT 1 FROM wa_contacts pn WHERE pn.account_id = wa_contacts.account_id AND pn.phone = wa_contacts.phone AND pn.jid NOT LIKE '%@lid' AND pn.name IS NOT NULL AND pn.name != '')",
+        )
+        .bind(account_id)
+        .execute(&self.pool)
+        .await?
+        .rows_affected();
+        let ch = sqlx::query(
+            "UPDATE wa_chats SET name = (SELECT COALESCE(NULLIF(c.name, ''), NULLIF(c.push_name, '')) FROM wa_contacts c WHERE c.account_id = wa_chats.account_id AND c.jid = wa_chats.jid)              WHERE account_id = ? AND is_group = 0 AND EXISTS (SELECT 1 FROM wa_contacts c WHERE c.account_id = wa_chats.account_id AND c.jid = wa_chats.jid AND COALESCE(NULLIF(c.name, ''), NULLIF(c.push_name, '')) IS NOT NULL)              AND (name IS NULL OR name = '' OR name = (SELECT c.push_name FROM wa_contacts c WHERE c.account_id = wa_chats.account_id AND c.jid = wa_chats.jid AND c.name IS NOT NULL AND c.name != ''))",
+        )
+        .bind(account_id)
+        .execute(&self.pool)
+        .await?
+        .rows_affected();
+        Ok((ch, c))
+    }
+
     /// Última mensagem indexada (fora de `status@broadcast`) e quantas chegaram
     /// nas últimas 24 h: é o que mostra se o índice está acompanhando o celular.
     pub async fn wa_recency(&self, account_id: &str) -> Result<(Option<String>, i64)> {
@@ -544,6 +565,39 @@ impl Storage {
         }
         Ok(out)
     }
+}
+
+/// Lê o mapa LID → telefone do store da biblioteca `whatsapp-rust`
+/// (`<data_dir>/whatsapp/<conta>/store.db`, tabela `lid_pn_mapping`), somente
+/// leitura. Sem esse mapa os contatos novos ficam sem telefone e sem nome.
+pub async fn read_lid_mappings(store_db: &std::path::Path) -> Result<Vec<(String, String)>> {
+    if !store_db.is_file() {
+        return Ok(vec![]);
+    }
+    // Sem `read_only`: o store usa WAL e o modo somente-leitura falha sem o `-shm`.
+    let opts = sqlx::sqlite::SqliteConnectOptions::new()
+        .filename(store_db)
+        .create_if_missing(false)
+        .busy_timeout(std::time::Duration::from_secs(3));
+    let pool = sqlx::sqlite::SqlitePoolOptions::new()
+        .max_connections(1)
+        .connect_with(opts)
+        .await?;
+    let rows = sqlx::query("SELECT lid, phone_number FROM lid_pn_mapping")
+        .fetch_all(&pool)
+        .await
+        .unwrap_or_default();
+    pool.close().await;
+    Ok(rows
+        .iter()
+        .map(|r| {
+            (
+                r.get::<String, _>("lid"),
+                r.get::<String, _>("phone_number"),
+            )
+        })
+        .filter(|(l, p)| !l.is_empty() && !p.is_empty())
+        .collect())
 }
 
 #[cfg(test)]

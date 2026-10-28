@@ -101,6 +101,12 @@ pub trait WhatsAppBackend: Send + Sync {
     ) -> Result<String, String>;
     /// Baixa a mídia da mensagem para `dest_dir` e devolve o caminho do arquivo.
     /// `media_ref` é a referência guardada no índice (permite baixar após reinício).
+    /// Mapa LID → telefone conhecido pela sessão (`(lid_user, phone_digits)`).
+    /// Padrão: vazio (backends sem esse dado).
+    async fn lid_mappings(&self) -> Vec<(String, String)> {
+        vec![]
+    }
+
     async fn download_media(
         &self,
         message_id: &str,
