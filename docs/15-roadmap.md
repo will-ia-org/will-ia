@@ -46,6 +46,16 @@ Fases incrementais; cada uma termina com algo usável.
 - Exportar diagnóstico, retenção de logs, métricas na UI.
 - Documentação de usuário final.
 
+## Fase 5 — Separação cliente/servidor (planejada em 2026-10-28; `docs/26`, ADR-0019)
+
+1. Cliente tipado `will-client` e UI desacoplada (ainda um binário).
+2. Uploads, arquivos e navegação de pastas pela API.
+3. Dois binários: `will-ia` (servidor + bandeja opcional) e `will-ia-app` (egui + perfis).
+4. Contas e sessões (`users`, `sessions`, autor em turnos/aprovações/custos), papéis, bootstrap do admin.
+5. Rede: `bind`, TLS opcional + TOFU, rate limit, segredos em arquivo sem keyring.
+6. Voz multiusuário (sessão por usuário, teto, custo por usuário).
+7. Servidor headless de verdade (Chrome headless forçado, notificações para apps, guia de instalação/exposição).
+
 ## Backlog (pós-MVP)
 - Voice notes no Telegram com transcrição e resumo em áudio (já desenhado, herdado da referência).
 - Ferramentas MCP de delegação entre threads.
