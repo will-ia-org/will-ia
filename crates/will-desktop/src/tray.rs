@@ -130,13 +130,6 @@ mod linux {
                     ..Default::default()
                 }
                 .into(),
-                MenuItem::Separator,
-                StandardItem {
-                    label: tr("Sair").into(),
-                    activate: Box::new(|t: &mut Self| t.send(UiCommand::Quit)),
-                    ..Default::default()
-                }
-                .into(),
             ]
         }
     }
@@ -213,7 +206,7 @@ mod linux {
 mod other {
     use super::*;
     use crate::i18n::tr;
-    use tray_icon::menu::{Menu, MenuEvent, MenuItem, PredefinedMenuItem};
+    use tray_icon::menu::{Menu, MenuEvent, MenuItem};
     use tray_icon::{
         Icon, MouseButton, MouseButtonState, TrayIcon, TrayIconBuilder, TrayIconEvent,
     };
@@ -240,9 +233,8 @@ mod other {
         let menu = Menu::new();
         let open = MenuItem::new(tr("Abrir will-ia"), true, None);
         let voice = MenuItem::new(tr("Ligar voz"), true, None);
-        let quit = MenuItem::new(tr("Sair"), true, None);
-        if let Err(e) = menu.append_items(&[&open, &voice, &PredefinedMenuItem::separator(), &quit])
-        {
+        // Sem "Sair": o serviço é residente; encerrar só por kill forçado (docs/13).
+        if let Err(e) = menu.append_items(&[&open, &voice]) {
             tracing::warn!(error = %e, "menu da bandeja");
             return None;
         }
@@ -260,8 +252,7 @@ mod other {
                 return None;
             }
         };
-        let (open_id, voice_id, quit_id) =
-            (open.id().clone(), voice.id().clone(), quit.id().clone());
+        let (open_id, voice_id) = (open.id().clone(), voice.id().clone());
         let weak = Arc::downgrade(svc);
         MenuEvent::set_event_handler(Some(move |e: MenuEvent| {
             let Some(s) = weak.upgrade() else { return };
@@ -269,8 +260,6 @@ mod other {
                 UiCommand::Show
             } else if e.id() == &voice_id {
                 UiCommand::ToggleVoice
-            } else if e.id() == &quit_id {
-                UiCommand::Quit
             } else {
                 return;
             };

@@ -15,5 +15,15 @@ open.workspace = true
 [target.'cfg(any(target_os = "linux", target_os = "freebsd", target_os = "macos", target_os = "windows"))'.dependencies]
 notify-rust = { version = "4", default-features = false, features = ["z"] }
 
-[lints]
-workspace = true
+[target.'cfg(unix)'.dependencies]
+nix = { version = "0.31", features = ["fs", "signal", "process"] }
+
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.61", features = ["Win32_Foundation", "Win32_System_JobObjects", "Win32_System_Threading"] }
+
+# Único crate com `unsafe` permitido (FFI de SO: PDEATHSIG, Job Object); o resto
+# do workspace mantém `unsafe_code = "forbid"`.
+[lints.rust]
+unsafe_code = "allow"
+[lints.clippy]
+all = "warn"

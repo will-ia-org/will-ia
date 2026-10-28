@@ -1,6 +1,9 @@
 //! will-platform — integrações de SO sem dependências de GUI: notificações,
 //! abrir pasta/URL, detecção de binários no PATH.
 
+pub mod instance;
+pub mod process;
+
 use std::path::{Path, PathBuf};
 
 /// Notificação nativa (best-effort; nunca falha o chamador).
@@ -70,11 +73,10 @@ pub fn which(bin: &str) -> Option<PathBuf> {
 
 /// Versão de um binário via `--version` (primeira linha).
 pub async fn version_of(bin: &Path) -> Option<String> {
-    let out = tokio::process::Command::new(bin)
-        .arg("--version")
-        .output()
-        .await
-        .ok()?;
+    let mut cmd = tokio::process::Command::new(bin);
+    cmd.arg("--version");
+    will_core::process::hide_console(&mut cmd);
+    let out = cmd.output().await.ok()?;
     let s = String::from_utf8_lossy(&out.stdout);
     s.lines()
         .next()

@@ -325,6 +325,8 @@ impl Runner {
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
             .kill_on_drop(true);
+        will_core::process::hide_console(&mut cmd);
+        will_platform::process::die_with_parent(&mut cmd);
         #[cfg(unix)]
         {
             cmd.process_group(0);
@@ -336,6 +338,7 @@ impl Runner {
                 EngineError::Spawn(e.to_string())
             }
         })?;
+        will_platform::process::attach_to_job(&child);
         let stdout = child
             .stdout
             .take()
@@ -696,10 +699,10 @@ pub async fn kill_tree(child: &mut Child, pid: Option<u32>, grace: Duration) {
         // No Windows o taskkill /T /F já é imediato; não há período de graça.
         let _ = grace;
         if let Some(pid) = pid {
-            let _ = Command::new("taskkill")
-                .args(["/PID", &pid.to_string(), "/T", "/F"])
-                .output()
-                .await;
+            let mut kill = Command::new("taskkill");
+            kill.args(["/PID", &pid.to_string(), "/T", "/F"]);
+            will_core::process::hide_console(&mut kill);
+            let _ = kill.output().await;
         }
     }
     let _ = child.kill().await;

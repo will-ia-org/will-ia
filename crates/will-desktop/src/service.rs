@@ -27,7 +27,6 @@ pub enum UiCommand {
     /// navegando antes para a página indicada.
     Screenshot(std::path::PathBuf, Option<String>),
     ScreenshotNow(std::path::PathBuf),
-    Quit,
 }
 
 pub struct Service {
@@ -95,29 +94,35 @@ impl Service {
                 }
             }
         }));
-        // Ctrl+C / SIGTERM encerram limpo (processos filhos inclusive).
-        let weak = Arc::downgrade(&svc);
+        // Serviço residente: SIGINT/SIGTERM/SIGHUP não derrubam o app (só kill
+        // forçado). Registrar o handler substitui a ação padrão de terminar; os
+        // filhos `claude` morrem junto mesmo no kill -9 (PDEATHSIG / Job Object).
         svc.rt.spawn(async move {
-            let _ = tokio::signal::ctrl_c().await;
-            if let Some(s) = weak.upgrade() {
-                tracing::info!("sinal de término recebido");
-                s.send_cmd(UiCommand::Quit);
+            loop {
+                if tokio::signal::ctrl_c().await.is_err() {
+                    break;
+                }
+                tracing::warn!(
+                    "SIGINT ignorado: o will-ia é residente; para encerrar use kill -9 (ou o Gerenciador de Tarefas)"
+                );
             }
         });
         #[cfg(unix)]
         {
-            let weak = Arc::downgrade(&svc);
-            svc.rt.spawn(async move {
-                if let Ok(mut sig) =
-                    tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())
-                {
-                    sig.recv().await;
-                    if let Some(s) = weak.upgrade() {
-                        tracing::info!("SIGTERM recebido");
-                        s.send_cmd(UiCommand::Quit);
+            use tokio::signal::unix::{signal, SignalKind};
+            for (kind, name) in [
+                (SignalKind::terminate(), "SIGTERM"),
+                (SignalKind::hangup(), "SIGHUP"),
+            ] {
+                svc.rt.spawn(async move {
+                    let Ok(mut sig) = signal(kind) else { return };
+                    while sig.recv().await.is_some() {
+                        tracing::warn!(
+                            "{name} ignorado: o will-ia é residente; para encerrar use kill -9"
+                        );
                     }
-                }
-            });
+                });
+            }
         }
         Ok((svc, ev_rx, cmd_rx))
     }

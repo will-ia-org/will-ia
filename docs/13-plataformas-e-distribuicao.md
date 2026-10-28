@@ -4,6 +4,16 @@
 
 O will-ia precisa de bandeja, áudio, atalho global e keyring, que só existem na **sessão gráfica do usuário**. Por isso ele **não** é um daemon de sistema (systemd system unit, Windows Service, launchd system daemon): é um app de bandeja iniciado no login. Ver [ADR-0010](adr/0010-user-session-app.md) e [ADR-0016](adr/0016-ui-nativa-egui.md) (binário único `will-ia`: app desktop egui com o serviço em processo; `will-ia serve` para headless).
 
+### Serviço residente: difícil de derrubar, instância única
+
+O app é a peça que mantém tudo de pé (MCP para os processos `claude`, Telegram, voz, agendamentos). Por isso, a partir de 2026-10-28:
+
+- **Não há botão Sair nem Ocultar** na janela, e a bandeja não tem "Sair". Fechar a janela (X, Esc) só a oculta; `will-ia` de novo (ou o ícone da bandeja) reabre.
+- **Sinais são ignorados no modo GUI**: SIGINT (Ctrl+C), SIGTERM e SIGHUP só geram um aviso no log. Derrubar é só com kill forçado (`kill -9 <pid>` no Linux/macOS; "Finalizar tarefa" no Gerenciador de Tarefas do Windows). `will-ia serve` (headless) continua encerrando limpo com Ctrl+C/SIGTERM, porque é o que systemd espera.
+- **Filhos morrem junto mesmo no kill forçado**: no Linux cada `claude` recebe `PR_SET_PDEATHSIG = SIGKILL` (`will_platform::process::die_with_parent`); no Windows todos os filhos entram em um Job Object com `KILL_ON_JOB_CLOSE` (`will_platform::process::attach_to_job`), que o SO fecha quando o will-ia some. No macOS fica só o grupo de processos (shutdown limpo).
+- **Instância única por diretório de dados**: além de pedir à instância ativa para mostrar a janela (`POST /api/ui/show`), o binário toma um trinco `instance.lock` no `data_dir` (`flock` exclusivo no Unix, abertura sem compartilhamento no Windows; `will_platform::instance`). Se o trinco está ocupado, a segunda execução insiste por ~10 s em mostrar a janela da primeira (que pode estar subindo) e sai. O SO solta o trinco quando o processo morre, inclusive por `kill -9`, então não há trinco órfão.
+- O que **não** faz: reiniciar sozinho depois de um kill. Para isso, o autostart no login cobre a reinicialização da máquina; um supervisor (systemd user unit com `Restart=always`, Agendador de Tarefas no Windows) fica a critério do usuário.
+
 | SO | Autostart | Tray | Atalho global | Keyring | Notificação | Seletor de pasta |
 |---|---|---|---|---|---|---|
 | Windows 10/11 (x64) | chave `Run` do registro (`will-platform`) | `tray-icon` (Shell_NotifyIcon) | `global-hotkey` (`RegisterHotKey`) | Credential Manager | Toast | `rfd` (IFileDialog) |
@@ -12,7 +22,7 @@ O will-ia precisa de bandeja, áudio, atalho global e keyring, que só existem n
 
 Detalhes por SO:
 
-- **Windows**: processos filhos em Job Object (`KILL_ON_JOB_CLOSE`); `python`/`py` ambos liberados; caminho do `claude` normalmente `%APPDATA%\npm\claude.cmd` (spawn via `cmd /C` ou resolver o `.cmd`).
+- **Windows**: processos filhos em Job Object (`KILL_ON_JOB_CLOSE`); `python`/`py` ambos liberados; caminho do `claude` normalmente `%APPDATA%\npm\claude.cmd` (spawn via `cmd /C` ou resolver o `.cmd`). **Todo processo filho** (claude, `taskkill`, `--version` de node/python, teste de MCP externo) é criado com `CREATE_NO_WINDOW` via `will_core::process::hide_console`; sem isso o app GUI faz piscar uma janela de console a cada spawn.
 - **macOS**: `caffeinate -i` opcional para não dormir com threads ativas (ou `IOPMAssertion`); permissões de microfone e acessibilidade solicitadas no onboarding; notarização necessária para distribuição fora da App Store. Duas builds separadas (x86_64 e aarch64), não universal.
 - **Linux**: a bandeja depende de suporte a StatusNotifierItem no desktop (KDE, Cinnamon, XFCE suportam; GNOME exige a extensão AppIndicator). `libxkbcommon` e `libwayland`/X11 são carregados **em runtime** (presentes em qualquer desktop); nenhuma lib de GUI é necessária para compilar.
 

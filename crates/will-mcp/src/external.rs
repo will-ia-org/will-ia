@@ -28,6 +28,7 @@ pub async fn test_external(def: &ResolvedExternal, timeout: Duration) -> McpTest
                 let cmd_s = def.command.clone().ok_or("comando ausente")?;
                 let mut cmd = tokio::process::Command::new(&cmd_s);
                 cmd.args(&def.args).envs(&def.env).kill_on_drop(true);
+                will_core::process::hide_console(&mut cmd);
                 if let Some(cwd) = &def.cwd {
                     cmd.current_dir(cwd);
                 }

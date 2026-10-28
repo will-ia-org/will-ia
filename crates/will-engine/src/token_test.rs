@@ -42,12 +42,17 @@ pub async fn test_token(
     .stdout(Stdio::piped())
     .stderr(Stdio::piped())
     .kill_on_drop(true);
+    will_core::process::hide_console(&mut cmd);
+    will_platform::process::die_with_parent(&mut cmd);
     #[cfg(unix)]
     {
         cmd.process_group(0);
     }
     let child = match cmd.spawn() {
-        Ok(c) => c,
+        Ok(c) => {
+            will_platform::process::attach_to_job(&c);
+            c
+        }
         Err(e) => {
             return TokenTestResult {
                 ok: false,

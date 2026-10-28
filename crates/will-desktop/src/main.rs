@@ -6,7 +6,12 @@
 //! - `will-ia info`: caminhos e token da API local.
 //!
 //! Se já houver uma instância com GUI no ar, uma nova execução sem argumentos
-//! apenas pede a ela que mostre a janela e sai.
+//! apenas pede a ela que mostre a janela e sai. Um trinco em `data_dir/instance.lock`
+//! garante a instância única mesmo na corrida de duas execuções simultâneas.
+//!
+//! O serviço é **residente**: não há botão Sair; fechar a janela só oculta;
+//! SIGINT/SIGTERM/SIGHUP são ignorados no modo GUI (só kill forçado derruba;
+//! `will-ia serve` continua encerrando limpo com Ctrl+C/SIGTERM).
 
 #![cfg_attr(all(windows, not(debug_assertions)), windows_subsystem = "windows")]
 
@@ -128,11 +133,17 @@ fn main() -> anyhow::Result<()> {
             }
             Ok(())
         }
-        Some(Cmd::Serve) => serve_headless(opts),
+        Some(Cmd::Serve) => {
+            let _lock = acquire_instance_lock(cli.port, false)?;
+            serve_headless(opts)
+        }
         None => {
             if let Ok(true) = ipc::show_running_instance(cli.port) {
                 return Ok(());
             }
+            let Some(_lock) = acquire_instance_lock(cli.port, true)? else {
+                return Ok(());
+            };
             app::run(
                 opts,
                 if cli.hidden {
@@ -144,6 +155,44 @@ fn main() -> anyhow::Result<()> {
                 },
             )
         }
+    }
+}
+
+/// Garante uma única instância por diretório de dados (`instance.lock`). Se o
+/// trinco está ocupado e `gui` é verdadeiro, a outra instância pode ainda estar
+/// subindo: insiste alguns segundos em pedir a ela que mostre a janela e sai
+/// com `Ok(None)`. Em modo `serve`, ocupado é erro.
+fn acquire_instance_lock(
+    port: Option<u16>,
+    gui: bool,
+) -> anyhow::Result<Option<will_platform::instance::InstanceLock>> {
+    let paths = will_core::AppPaths::resolve();
+    match will_platform::instance::try_lock(&paths.data_dir) {
+        Ok(l) => Ok(Some(l)),
+        Err(will_platform::instance::InstanceLockError::Busy) => {
+            if gui {
+                for _ in 0..20 {
+                    std::thread::sleep(std::time::Duration::from_millis(500));
+                    if let Ok(true) = ipc::show_running_instance(port) {
+                        return Ok(None);
+                    }
+                }
+                eprintln!(
+                    "will-ia já está em execução (trinco em {}); nada a fazer.",
+                    paths
+                        .data_dir
+                        .join(will_platform::instance::LOCK_FILE)
+                        .display()
+                );
+                Ok(None)
+            } else {
+                anyhow::bail!(
+                    "já existe uma instância do will-ia usando {}",
+                    paths.data_dir.display()
+                )
+            }
+        }
+        Err(e) => Err(e.into()),
     }
 }
 
