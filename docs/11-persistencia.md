@@ -183,6 +183,42 @@ CREATE TABLE wa_outbox (
   error TEXT, approval_id TEXT
 );
 
+-- Agendamentos (scheduler, migration 0005; docs/24)
+CREATE TABLE schedules (
+  id TEXT PRIMARY KEY,                    -- uuid v7
+  name TEXT NOT NULL,
+  message TEXT NOT NULL,
+  trigger_kind TEXT NOT NULL,             -- cron | once
+  cron_expr TEXT,
+  run_at TEXT,
+  timezone TEXT,                          -- IANA; NULL = fuso padrão do scheduler/sistema
+  thread_id TEXT NOT NULL,                -- sem FK: a thread pode ser apagada e recriada
+  claude_session_id TEXT,                 -- sessão da thread na criação, para --resume ao recriar
+  origin TEXT NOT NULL,                   -- ui | telegram | realtime
+  origin_ref TEXT,                        -- telegram: "<chat_id>[:<topic_id>]"; realtime: "voice"
+  enabled INTEGER NOT NULL DEFAULT 1,
+  created_by TEXT NOT NULL DEFAULT 'agent',  -- agent | user
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL,
+  next_run_at TEXT,
+  last_run_at TEXT,
+  last_result TEXT,                       -- ok | motivo da falha
+  run_count INTEGER NOT NULL DEFAULT 0,
+  paused_reason TEXT                      -- preenchido quando o scheduler pausou sozinho
+);
+CREATE INDEX schedules_next ON schedules(enabled, next_run_at);
+CREATE INDEX schedules_thread ON schedules(thread_id);
+
+CREATE TABLE schedule_runs (              -- histórico curto: últimos 50 por agendamento
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  schedule_id TEXT NOT NULL REFERENCES schedules(id) ON DELETE CASCADE,
+  at TEXT NOT NULL,
+  thread_id TEXT,                         -- thread que recebeu (pode ser a recriada)
+  ok INTEGER NOT NULL,
+  detail TEXT                             -- manual | erro
+);
+CREATE INDEX schedule_runs_sched ON schedule_runs(schedule_id, at);
+
 CREATE TABLE events_log (                 -- eventos operacionais para a aba Logs (retenção N dias)
   id INTEGER PRIMARY KEY,
   at TEXT NOT NULL,
@@ -207,6 +243,7 @@ CREATE TABLE events_log (                 -- eventos operacionais para a aba Log
 - `turns`: sem limite por padrão (são pequenos); opção de limpeza por thread.
 - `wa_messages`: 90 dias (configurável); mídia baixada segue a retenção de `inbox/`.
 - `approvals`: 90 dias.
+- `schedule_runs`: últimos 50 por agendamento (poda na própria transação do disparo); `schedules` não expira.
 
 ## Backup
 
@@ -216,3 +253,7 @@ Botão "Exportar dados" gera um zip com o `.db` (via `VACUUM INTO`) e a configur
 ## Custos de IA (`ai_costs`, migration 0003)
 
 Tabela genérica: `at`, `source` (`voice`, `claude`, …), `ref` (sessão/thread/turno), `model`, `units_json` (contagens por tipo de token), `usd`, `estimated` (1 = calculado pela tabela de preços local), `duration_secs`, `note`. Resumo por período e fonte em `Storage::ai_cost_summary`.
+
+## Agendamentos (`schedules`, `schedule_runs`, migration `0005_schedules.sql`)
+
+Repositório em `will-storage::schedules` (`NewSchedule`, `insert/get/list/list_for_thread/count_enabled/update/delete_schedule`, `set_schedule_next`, `record_schedule_run`, `list_schedule_runs`). `record_schedule_run` é uma transação: atualiza `last_run_at`/`last_result`/`run_count`/`next_run_at`, troca `thread_id` se a thread foi recriada, pausa (`enabled = 0` + `paused_reason`) quando não há próxima ocorrência, insere o run e poda para 50. `thread_id` não tem FK de propósito (ADR-0017). Ver [24](24-scheduler.md).

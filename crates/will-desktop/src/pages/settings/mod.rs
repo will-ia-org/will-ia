@@ -7,6 +7,7 @@ pub mod general;
 pub mod google;
 pub mod kb;
 pub mod mcp;
+pub mod scheduler;
 pub mod telegram;
 pub mod voice;
 pub mod whatsapp;
@@ -228,6 +229,7 @@ fn section_label(s: &str) -> &str {
         "calendar" => tr("Agenda"),
         "gmail" => tr("Gmail"),
         "external_mcps" => tr("MCPs externos"),
+        "scheduler" => tr("Agendamentos"),
         other => other,
     }
 }
@@ -244,6 +246,7 @@ pub struct SettingsPages {
     pub external: external::ExternalPage,
     pub whatsapp: whatsapp::WhatsAppPage,
     pub google: google::GooglePage,
+    pub scheduler: scheduler::SchedulerPage,
 }
 
 impl SettingsPages {
@@ -281,6 +284,7 @@ impl SettingsPages {
             SettingsSection::External => self.external.ui(ui, cx, st),
             SettingsSection::WhatsApp => self.whatsapp.ui(ui, cx, st),
             SettingsSection::Google => self.google.ui(ui, cx, st),
+            SettingsSection::Scheduler => self.scheduler.ui(ui, cx, st),
         }
     }
 }

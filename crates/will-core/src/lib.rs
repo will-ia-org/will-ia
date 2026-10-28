@@ -11,6 +11,8 @@ pub mod host;
 pub mod ids;
 pub mod module;
 pub mod paths;
+pub mod process;
+pub mod schedule;
 pub mod settings;
 pub mod thread;
 pub mod tools;
@@ -18,9 +20,10 @@ pub mod tools;
 pub use approvals::{ApprovalDecision, ApprovalManager, ApprovalRequest};
 pub use bus::EventBus;
 pub use host::{BrainHost, BrainTask, ClaudeTokenInfo, SharedThreadHost, ThreadHost};
-pub use ids::{ApprovalId, MessageId, ThreadId, TurnId};
+pub use ids::{ApprovalId, MessageId, ScheduleId, ThreadId, TurnId};
 pub use module::{Module, ModuleStatus};
 pub use paths::AppPaths;
+pub use schedule::{Schedule, ScheduleRun, ScheduleTrigger};
 pub use settings::Settings;
 pub use thread::{
     attachment_note, derive_title, is_placeholder_title, split_attachment_notes, Attachment,
@@ -113,6 +116,16 @@ pub enum Event {
         title: String,
         body: String,
     },
+    /// Um agendamento disparou (a mensagem já foi entregue à thread) ou falhou ao disparar.
+    ScheduleFired {
+        schedule_id: ScheduleId,
+        thread_id: Option<ThreadId>,
+        name: String,
+        ok: bool,
+        detail: Option<String>,
+    },
+    /// Lista de agendamentos mudou (criado/editado/removido/pausado); a UI recarrega.
+    SchedulesChanged,
     /// Custo de IA registrado (voz, Claude…): `summary` já vem pronto para mostrar.
     CostRecorded {
         source: String,

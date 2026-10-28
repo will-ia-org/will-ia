@@ -6,11 +6,12 @@ Convenção de identificação: `RF-<módulo>-<nº>`. Prioridade: **M** (Must, M
 
 | ID | Requisito | Prio |
 |---|---|---|
-| RF-APP-01 | O serviço deve iniciar como ícone na bandeja do sistema em Windows, Linux (StatusNotifierItem) e macOS (menu bar), sem janela principal aberta (exceto na primeira execução ou com `--show`). Fechar a janela apenas a esconde; "Sair" fica na bandeja. | M |
-| RF-APP-02 | O menu da bandeja deve oferecer: Abrir Configurações, Threads, Status dos módulos (Claude / Realtime / Telegram / MCP), Pausar/Retomar, Sair. | M |
+| RF-APP-01 | O serviço deve iniciar como ícone na bandeja do sistema em Windows, Linux (StatusNotifierItem) e macOS (menu bar), sem janela principal aberta (exceto na primeira execução ou com `--show`). Fechar a janela apenas a esconde. **Não há "Sair"** na janela nem na bandeja: o serviço é residente e só termina por kill forçado (`kill -9`, Gerenciador de Tarefas); no modo GUI, SIGINT/SIGTERM/SIGHUP são ignorados com aviso no log (`docs/13`). | M |
+| RF-APP-02 | O menu da bandeja deve oferecer: Abrir will-ia e Ligar/Desligar voz (sem "Sair"). | M |
 | RF-APP-03 | O ícone deve refletir estado: ocioso, processando (alguma thread ativa), gravando voz, erro. | S |
 | RF-APP-04 | Deve existir opção de iniciar com o sistema (autostart), configurável. | M |
-| RF-APP-05 | Apenas uma instância do serviço pode rodar por usuário; uma segunda invocação deve pedir à instância ativa que mostre a janela (`POST /api/ui/show`) e sair. | M |
+| RF-APP-05 | Apenas uma instância do serviço pode rodar por diretório de dados: trinco `instance.lock` tomado pelo SO (`flock` / abertura exclusiva), solto automaticamente quando o processo morre. Uma segunda invocação pede à instância ativa que mostre a janela (`POST /api/ui/show`), insiste alguns segundos se ela ainda está subindo, e sai. | M |
+| RF-APP-08 | Os processos filhos (`claude`) devem morrer junto com o serviço mesmo em kill forçado: `PR_SET_PDEATHSIG` no Linux, Job Object com `KILL_ON_JOB_CLOSE` no Windows. | M |
 | RF-APP-06 | O serviço deve exibir notificações nativas em eventos relevantes (resposta pronta de thread em background, erro de autenticação, etc.), com opção de desligar. | S |
 | RF-APP-07 | O mesmo binário deve rodar em modo headless (`will-ia serve [--port --data-dir --file-secrets]`): só serviço + API local, sem bandeja nem janela, para servidores, testes e systemd sem sessão gráfica. | S |
 
@@ -18,7 +19,7 @@ Convenção de identificação: `RF-<módulo>-<nº>`. Prioridade: **M** (Must, M
 
 | ID | Requisito | Prio |
 |---|---|---|
-| RF-CFG-01 | A janela principal (nativa, egui) deve ter navegação lateral com páginas Dashboard, Threads, Aprovações, Logs e Configurações com seções: Geral, Motor Claude, Base de Conhecimento, Voz (Realtime), Telegram, MCP, MCPs externos, WhatsApp, Google (Conta, Agenda, Gmail). | M |
+| RF-CFG-01 | A janela principal (nativa, egui) deve ter navegação lateral com páginas Dashboard, Threads, Aprovações, Agendamentos, Logs e Configurações com seções: Geral, Motor Claude, Base de Conhecimento, Voz (Realtime), Telegram, MCP, MCPs externos, WhatsApp, Google (Conta, Agenda, Gmail), Agendamentos. | M |
 | RF-CFG-02 | **Geral:** autostart, idioma da UI, nível de log, notificações. | M |
 | RF-CFG-03 | **Motor Claude:** lista de tokens de subscription (apelido + token), com exatamente um marcado como *ativo*; modelo padrão; modo de permissão (`acceptEdits` ou `bypassPermissions`); limite de processos simultâneos; orçamento máximo por turno (USD, opcional); timeout por turno. | M |
 | RF-CFG-04 | **Base de Conhecimento:** caminho da pasta; validação de existência e permissão de escrita; botão para abrir no explorador de arquivos; botão para criar a estrutura inicial (`.claude/`, `tools/`, etc.) se não existir. | M |
@@ -122,7 +123,7 @@ Convenção de identificação: `RF-<módulo>-<nº>`. Prioridade: **M** (Must, M
 | RF-MCPX-05 | Edições manuais do `.mcp.json` são detectadas e importadas para o catálogo (segredos literais migram para o keyring), nunca sobrescritas em silêncio. | S |
 | RF-MCPX-06 | Botões **Importar do Claude Code** (`~/.claude.json`) e **Colar JSON** (bloco `mcpServers`). | S |
 | RF-MCPX-07 | Por servidor externo: toggle "liberar ferramentas automaticamente" que adiciona `mcp__<nome>__*` à allowlist do modo `acceptEdits`, com opção de liberar apenas ferramentas nomeadas. | M |
-| RF-MCP-10 | O servidor expõe as famílias `telegram_*`, `whatsapp_*`, `calendar_*`, `gmail_*` e `notify_user`, cada família visível apenas se o módulo correspondente estiver ativo e autorizado. | M |
+| RF-MCP-10 | O servidor expõe as famílias `telegram_*`, `whatsapp_*`, `calendar_*`, `gmail_*`, `schedule_*` e `notify_user`, cada família visível apenas se o módulo correspondente estiver ativo e autorizado. | M |
 
 ## RF-WA — WhatsApp (ferramentas; não é canal de entrada)
 
@@ -163,6 +164,20 @@ Convenção de identificação: `RF-<módulo>-<nº>`. Prioridade: **M** (Must, M
 | RF-MAIL-03 | Envio habilitado (`gmail_send`, com resposta em thread e anexos) e rascunhos; envio com política `confirmar` e rate limit. | S |
 | RF-MAIL-04 | Modificação (marcar lida, arquivar, rotular, lixeira) opcional, desligada por padrão, exige escopo adicional. | C |
 | RF-MAIL-05 | Sem IMAP: apenas contas Gmail/Workspace. | — |
+
+## RF-SCH — Agendamentos (scheduler)
+
+| ID | Requisito | Prio |
+|---|---|---|
+| RF-SCH-01 | O agente (via `schedule_*`) e o usuário (UI/API) podem criar agendamentos **recorrentes** (cron de 5 campos, segundos opcionais à frente, fuso IANA) ou **únicos** (`run_at`), com nome (≤ 80) e mensagem (≤ 8000), ligados à thread que os criou. | S |
+| RF-SCH-02 | No horário, o serviço entrega à thread dona a mensagem precedida de um cabeçalho gerado pelo serviço (`[Agendamento "…" disparado em …]`), **pelo stdin do processo na hora**, inclusive durante um turno (steering); thread dormente volta com `--resume`. | S |
+| RF-SCH-03 | O agendamento guarda `origin` e `claude_session_id` da thread; se a thread dona foi apagada, o disparo **recria** uma thread com a mesma origem (UI / mesmo tópico do Telegram / voz) e tenta `--resume`; se a sessão também expirou, recomeça do zero sem perder a mensagem. É a única exceção à regra "só canais criam threads" (ADR-0017). | S |
+| RF-SCH-04 | Disparos perdidos com o app fechado (ou módulo desligado) são **ignorados**: na partida, cron recalcula a próxima ocorrência a partir de agora e agendamento único no passado é pausado com `paused_reason`; ambos registrados em log. | S |
+| RF-SCH-05 | Um laço único em processo dorme até o próximo `next_run_at` (máx. 60 s) e é acordado em qualquer alteração. Limites configuráveis: `max_schedules` (100), `min_interval_minutes` (5; rejeita `* * * * *`). Fuso: do agendamento, senão `SchedulerSettings.timezone`, senão o do sistema. | S |
+| RF-SCH-06 | Ferramentas `schedule_create`, `schedule_list`, `schedule_get`, `schedule_update` (inclui pausar/retomar) e `schedule_delete`, família `scheduler`, política padrão `auto`; `schedule_create` só a partir de uma thread (o disparo volta para ela). O que o agente fizer no disparo segue as políticas das demais ferramentas. | S |
+| RF-SCH-07 | Página **Agendamentos** na UI: lista com próximo disparo, thread dona, estado e histórico; formulário com prévia da expressão cron (próximas ocorrências e descrição); pausar/retomar, **Disparar agora** e excluir. Seção **Configurações → Agendamentos** com os campos de `SchedulerSettings`. | S |
+| RF-SCH-08 | API local: `GET/POST /api/schedules`, `GET /api/schedules/preview`, `GET/PUT/DELETE /api/schedules/{id}`, `POST /api/schedules/{id}/run`. Cada disparo registra um `ScheduleRun` (últimos 50) e emite `ScheduleFired`/`SchedulesChanged`. | S |
+| RF-SCH-09 | Ao disparar em thread de origem UI/voz, notificação nativa (`notify_on_fire`, padrão ligado); em thread do Telegram não, pois a resposta já vai para o tópico. | S |
 
 ## RF-LOG — Observabilidade
 

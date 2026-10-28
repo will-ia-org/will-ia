@@ -64,11 +64,9 @@ pub struct WillApp {
     tray: Tray,
     hotkeys: Hotkeys,
     window_visible: bool,
-    quitting: bool,
     last_status_refresh: Instant,
     theme_applied: Option<String>,
     hotkey_applied: Option<String>,
-    confirm_quit: bool,
     pending_hide: bool,
     /// Captura agendada (caminho, quadros restantes) para dar tempo à navegação.
     pending_screenshot: Option<(std::path::PathBuf, u8)>,
@@ -119,11 +117,9 @@ impl WillApp {
             tray,
             hotkeys,
             window_visible: visible,
-            quitting: false,
             last_status_refresh: Instant::now() - Duration::from_secs(60),
             theme_applied: None,
             hotkey_applied: None,
-            confirm_quit: false,
             pending_hide: false,
             pending_screenshot: None,
         };
@@ -182,12 +178,6 @@ impl WillApp {
         ctx.send_viewport_cmd(egui::ViewportCommand::Visible(false));
     }
 
-    fn quit(&mut self, ctx: &egui::Context) {
-        self.quitting = true;
-        ctx.send_viewport_cmd(egui::ViewportCommand::Visible(true));
-        ctx.send_viewport_cmd(egui::ViewportCommand::Close);
-    }
-
     fn handle_event(&mut self, ev: Event) {
         match &ev {
             Event::ModuleStatus { module, status } => {
@@ -233,6 +223,20 @@ impl WillApp {
             }
             Event::TurnFailed { error, .. } => {
                 self.toasts.error(error.clone());
+            }
+            Event::ScheduleFired {
+                name, ok, detail, ..
+            } => {
+                if *ok {
+                    self.toasts
+                        .success(trf("Agendamento \"{}\" disparou", &[name]));
+                } else {
+                    let why = detail
+                        .clone()
+                        .unwrap_or_else(|| tr("erro desconhecido").into());
+                    self.toasts
+                        .error(trf("Agendamento \"{}\" falhou: {}", &[name, &why]));
+                }
             }
             _ => {}
         }
@@ -292,7 +296,6 @@ impl WillApp {
                     });
                 ctx.send_viewport_cmd(egui::ViewportCommand::Screenshot(cb));
             }
-            UiCommand::Quit => self.quit(ctx),
         }
     }
 
@@ -336,36 +339,44 @@ impl WillApp {
         let voice_active = self.voice.session_active;
         let pending = self.snap.pending_approvals.len();
         // Rodapé fixo: voz, ocultar/sair, versão.
-        egui::Panel::bottom("nav-bottom").show_separator_line(false).show(ui, |ui| {
-            ui.add_space(6.0);
-            let (label, tone) = if voice_active { (tr("Desligar voz"), Tone::Danger) } else { (tr("Ligar voz"), Tone::Success) };
-            let btn = egui::Button::new(egui::RichText::new(label).color(egui::Color32::WHITE)).fill(tone.color(ui.visuals().dark_mode)).min_size(egui::vec2(ui.available_width(), 34.0));
-            if ui.add_enabled(!self.voice.busy() && self.snap.settings.realtime.enabled, btn).clicked() {
-                self.voice.toggle(&self.svc);
-            }
-            if self.voice.session_active {
-                let (label, color) = crate::voice::overlay::label_for(&self.voice.state);
-                ui.label(egui::RichText::new(label).color(color).small());
-            }
-            ui.add_space(4.0);
-            ui.horizontal(|ui| {
-                if ui.button(tr("Ocultar")).on_hover_text(tr("O serviço continua em segundo plano; rode `will-ia` de novo para reabrir.")).clicked() {
-                    self.pending_hide = true;
+        egui::Panel::bottom("nav-bottom")
+            .show_separator_line(false)
+            .show(ui, |ui| {
+                ui.add_space(6.0);
+                let (label, tone) = if voice_active {
+                    (tr("Desligar voz"), Tone::Danger)
+                } else {
+                    (tr("Ligar voz"), Tone::Success)
+                };
+                let btn = egui::Button::new(egui::RichText::new(label).color(egui::Color32::WHITE))
+                    .fill(tone.color(ui.visuals().dark_mode))
+                    .min_size(egui::vec2(ui.available_width(), 34.0));
+                if ui
+                    .add_enabled(
+                        !self.voice.busy() && self.snap.settings.realtime.enabled,
+                        btn,
+                    )
+                    .clicked()
+                {
+                    self.voice.toggle(&self.svc);
                 }
-                if ui.button(tr("Sair")).on_hover_text(tr("Encerra o serviço, os processos claude e a voz.")).clicked() {
-                    self.confirm_quit = true;
+                if self.voice.session_active {
+                    let (label, color) = crate::voice::overlay::label_for(&self.voice.state);
+                    ui.label(egui::RichText::new(label).color(color).small());
                 }
+                ui.add_space(4.0);
+                // Sem botões Ocultar/Sair: o serviço é residente (bandeja). Fechar a
+                // janela só oculta; encerrar é só por kill forçado (docs/13).
+                let mut info = format!("v{}", env!("CARGO_PKG_VERSION"));
+                if self.snap.portable_root.is_some() {
+                    info.push_str(tr(" · portátil"));
+                }
+                if !self.tray.available() {
+                    info.push_str(tr(" · sem bandeja"));
+                }
+                ui.label(egui::RichText::new(info).small().weak());
+                ui.add_space(4.0);
             });
-            let mut info = format!("v{}", env!("CARGO_PKG_VERSION"));
-            if self.snap.portable_root.is_some() {
-                info.push_str(tr(" · portátil"));
-            }
-            if !self.tray.available() {
-                info.push_str(tr(" · sem bandeja"));
-            }
-            ui.label(egui::RichText::new(info).small().weak());
-            ui.add_space(4.0);
-        });
         ui.add_space(10.0);
         ui.horizontal(|ui| {
             ui.add_space(4.0);
@@ -380,6 +391,7 @@ impl WillApp {
                 let items: Vec<(Nav, String)> = vec![
                     (Nav::Dashboard, tr("Início").into()),
                     (Nav::Threads, tr("Threads").into()),
+                    (Nav::Schedules, tr("Agendamentos").into()),
                     (
                         Nav::Approvals,
                         if pending > 0 {
@@ -665,11 +677,11 @@ impl eframe::App for WillApp {
 
         // Fechar a janela nunca encerra o serviço: ele continua na bandeja (ou, sem
         // bandeja, em segundo plano; rodar `will-ia` de novo reabre a janela).
-        if ctx.input(|i| i.viewport().close_requested()) && !self.quitting {
+        if ctx.input(|i| i.viewport().close_requested()) {
             ctx.send_viewport_cmd(egui::ViewportCommand::CancelClose);
             self.hide_window(&ctx);
             if !self.tray.available() {
-                tracing::info!("janela oculta; sem bandeja neste desktop. Rode `will-ia` de novo para reabrir ou use Sair na janela.");
+                tracing::info!("janela oculta; sem bandeja neste desktop. Rode `will-ia` de novo para reabrir.");
             }
         }
 
@@ -747,21 +759,6 @@ impl eframe::App for WillApp {
         if self.pending_hide {
             self.pending_hide = false;
             self.hide_window(&ctx);
-        }
-        if self.confirm_quit {
-            let c = ui::Confirm {
-                title: tr("Sair do will-ia").into(),
-                body: tr("Encerra o serviço: processos claude, sessão de voz, Telegram e servidor MCP param. Para só fechar a janela, use Ocultar.").into(),
-                confirm_label: tr("Sair").into(),
-                danger: true,
-                tag: "quit".into(),
-            };
-            if let Some(ok) = ui::confirm_modal(&ctx, &c) {
-                self.confirm_quit = false;
-                if ok {
-                    self.quit(&ctx);
-                }
-            }
         }
         self.toasts.show(&ctx);
         self.resize_edges(&ctx);

@@ -49,3 +49,4 @@ id_type!(ThreadId);
 id_type!(TurnId);
 id_type!(MessageId);
 id_type!(ApprovalId);
+id_type!(ScheduleId);

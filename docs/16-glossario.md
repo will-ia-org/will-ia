@@ -21,10 +21,13 @@
 | **Bearer efêmero** | Token aleatório por processo `claude` que autentica chamadas MCP e identifica a thread. |
 | **Token de subscription** | Token OAuth de longa duração do Claude Code (`claude setup-token`), injetado em `CLAUDE_CODE_OAUTH_TOKEN`. |
 | **acceptEdits / bypassPermissions** | Modos de permissão do Claude Code: edita arquivos sem perguntar com allowlist de tools / tudo liberado. |
-| **Módulo** | Subsistema ligável: Motor, Telegram, Voz, MCP, WhatsApp, Google. Cada um com `start/stop` e status. |
+| **Módulo** | Subsistema ligável: Motor, Telegram, Voz, MCP, WhatsApp, Google, Scheduler. Cada um com `start/stop` e status. |
 | **Política de ferramenta** | `auto` / `confirmar` / `desligada`; define se uma ferramenta MCP executa direto, pede aprovação ou fica oculta. |
 | **Aprovação** | Pedido gerado por ferramenta em `confirmar`, decidido pelo dono na UI, notificação ou Telegram; expira por timeout. |
-| **Módulo de ferramentas** | Módulo que não é canal de entrada (WhatsApp, Google): só expõe ferramentas MCP. |
+| **Módulo de ferramentas** | Módulo que não é canal de entrada (WhatsApp, Google, Scheduler): só expõe ferramentas MCP (e, no caso do Scheduler, uma página na UI). |
+| **Agendamento** | Mensagem programada pelo agente (`schedule_*`) ou pelo usuário para ser entregue à **thread dona** no futuro: recorrente (cron de 5 campos, fuso IANA) ou único (`run_at`). Guarda a origem e o `claude_session_id` da thread para recriá-la se for apagada. |
+| **Disparo** | Momento em que o scheduler entrega a mensagem de um agendamento à thread dona (stdin do processo, inclusive mid-turn), com cabeçalho `[Agendamento … disparado em …]` gerado pelo serviço; registrado em `schedule_runs`. "Disparar agora" é um disparo manual que não altera o próximo horário. |
+| **Disparo perdido** | Ocorrência cujo horário passou com o app fechado (ou módulo desligado). É **ignorada**: cron recalcula a próxima a partir de agora; único é pausado com `paused_reason`. |
 | **JID** | Identificador de chat/contato no protocolo do WhatsApp (`<número>@s.whatsapp.net`, `<id>@g.us`). |
 | **Label** | Marcador do Gmail; substitui pastas. Arquivado = sem `INBOX`. |
 | **OAuth Client** | Credencial (`client_id`/`client_secret`) criada pelo usuário no Google Cloud para autorizar o will-ia. |

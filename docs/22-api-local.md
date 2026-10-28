@@ -105,6 +105,21 @@ Token local gerado na primeira execução, gravado em `<data_dir>/ui-session.tok
 | POST | `/api/whatsapp/reconnect` | `{ account_id }` |
 | PATCH | `/api/whatsapp/accounts/{id}` | `{ label?, enabled? }` → `{ ok, account }`; desativar desconecta, ativar reconecta se houver sessão |
 
+### Agendamentos (scheduler)
+Corpo de `POST`/`PUT` = `ScheduleInput` (`name`, `message`, `cron` **ou** `run_at`, `timezone?`, `enabled?`, `thread_id?`). `503` se o módulo não iniciou. Ver [24](24-scheduler.md).
+
+| Método | Rota | Descrição |
+|---|---|---|
+| GET | `/api/schedules?thread_id=` | `{ schedules: [ScheduleView], enabled }` — `ScheduleView` = `Schedule` + `trigger_short`, `cron_description`, `timezone_label`, `next_run_local`, `next_run_in`, `thread_title`, `thread_exists` |
+| POST | `/api/schedules` | cria; `thread_id` **obrigatório** (thread dona); `created_by = "user"` → `ScheduleView` |
+| GET | `/api/schedules/preview?cron=&timezone=&n=` | prévia de expressão: `{ description, timezone, next: [{ at, local, in }], error }` (`n` 1–20, padrão 5; `error` = viola intervalo mínimo) |
+| GET | `/api/schedules/{id}` | `{ schedule, runs }` (últimos 20 disparos); 404 se não existe |
+| PUT | `/api/schedules/{id}` | campos parciais (inclusive `thread_id` e `enabled` para pausar/retomar) → `ScheduleView` |
+| DELETE | `/api/schedules/{id}` | `{ ok }` |
+| POST | `/api/schedules/{id}/run` | dispara agora (cabeçalho marcado `(manual)`; não altera `next_run_at`) → `{ ok }` |
+
+Eventos relacionados no WS `/api/events`: `ScheduleFired { schedule_id, thread_id, name, ok, detail }`, `SchedulesChanged`, `Notification`, `ModuleStatus { module: "scheduler" }`. Seção de settings: `PUT /api/settings { "section": "scheduler", "value": SchedulerSettings }`.
+
 ### Google
 | Método | Rota | Descrição |
 |---|---|---|

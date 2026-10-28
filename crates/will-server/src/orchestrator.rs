@@ -282,6 +282,38 @@ impl ThreadHost for Host {
         Ok(turn_id)
     }
 
+    async fn revive_thread(
+        &self,
+        origin: &Origin,
+        title: Option<&str>,
+        claude_session_id: Option<&str>,
+    ) -> Result<ThreadSummary, String> {
+        let t = self
+            .state
+            .storage
+            .create_thread(origin, title)
+            .await
+            .map_err(|e| e.to_string())?;
+        if let Some(sid) = claude_session_id {
+            self.state
+                .storage
+                .set_thread_session(t.id, Some(sid))
+                .await
+                .map_err(|e| e.to_string())?;
+        }
+        let t = self
+            .state
+            .storage
+            .get_thread(t.id)
+            .await
+            .map_err(|e| e.to_string())?;
+        let t = self.enrich(t);
+        self.state
+            .bus
+            .emit(Event::ThreadCreated { thread: t.clone() });
+        Ok(t)
+    }
+
     async fn restart_thread(&self, thread: ThreadId) -> Result<(), String> {
         self.state.engine.restart(thread, "pedido do usuário");
         Ok(())

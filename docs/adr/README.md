@@ -20,3 +20,4 @@ Formato: contexto → decisão → consequências. Numeração sequencial; nunca
 | [0014](0014-mcp-json-gerado.md) | `.mcp.json` da KB gerado como união de MCPs internos e externos | Aceita |
 | [0015](0015-ui-http-local-tauri-casca.md) | UI servida por HTTP local; Tauri como casca fina | Substituída pela 0016 |
 | [0016](0016-ui-nativa-egui.md) | UI nativa com egui/eframe; binário único em modo daemon (`will-ia`, `--show`, `serve`) | Aceita |
+| [0017](0017-scheduler-revive-threads.md) | Scheduler como módulo de ferramentas; disparo pelo stdin da thread dona; recriação da thread apagada (origem + sessão); perdidos ignorados | Aceita |

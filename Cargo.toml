@@ -10,6 +10,7 @@ members = [
   "crates/will-whatsapp",
   "crates/will-realtime",
   "crates/will-platform",
+  "crates/will-scheduler",
   "crates/will-server",
   "tools/fake-claude",
   "crates/will-desktop",
@@ -24,6 +25,7 @@ default-members = [
   "crates/will-whatsapp",
   "crates/will-realtime",
   "crates/will-platform",
+  "crates/will-scheduler",
   "crates/will-server",
   "tools/fake-claude",
   "crates/will-desktop",
@@ -46,6 +48,7 @@ will-google = { path = "crates/will-google" }
 will-whatsapp = { path = "crates/will-whatsapp" }
 will-realtime = { path = "crates/will-realtime" }
 will-platform = { path = "crates/will-platform" }
+will-scheduler = { path = "crates/will-scheduler" }
 will-server = { path = "crates/will-server", default-features = false }
 will-desktop = { path = "crates/will-desktop" }
 
@@ -91,6 +94,8 @@ qrcode = "0.14"
 open = "5"
 notify-rust = "4"
 humantime = "2"
+croner = "4"
+chrono-tz = "0.10"
 parking_lot = "0.12"
 dashmap = "6"
 wiremock = "0.6"

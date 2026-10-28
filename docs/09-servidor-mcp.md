@@ -1,6 +1,6 @@
 # 09 — Servidor MCP (will-mcp)
 
-O serviço expõe um servidor **MCP (Model Context Protocol)** local, chamado `will_ia`, para que os agentes Claude Code usem capacidades do próprio will-ia (Telegram, WhatsApp, Agenda, Gmail, notificações). MCPs de **terceiros** não passam por aqui: são catalogados e entregues ao Claude Code via `.mcp.json` da KB, ver [21 — MCPs externos](21-mcps-externos.md).
+O serviço expõe um servidor **MCP (Model Context Protocol)** local, chamado `will_ia`, para que os agentes Claude Code usem capacidades do próprio will-ia (Telegram, WhatsApp, Agenda, Gmail, agendamentos, notificações). MCPs de **terceiros** não passam por aqui: são catalogados e entregues ao Claude Code via `.mcp.json` da KB, ver [21 — MCPs externos](21-mcps-externos.md).
 
 ## Transporte e segurança
 
@@ -34,6 +34,7 @@ Cada módulo contribui com um `ToolProvider`:
 | will-whatsapp | `whatsapp_*` | [17](17-whatsapp.md) |
 | will-google (calendar) | `calendar_*` | [19](19-google-agenda.md) |
 | will-google (gmail) | `gmail_*` | [20](20-gmail.md) |
+| will-scheduler | `schedule_*` (família `scheduler`) | [24](24-scheduler.md) |
 | will-core | `notify_user`, `list_threads`, `create_thread`, `send_to_thread`, `kb_info` | este doc |
 
 ## Políticas de aprovação
@@ -85,6 +86,18 @@ Permitem que um agente consulte threads existentes, crie uma nova com prompt ini
 ### Famílias `whatsapp_*`, `calendar_*`, `gmail_*`
 
 Especificadas nos docs dos módulos ([17](17-whatsapp.md), [19](19-google-agenda.md), [20](20-gmail.md)). Compartilham as convenções: nomes `modulo_verbo_objeto`, paginação por token/cursor, limites de tamanho de saída, caminhos de arquivo sempre dentro da KB, erros com mensagem acionável (ex.: "conta Google precisa reautorizar").
+
+### Família `schedule_*` (scheduler)
+
+Especificada em [24 — Agendamentos](24-scheduler.md). Política padrão **`auto`** nas cinco (agendar não tem efeito externo; o efeito acontece quando o agente age no disparo, sob as políticas das outras ferramentas). `id` aceita uuid completo ou prefixo único.
+
+| Ferramenta | Entrada | Saída |
+|---|---|---|
+| `schedule_create` | `name`, `message`, `cron` **ou** `run_at`, `timezone?` | `{ ok, schedule, hint }` — exige thread chamadora (o disparo volta para ela) |
+| `schedule_list` | `all?` | `{ count, schedules }` (padrão: só os da thread) |
+| `schedule_get` | `id` | `{ schedule, runs }` |
+| `schedule_update` | `id`, campos parciais, `enabled?` (pausar/retomar) | `{ ok, schedule }` |
+| `schedule_delete` | `id` | `{ ok, deleted }` |
 
 ### `kb_info` (Could)
 

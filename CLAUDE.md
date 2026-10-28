@@ -11,7 +11,8 @@ Serviço de bandeja multiplataforma (Windows/Linux/macOS) em **Rust + egui/efram
 - **Servidor MCP** local (Streamable HTTP, `127.0.0.1`) com ferramentas para os agentes: `telegram_*`, `whatsapp_*`, `calendar_*`, `gmail_*`, `notify_user`, cada uma com política `auto` / `confirmar` / `desligada`;
 - **WhatsApp pessoal** do dono pareado por QR (`whatsapp-rust`), **só ferramentas**, não é canal de entrada;
 - **MCPs externos** catalogados na UI; o serviço gera `<kb>/.mcp.json` = `will_ia` + externos, segredos como `${WILL_MCP_*}` injetados por spawn (nunca proxy);
-- **Conta Google** (OAuth Client do próprio usuário, PKCE + loopback) para **Agenda** (multi-seleção de agendas, ler/criar) e **Gmail** (labels, arquivado, busca, leitura, envio).
+- **Conta Google** (OAuth Client do próprio usuário, PKCE + loopback) para **Agenda** (multi-seleção de agendas, ler/criar) e **Gmail** (labels, arquivado, busca, leitura, envio);
+- **Scheduler (Agendamentos)**: cron recorrente ou data única por thread; no horário a mensagem entra no stdin da thread dona com cabeçalho gerado pelo serviço; ferramentas `schedule_*` (política `auto`) e página Agendamentos (`docs/24`, ADR-0017).
 
 Documentação completa em `docs/` (índice em `docs/README.md`). **Leia o doc do módulo antes de mexer nele.**
 
@@ -26,7 +27,7 @@ Documentação completa em `docs/` (índice em `docs/README.md`). **Leia o doc d
 7. Falha em um módulo nunca derruba o app: módulo vira `Degraded` com motivo.
 8. Processos filhos têm kill em cascata (grupo de processos em Unix, Job Object no Windows) e são encerrados no shutdown.
 9. **Ferramentas com efeito externo** (`*_send*`, `gmail_modify`, `calendar_create/update/delete_event`) nascem com política `confirmar`; o resumo mostrado na aprovação é gerado pelo serviço, nunca pelo agente.
-10. **WhatsApp e Google não criam threads.** Mensagens/e-mails recebidos são dados para ferramentas, não gatilhos.
+10. **WhatsApp, Google e Scheduler não criam threads.** Mensagens/e-mails recebidos são dados para ferramentas, não gatilhos. Única exceção: o scheduler **recria** a própria thread dona se ela foi apagada, com a mesma origem e o `claude_session_id` gravado (`ThreadHost::revive_thread`, ADR-0017); disparos perdidos com o app fechado são ignorados.
 11. **Conteúdo lido** (e-mails, mensagens, páginas) é dado não confiável; nada dele vira instrução para o serviço.
 12. **`.mcp.json` da KB é gerado pelo serviço**: nunca gravar segredos literais nele; usar `${VAR}` + env por spawn; edições manuais são importadas, não sobrescritas.
 13. Google: nunca embutir `client_id`/`client_secret` nossos; o usuário fornece. Sem crates `google-*` gerados: REST direto com `reqwest`.
@@ -42,6 +43,7 @@ crates/will-desktop (egui: janela, bandeja, áudio cpal, hotkey; modos `will-ia`
                                                          ├── will-mcp      (rmcp + axum, ToolRegistry, políticas/aprovações, bearer → thread)
                                                          ├── will-whatsapp (whatsapp-rust atrás de WhatsAppBackend, índice SQLite+FTS, tools whatsapp_*)
                                                          ├── will-google   (oauth2 PKCE/loopback, GoogleClient reqwest, calendar/ e gmail/, tools calendar_* gmail_*)
+                                                         ├── will-scheduler (laço de disparo, cron via croner, tools schedule_*)
                                                          ├── will-storage  (sqlx SQLite WAL, keyring, repos)
                                                          └── will-platform (autostart, hotkey, notificações, paths por SO)
 ```
@@ -83,7 +85,7 @@ O módulo Telegram e o modelo de runner vêm de um bot Node.js em produção (`t
 
 ```bash
 export PATH=$HOME/.cargo/bin:$PATH
-# Linux sem libasound2-dev instalado (sem sudo): export PKG_CONFIG_PATH=$HOME/.local/will-ia-sysroot/usr/lib/x86_64-linux-gnu/pkgconfig
+# Linux sem libasound2-dev instalado (sem sudo): export PKG_CONFIG_PATH=$HOME/.local/will-ia-sysroot/root/usr/lib/x86_64-linux-gnu/pkgconfig
 cargo build --release -p will-desktop                          # binário target/release/will-ia (app egui + serviço)
 target/release/will-ia [--show]                                # serviço + bandeja (+ janela); 2ª execução só mostra a janela da ativa
 target/release/will-ia serve [--port N] [--data-dir D] [--file-secrets]   # headless: só serviço + API local
@@ -98,6 +100,7 @@ scripts/smoke.sh                                               # ponta a ponta c
 - **2026-10-20 (ADR-0016):** UI nativa egui/eframe em `crates/will-desktop` **implementada** (Início, Threads/chat com streaming, Aprovações, Logs e todas as seções de configurações); UI React (`ui/`) e casca Tauri (`apps/will-desktop`) removidas. Binário único `will-ia` (GUI + serviço em processo; `serve` = headless; segunda execução reabre a janela via `POST /api/ui/show`). Áudio da voz via `cpal` no app (WS `/api/voice/audio` só no headless); indicador flutuante de voz; bandeja `ksni` (Linux; tenta subir `xapp-sn-watcher` se faltar) / `tray-icon`; `global-hotkey`; `rfd`. Fechar a janela só oculta; "Sair" encerra. WhatsApp com várias contas (QR desenhado na janela, sem aviso de risco). **Modo portátil** (pendrive): `will-ia.db` + `data/` ao lado do binário, segredos em arquivo, KB relativa (`docs/13`, `packaging/portable/`).
 - **2026-10-20 (tarde):** UI redesenhada (tipografia, cards, conteúdo centralizado, barra de título própria com janela sem moldura, `Escala da interface`), captura de tela por `will-ia screenshot --nav <pagina>` (`POST /api/ui/screenshot`) para iterar no layout; voz: host PulseAudio do cpal (fones BT/USB), buffers de 30/80 ms, jitter buffer de 250 ms, fila de 10 min, microfone mudo enquanto o assistente fala (`barge_in` opcional), `vad_threshold`, sinais sonoros, teste de mic/tom; ferramentas de voz `list_threads` + `ask_brain{thread}`; **custos**: tabela `ai_costs` (migration 0003), estimativa da voz por tabela de preços, custo dos turnos do Claude, página Custos e `/api/costs`.
 - **2026-10-21:** ajuda em ícone "?" com modal (`help.rs`, `ui::section_help`/`heading_help`); i18n pt-BR/en sem crates (`i18n::tr`/`trf`, literal pt-BR é a chave; idioma de Geral aplicado por quadro); semântica das bolinhas de módulo (verde = pronto mesmo ocioso, amarelo = atenção com motivo, cinza = desligado) com recálculo ao mudar conta/sessão/config e sincronização dos eventos de status para o `AppState`; chat com "há X min" + ícone "i" e mensagens enviadas no meio do turno agrupadas ao balão inicial (`merged_into`, sem texto "(incorporada…)"); anexos do Telegram gravados no turno (`turns.attachments_json`, migration 0004; `Attachment`/`attachment_note`/`split_attachment_notes` no core) e exibidos no chat como miniatura/chip; a UI também anexa (botão/arrastar → `<kb>/inbox/ui/`), Aprovações em cards + tabela, Logs estilo terminal. Detalhes em `docs/10`.
+- **2026-10-28:** módulo **Scheduler** (`crates/will-scheduler`, migration 0005, `/api/schedules*`, ferramentas `schedule_*`, `ThreadHost::revive_thread`); página Agendamentos + seção de configurações na UI; docs em `docs/24` e ADR-0017. **Serviço residente**: sem Ocultar/Sair (janela e bandeja), sinais ignorados no modo GUI, trinco `instance.lock`, filhos com PDEATHSIG/Job Object (`docs/13`, RF-APP-01/02/05/08). Cross-compilação para Windows nesta máquina: `cargo-zigbuild build --target x86_64-pc-windows-gnu -p will-desktop` (sem cmake/mingw; zip em `dist/`).
 - **Validado nesta máquina:** compila com todas as features, clippy `-D warnings`, `cargo test --workspace`, `scripts/smoke.sh` (headless), GUI sobe oculta no display do usuário (`--hidden`) e a segunda instância reabre a janela. **Não validado:** uso interativo da GUI, Windows/macOS (bandeja `tray-icon`, atalho), serviços reais.
 - **Não validado com serviços reais** nesta máquina: Telegram, OpenAI Realtime, Google, WhatsApp (há mocks/testes unitários). Backend real do WhatsApp compila por padrão (`whatsapp-real`).
 - **Próximos:** teste interativo da GUI pelo usuário (Linux) e correções; workflows `ci.yml`/`release.yml` (matriz Linux x64, Windows x64, macOS x64 e arm64; `docs/13`) e bundles por SO; testes contra serviços reais; backlog em `docs/15`.

@@ -21,6 +21,7 @@ will-core.workspace = true
 will-server.workspace = true
 will-platform.workspace = true
 will-realtime.workspace = true
+will-scheduler.workspace = true
 tokio.workspace = true
 serde.workspace = true
 serde_json.workspace = true

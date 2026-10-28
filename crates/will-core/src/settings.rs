@@ -25,6 +25,7 @@ pub struct Settings {
     pub google: GoogleSettings,
     pub calendar: CalendarSettings,
     pub gmail: GmailSettings,
+    pub scheduler: SchedulerSettings,
     pub external_mcps: Vec<ExternalMcpServer>,
 }
 
@@ -459,6 +460,33 @@ impl Default for GmailSettings {
             max_body_kb: 64,
             attachments_dir: "inbox/gmail".into(),
             max_attachment_mb: 25,
+        }
+    }
+}
+
+/// Agendamentos (scheduler): lembretes/tarefas disparados por expressão cron ou
+/// data única, entregues como mensagem na thread que os criou (`docs/24`).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default)]
+pub struct SchedulerSettings {
+    pub enabled: bool,
+    /// Notificação nativa ao disparar em threads da UI/voz (Telegram já responde no tópico).
+    pub notify_on_fire: bool,
+    /// Fuso padrão das expressões cron (IANA, ex.: `America/Sao_Paulo`); `None` = fuso do sistema.
+    pub timezone: Option<String>,
+    /// Limite de agendamentos ativos (proteção contra agente em loop).
+    pub max_schedules: u32,
+    /// Intervalo mínimo entre disparos do mesmo agendamento, em minutos (cron `* * * * *` é rejeitado).
+    pub min_interval_minutes: u32,
+}
+impl Default for SchedulerSettings {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            notify_on_fire: true,
+            timezone: None,
+            max_schedules: 100,
+            min_interval_minutes: 5,
         }
     }
 }

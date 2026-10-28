@@ -4,6 +4,7 @@ pub mod costs;
 pub mod google;
 pub mod logs;
 pub mod mcp;
+pub mod schedules;
 pub mod secrets;
 pub mod settings;
 pub mod telegram;

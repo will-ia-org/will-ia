@@ -6,6 +6,7 @@ pub mod engine;
 pub mod integrations;
 pub mod kb;
 pub mod mcp;
+pub mod schedules;
 pub mod system;
 pub mod threads;
 pub mod ws;
@@ -154,6 +155,15 @@ pub fn router(state: App) -> Router {
             put(mcp::external_put).delete(mcp::external_delete),
         )
         .route("/mcp/external/{name}/test", post(mcp::external_test))
+        .route("/schedules", get(schedules::list).post(schedules::create))
+        .route("/schedules/preview", get(schedules::preview))
+        .route(
+            "/schedules/{id}",
+            get(schedules::get_one)
+                .put(schedules::update)
+                .delete(schedules::delete),
+        )
+        .route("/schedules/{id}/run", post(schedules::run_now))
         .route("/telegram/test", post(integrations::telegram_test))
         .route("/telegram/status", get(integrations::telegram_status))
         .route("/voice/start", post(integrations::voice_start))

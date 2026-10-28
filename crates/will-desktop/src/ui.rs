@@ -357,6 +357,7 @@ pub fn module_name(m: will_core::Module) -> &'static str {
         M::Google => tr("Conta Google"),
         M::Calendar => tr("Agenda"),
         M::Gmail => tr("Gmail"),
+        M::Scheduler => tr("Agendamentos"),
     }
 }
 

@@ -299,3 +299,24 @@ pub const GOOGLE_GMAIL: Help = Help {
     code: "",
     links: &[("Gmail: operadores de busca", "https://support.google.com/mail/answer/7190")],
 };
+
+// ---------- Agendamentos ----------
+
+pub const SCHEDULER: Help = Help {
+    title: "Agendamentos",
+    intro: "Lembretes e tarefas programados: na hora marcada o serviço entrega a mensagem na thread dona como se você a tivesse escrito, com um cabeçalho que avisa o agente de que é um disparo. Podem ser criados aqui ou pelo próprio agente, durante uma conversa, com as ferramentas schedule_*.",
+    steps: &[
+        ("Pelo agente", "Diga na conversa algo como \"todo dia às 8h me mande o resumo da agenda\" ou \"amanhã às 15h me lembre de ligar para o dentista\". O agente chama schedule_create na própria thread; schedule_list, schedule_update e schedule_delete ajustam ou cancelam."),
+        ("Pela UI", "Clique em Novo agendamento: nome, mensagem (o que o agente deve fazer ao disparar), recorrente (cron) ou único (data e hora), fuso opcional e a thread dona."),
+        ("Cron de 5 campos", "minuto hora dia-do-mês mês dia-da-semana. Exemplos: 0 8 * * * (todo dia às 08:00); 30 18 * * 1-5 (dias úteis às 18:30); 0 9 1 * * (dia 1 de cada mês às 09:00); */15 9-17 * * * (a cada 15 min das 9h às 17h). A prévia ao lado do campo mostra a descrição e as próximas ocorrências."),
+        ("Único", "Data e hora no formato AAAA-MM-DDTHH:MM, no fuso do agendamento (ou ISO-8601 com fuso). Depois de disparar, o agendamento fica pausado com o motivo \"concluído\"."),
+    ],
+    notes: &[
+        ("Disparos perdidos são ignorados", "Se o serviço estava desligado na hora, o disparo não é recuperado: o próximo é calculado a partir de agora. Para o que já passou, use Disparar agora."),
+        ("Thread apagada", "O agendamento guarda a origem e a sessão do Claude da thread. Se ela for apagada, o disparo recria a thread com a mesma sessão (--resume) no mesmo canal/tópico."),
+        ("Pausar e retomar", "O interruptor do cartão pausa sem apagar. O scheduler também pausa sozinho um único já concluído ou um cron sem próxima ocorrência; o motivo aparece em amarelo."),
+        ("Limites", "Em Configurações › Agendamentos: número máximo de agendamentos ativos e intervalo mínimo entre disparos do mesmo cron (* * * * * é rejeitado)."),
+    ],
+    code: "",
+    links: &[("Sintaxe cron (crontab.guru)", "https://crontab.guru/")],
+};

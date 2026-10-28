@@ -44,6 +44,18 @@ pub trait ThreadHost: Send + Sync {
     async fn reset_thread(&self, thread: ThreadId) -> Result<(), String>;
     async fn interrupt_thread(&self, thread: ThreadId) -> Result<(), String>;
     async fn delete_thread(&self, thread: ThreadId, purge_transcript: bool) -> Result<(), String>;
+    /// Recria uma thread apagada a partir da origem e da sessão do Claude
+    /// gravadas (usado pelo scheduler: o processo volta com `--resume` e, se a
+    /// sessão também expirou, recomeça do zero sem perder a mensagem).
+    /// Diferente de [`ensure_thread`](Self::ensure_thread), sempre cria.
+    async fn revive_thread(
+        &self,
+        _origin: &Origin,
+        _title: Option<&str>,
+        _claude_session_id: Option<&str>,
+    ) -> Result<ThreadSummary, String> {
+        Err("não suportado".into())
+    }
     fn subscribe(&self) -> broadcast::Receiver<Event>;
     fn claude_tokens(&self) -> Vec<ClaudeTokenInfo>;
     /// Testa e ativa o token; retorna quantas threads vivas foram derrubadas.

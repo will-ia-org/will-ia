@@ -1,6 +1,6 @@
 # 10 — Configurações (UI e esquema)
 
-Janela nativa (egui/eframe, crate `will-desktop`) com navegação lateral: páginas Dashboard, Threads, Aprovações, Logs e Configurações (seções abaixo). Cada seção mapeia para um sub-struct de `Settings`. Segredos não ficam em `Settings`: ficam no keyring e `Settings` guarda apenas referências (`secret_ref`).
+Janela nativa (egui/eframe, crate `will-desktop`) com navegação lateral: páginas Dashboard, Threads, Aprovações, Agendamentos, Logs e Configurações (seções abaixo). Cada seção mapeia para um sub-struct de `Settings`. Segredos não ficam em `Settings`: ficam no keyring e `Settings` guarda apenas referências (`secret_ref`).
 
 ## Seções e campos
 
@@ -125,6 +125,17 @@ Ações: **Testar bot** (`getMe`), **Descobrir IDs** (instrução `/start`).
 | Tamanho máx. de corpo | KB | 64 |
 | Pasta de anexos / limite | path, MB | `inbox/gmail`, 25 |
 
+### Agendamentos (`scheduler`)
+| Campo | Tipo | Padrão |
+|---|---|---|
+| Habilitar (`enabled`) | bool | true |
+| Notificar ao disparar (`notify_on_fire`) | bool (só threads UI/voz; Telegram responde no tópico) | true |
+| Fuso padrão (`timezone`) | IANA opcional (vazio = sistema) | vazio |
+| Máximo de agendamentos ativos (`max_schedules`) | int | 100 |
+| Intervalo mínimo entre disparos (`min_interval_minutes`) | minutos (0 desliga; 5 rejeita `* * * * *`) | 5 |
+
+Detalhes em [24](24-scheduler.md). A página **Agendamentos** (fora de Configurações) lista e edita os agendamentos.
+
 ### MCPs externos
 | Campo | Tipo |
 |---|---|
@@ -146,6 +157,9 @@ Lista com origem, título, status (🟢🟡⚪❌), última atividade, custo acu
 ### Aprovações
 Pendentes como cartões (ferramenta, contagem regressiva, resumo gerado pelo serviço, quem pediu, argumentos em chave/valor com rótulos legíveis e JSON completo em "Detalhes", botões Aprovar/Negar) e histórico em tabela com filtros por texto e decisão (quando, ferramenta, resumo, decisão, por onde foi decidida).
 
+### Agendamentos (página)
+Lista (nome, gatilho + descrição do cron, fuso, próximo disparo e "em quanto tempo", thread dona com aviso se não existe mais, último resultado, contagem, estado ativo/pausado com motivo, criado por agente/usuário) e ações: editar, pausar/retomar, **Disparar agora**, excluir, histórico de disparos. Formulário com prévia da expressão cron (`/api/schedules/preview`: descrição, fuso, próximas ocorrências, erro de intervalo mínimo) ou data/hora única, fuso e thread dona. Ver [24](24-scheduler.md) (página `pages/schedules.rs`; seção `pages/settings/scheduler.rs`).
+
 ### Logs
 Visor estilo terminal (monoespaçado, uma linha por registro: hora · nível · módulo · mensagem, mesmas cores nos dois temas) com histórico do banco + cauda ao vivo; filtro de texto com destaque, nível mínimo, módulo, seguir, quebrar linhas, data, pausar ao vivo, copiar visíveis, limpar tela e abrir a pasta de logs.
 
@@ -165,6 +179,7 @@ pub struct Settings {
     pub google: GoogleSettings,      // client + contas (refs)
     pub calendar: CalendarSettings,
     pub gmail: GmailSettings,
+    pub scheduler: SchedulerSettings,
     pub external_mcps: Vec<ExternalMcpServer>,
 }
 ```
@@ -175,7 +190,7 @@ pub struct Settings {
 
 ## Aplicação a quente
 
-`SettingsChanged { section }` → Orchestrator decide: `general` (sem reinício), `engine` (aplica nos próximos spawns; troca de token derruba vivos), `kb` (derruba todos os processos; nova pasta vale no próximo spawn), `realtime`/`telegram`/`mcp`/`whatsapp`/`google` (stop + start do módulo); mudanças em `calendar`/`gmail` que exigem escopo novo disparam reautorização incremental.
+`SettingsChanged { section }` → Orchestrator decide: `general` (sem reinício), `engine` (aplica nos próximos spawns; troca de token derruba vivos), `kb` (derruba todos os processos; nova pasta vale no próximo spawn), `realtime`/`telegram`/`mcp`/`whatsapp`/`google` (stop + start do módulo); `scheduler` (`update_config`: liga/desliga o laço e reaplica limites/fuso sem reiniciar); mudanças em `calendar`/`gmail` que exigem escopo novo disparam reautorização incremental.
 
 ## Onboarding (primeira execução)
 

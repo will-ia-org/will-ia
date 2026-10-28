@@ -16,6 +16,7 @@ pub async fn start_all(state: &Arc<AppState>) {
     crate::orchestrator::retitle_placeholder_threads(state).await;
     let _ = crate::mcp_json::write(state).await;
     start_realtime(state).await;
+    start_scheduler(state);
     #[cfg(feature = "google")]
     start_google(state).await;
     #[cfg(feature = "telegram")]
@@ -125,6 +126,9 @@ pub async fn stop_all(state: &Arc<AppState>) {
     #[cfg(feature = "whatsapp")]
     if let Some(w) = state.whatsapp.read().await.clone() {
         w.stop().await;
+    }
+    if let Some(sch) = state.scheduler.read().clone() {
+        sch.stop();
     }
     if let Some(m) = state.mcp.lock().await.take() {
         m.stop();
@@ -276,6 +280,32 @@ pub async fn refresh_engine(state: &Arc<AppState>, restart_live: bool) -> usize 
     } else {
         state.engine.set_config(cfg);
         0
+    }
+}
+
+/// Scheduler (agendamentos): laço único em processo; `enabled` liga/desliga.
+pub fn start_scheduler(state: &Arc<AppState>) {
+    let cfg = state.settings().scheduler;
+    let existing = state.scheduler.read().clone();
+    match existing {
+        Some(m) => m.update_config(cfg),
+        None => {
+            let m = will_scheduler::SchedulerModule::new(
+                will_scheduler::SchedulerDeps {
+                    storage: state.storage.clone(),
+                    host: state.host(),
+                    bus: state.bus.clone(),
+                },
+                cfg,
+            );
+            *state.scheduler.write() = Some(m.clone());
+            state
+                .registry
+                .add_provider(Arc::new(will_scheduler::tools::SchedulerProvider::new(
+                    m.clone(),
+                )));
+            m.start();
+        }
     }
 }
 
@@ -531,6 +561,7 @@ pub async fn apply_section(state: &Arc<AppState>, section: &str) {
             refresh_engine(state, false).await;
         }
         "realtime" => start_realtime(state).await,
+        "scheduler" => start_scheduler(state),
         #[cfg(feature = "telegram")]
         "telegram" => start_telegram(state).await,
         #[cfg(feature = "google")]

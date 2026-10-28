@@ -73,6 +73,8 @@ impl DashboardPage {
                     base
                 }
             }
+            // Agendamentos: `Running` = "pronto" (o relógio está rodando); sem detalhe extra.
+            Module::Scheduler => base,
             _ => base,
         }
     }

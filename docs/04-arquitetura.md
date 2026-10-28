@@ -30,6 +30,7 @@ flowchart TB
         MCP[will-mcp\nrmcp Streamable HTTP\naxum + políticas de aprovação]
         WAM[will-whatsapp\nwhatsapp-rust + índice local]
         GGL[will-google\nOAuth PKCE + Calendar + Gmail REST]
+        SCH[will-scheduler\nlaço de disparo, cron via croner\ntools schedule_*]
         STO[will-storage\nSQLite + keyring]
         UI <--> CORE
         UI -- PCM16 24 kHz --> RTM
@@ -39,8 +40,10 @@ flowchart TB
         CORE <--> MCP
         MCP --> WAM
         MCP --> GGL
+        MCP --> SCH
         CORE <--> WAM
         CORE <--> GGL
+        SCH -- ThreadHost::send_message / revive_thread --> CORE
         CORE <--> STO
     end
     ENG -- processo filho --> CLAUDE[claude -p]
@@ -69,6 +72,7 @@ will-ia/
 │   ├── will-realtime/         # cliente Realtime WS, handoff ask_brain, PTT (recebe PCM16 do app ou do WS headless)
 │   ├── will-whatsapp/         # pareamento, índice local, WhatsAppBackend (whatsapp-rust), tools whatsapp_*
 │   ├── will-google/           # OAuth (PKCE/loopback), GoogleClient, calendar/, gmail/, tools calendar_* e gmail_*
+│   ├── will-scheduler/        # agendamentos: laço de disparo, cron (croner + chrono-tz), tools schedule_*, recriação da thread dona
 │   ├── will-platform/         # autostart, notificações, abrir pasta/URL, paths (cfg por SO)
 │   ├── will-server/           # composição: AppState, Host, API local, módulos, .mcp.json
 │   └── will-desktop/          # binário `will-ia`: egui/eframe, bandeja, hotkey, áudio cpal, indicador de voz, modo `serve`
@@ -85,8 +89,9 @@ Regras de dependência (setas = "depende de"):
 ```
 will-desktop → will-server (serviço em processo), will-core, will-platform
 will-server → will-core, will-storage, todos os módulos (wiring)
-will-engine, will-telegram, will-realtime, will-mcp, will-whatsapp, will-google → will-core, will-storage
-will-mcp → traits de ferramentas expostas por will-telegram, will-whatsapp, will-google (via will-core::ToolProvider)
+will-engine, will-telegram, will-realtime, will-mcp, will-whatsapp, will-google, will-scheduler → will-core, will-storage
+will-mcp → traits de ferramentas expostas por will-telegram, will-whatsapp, will-google, will-scheduler (via will-core::ToolProvider)
+will-scheduler → will-core::ThreadHost (send_message, get_thread, revive_thread) para entregar os disparos
 will-storage → will-core (apenas tipos)
 will-core → nada interno (apenas tokio, serde, thiserror, uuid, chrono)
 ```
@@ -155,9 +160,11 @@ Cada canal assina os eventos do orquestrador e filtra os que pertencem a threads
 
 Detalhado em [09 — Servidor MCP](09-servidor-mcp.md). É um servidor axum com o handler Streamable HTTP do `rmcp`. Identifica a thread chamadora pelo bearer token, aplica a **política** da ferramenta (`auto` / `confirmar` / `desligada`) e despacha para o `ToolRegistry`. Cada módulo que oferece ferramentas (Telegram, WhatsApp, Google) implementa `ToolProvider` e registra suas `WillTool`s quando está ativo; o registro muda dinamicamente e dispara `tools/list_changed`.
 
-### Módulos de ferramentas (will-whatsapp, will-google)
+### Módulos de ferramentas (will-whatsapp, will-google, will-scheduler)
 
 Não são canais de entrada: não criam threads. Mantêm sessão/autorização, estado local (índice do WhatsApp, lista de agendas) e expõem ferramentas. Detalhes em [17](17-whatsapp.md), [18](18-conta-google.md), [19](19-google-agenda.md) e [20](20-gmail.md).
+
+`will-scheduler` ([24](24-scheduler.md)) é um módulo de ferramentas com página própria na UI: um laço único dorme até o próximo `next_run_at` e, no horário, entrega a mensagem do agendamento à thread dona por `ThreadHost::send_message` (stdin, inclusive mid-turn). Única exceção à regra acima: se a thread dona foi apagada, ele a **recria** com a mesma origem e sessão via `ThreadHost::revive_thread` (ADR-0017).
 
 ### Catálogo de MCPs externos e gerador de `.mcp.json` (will-core::mcp_catalog)
 
