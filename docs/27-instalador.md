@@ -94,11 +94,21 @@ sistema é gerenciado pelo instalador.
 ## Release
 
 `release.yml` compila `will-ia` + `will-ia-app` e, no mesmo job, `will-setup` com
-`WILL_SETUP_PAYLOAD_DIR=target/<triple>/release`. Artefatos: `will-ia-setup-<versão>-linux-x86_64`,
-`will-ia-setup-<versão>-windows-x86_64.exe` e `will-ia-setup-<versão>-macos-{x86_64,aarch64}.app.zip`
-("Instalar will-ia.app", `packaging/macos/Setup-Info.plist`). Não assinado/notarizado: no macOS o
-usuário libera em Privacidade e Segurança ou `xattr -dr com.apple.quarantine "Instalar will-ia.app"`;
-no Windows o SmartScreen pede "Executar assim mesmo".
+`WILL_SETUP_PAYLOAD_DIR=${{ github.workspace }}/target/<triple>/release` (absoluto). Desde 2026-10-29
+**o instalador não é publicado solto**: ele vai **dentro do pacote único de cada plataforma**
+(`docs/13`, "Empacotamento por SO"), ao lado dos binários soltos, `README.md`, `LICENSE` e `docs/`:
+
+| Pacote | Instalador dentro |
+|---|---|
+| `will-ia-<versão>-macos-aarch64.zip` / `-macos-x86_64.zip` | `Instalar will-ia.app` (bundle com `packaging/macos/Setup-Info.plist` e `Contents/MacOS/will-ia-setup`) + `will-ia.app` |
+| `will-ia-<versão>-windows-x86_64.zip` | `will-ia-setup.exe` (+ `will-ia.exe`, `will-ia-app.exe`) |
+| `will-ia-<versão>-linux-x86_64.tar.gz` | `will-ia-setup` (+ `will-ia`, `will-ia-app`, `packaging/`) |
+| `will-ia_<versão>-1_amd64.deb` | `/usr/bin/will-ia-setup` (junto de `/usr/bin/will-ia` e `/usr/bin/will-ia-app`; o `.deb` já instala tudo, o instalador fica disponível para uma instalação por usuário) |
+
+Uso: descompactar e abrir o instalador (servidor sem tela: `./will-ia-setup --yes`). Não
+assinado/notarizado: no macOS o usuário libera em Privacidade e Segurança ou
+`xattr -dr com.apple.quarantine "Instalar will-ia.app" will-ia.app`; no Windows o SmartScreen pede
+"Executar assim mesmo".
 
 ## Limites conhecidos
 

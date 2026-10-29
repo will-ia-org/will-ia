@@ -84,6 +84,8 @@ will-ia/
 
 Os lançadores chamam o servidor (se já está no ar, a segunda execução só abre o app e sai), esperam `data/api-port` e abrem o app, que conecta em "Esta máquina". Os perfis do app ficam na máquina hospedeira (`<config>/will-ia-app/`), não no pendrive.
 
+**Desde 2026-10-29 o pacote portátil não é mais publicado na release** (`will-ia-<v>-portable.zip` saiu do `release.yml`). O modo continua existindo no código e em `packaging/portable/`: **pode ser montado à mão** com os binários do `.tar.gz`/`.zip` de cada plataforma, renomeados para `bin/will-ia-<os>-<arch>` e `bin/will-ia-app-<os>-<arch>` conforme o `README.md` da pasta.
+
 Regras (`will_core::AppPaths`):
 
 - Detecção: arquivo `portable`, ou `will-ia.db`, ou `data/` + `bin/` na pasta do executável ou na pasta acima dela (layout `bin/`); `WILL_IA_PORTABLE=1` força; `WILL_IA_DATA_DIR` sobrescreve tudo.
@@ -105,22 +107,26 @@ Sem `sudo` para instalar `libasound2-dev`, é possível apontar `PKG_CONFIG_PATH
 ## Estado da implementação (2026-10-28)
 
 - Dois binários (etapa 3 de `docs/26`): `crates/will-ia` (servidor + bandeja) e `crates/will-app` (app egui, cliente via `crates/will-client`); o antigo `crates/will-desktop` não existe mais. Validado só no Linux (headless pelo `smoke.sh`; GUI sem teste interativo completo). O núcleo (`will-server`) e o servidor rodam em qualquer SO sem libs de GUI.
-- `packaging/` tem `linux/will-ia.desktop` (entrada de menu do **app**), `systemd/will-ia.service` (user unit do **servidor**, `serve`), `macos/Info.plist` e `portable/` (lançadores + README). Os workflows `ci.yml` e `release.yml` compilam `-p will-ia -p will-app` e empacotam os dois binários por SO e no portátil (seção CI/CD).
+- `packaging/` tem `linux/will-ia.desktop` (entrada de menu do **app**), `systemd/will-ia.service` (user unit do **servidor**, `serve`), `macos/Info.plist` + `macos/Setup-Info.plist` e `portable/` (lançadores + README, montagem manual). O `ci.yml` compila `-p will-ia -p will-app`; o `release.yml` compila os três binários e publica **um pacote por SO/arquitetura** com o instalador dentro (seção CI/CD).
 
 ## Instalador (`will-ia-setup`)
 
-Desde a v0.1.5 cada release traz um **terceiro binário**, o instalador por usuário (`docs/27`, ADR-0021): assistente gráfico (ou `--cli`) que grava os dois binários na pasta do usuário, registra o servidor no login (LaunchAgent / autostart ou user unit / chave Run), cria atalhos e, numa atualização, para o que está rodando, troca os binários e religa, preservando a pasta de dados. É o caminho recomendado na máquina pessoal; os pacotes abaixo continuam para instalação manual/de sistema.
+Desde a v0.1.5 cada release traz um **terceiro binário**, o instalador por usuário (`docs/27`, ADR-0021): assistente gráfico (ou `--cli`) que grava os dois binários na pasta do usuário, registra o servidor no login (LaunchAgent / autostart ou user unit / chave Run), cria atalhos e, numa atualização, para o que está rodando, troca os binários e religa, preservando a pasta de dados. É o caminho recomendado na máquina pessoal. Desde 2026-10-29 ele **vem dentro do pacote de cada plataforma** (não há mais download separado do instalador): descompacte e abra `Instalar will-ia.app` / `will-ia-setup.exe` / `./will-ia-setup`. Os binários soltos no mesmo pacote servem para instalação manual/de sistema.
 
 ## Empacotamento por SO
 
-Todo bundle leva **os dois binários** (`will-ia` e `will-ia-app`, `.exe` no Windows) na mesma pasta.
+Desde 2026-10-29 a release publica **um pacote por SO (e por arquitetura no macOS)**. Todo pacote descompacta numa pasta `will-ia-<versão>-<plataforma>/` com **os três binários** (`will-ia-setup`, `will-ia`, `will-ia-app`; `.exe` no Windows) mais `README.md`, `LICENSE` e `docs/`. O fluxo do usuário é: baixar, descompactar, abrir o instalador.
 
-| SO | Artefatos | Ferramenta |
-|---|---|---|
-| Linux x86_64 | `will-ia-<versão>-linux-x86_64.tar.gz` (os dois binários + `README`, `docs/`, `packaging/linux/will-ia.desktop`, `packaging/systemd/will-ia.service`), `.deb` (`cargo-deb -p will-ia`: `/usr/bin/will-ia`, `/usr/bin/will-ia-app`, `.desktop`, user unit), AppImage opcional | `cargo-deb`; AppImage com `linuxdeploy` |
-| Windows x86_64 | `.zip` (os dois `.exe`) e, futuro, instalador (`Inno Setup` ou `cargo-wix` → `.msi`) com opção de autostart do servidor via chave `Run` | `cargo-wix` ou script Inno Setup em `packaging/windows/` |
-| macOS x86_64 | `will-ia.app` zipado: `Contents/MacOS/will-ia-app` (executável principal, `CFBundleExecutable`) + `Contents/MacOS/will-ia` ao lado; `.tar.gz` com os dois soltos; `.dmg` futuro | script em `packaging/macos/` (`Info.plist`) |
-| macOS aarch64 | idem (build separada) | idem |
+| SO | Arquivo | Conteúdo | Ferramenta |
+|---|---|---|---|
+| macOS aarch64 (Apple Silicon) | `will-ia-<versão>-macos-aarch64.zip` | `Instalar will-ia.app` (bundle do instalador: `packaging/macos/Setup-Info.plist`, executável `will-ia-setup`) + `will-ia.app` (`Contents/MacOS/will-ia-app` = `CFBundleExecutable` e `Contents/MacOS/will-ia` ao lado, `packaging/macos/Info.plist`) + `README.md`, `LICENSE`, `docs/` | `zip -r -y` na pasta de staging (preserva bits de execução e a estrutura dos bundles) |
+| macOS x86_64 (Intel) | `will-ia-<versão>-macos-x86_64.zip` | idem (build separada, não universal) | idem |
+| Windows x86_64 | `will-ia-<versão>-windows-x86_64.zip` | `will-ia-setup.exe`, `will-ia.exe`, `will-ia-app.exe`, `README.md`, `LICENSE`, `docs/` | `7z a -tzip` |
+| Linux x86_64 | `will-ia-<versão>-linux-x86_64.tar.gz` | `will-ia-setup`, `will-ia`, `will-ia-app` (executáveis), `README.md`, `LICENSE`, `docs/`, `packaging/linux/` (`.desktop` do app), `packaging/systemd/` (user unit do servidor) | `tar -czf` |
+| Linux Debian/Ubuntu | `will-ia_<versão>-1_amd64.deb` | `/usr/bin/{will-ia,will-ia-app,will-ia-setup}`, `.desktop`, user unit, `README` em `/usr/share/doc/will-ia/`; `sudo apt install ./will-ia_<versão>-1_amd64.deb` | `cargo-deb -p will-ia` (assets em `crates/will-ia/Cargo.toml`) |
+| todos | `SHA256SUMS.txt` | hashes de todos os arquivos acima | `sha256sum` |
+
+**Não publicados** (desde 2026-10-29): pacote portátil (montagem manual, seção acima), `.app.zip` separados do app e do instalador, binários soltos por plataforma (`will-ia-<plat>`), `.tar.gz` do macOS. Futuro: `.dmg` e notarização no macOS; `.msi` (`cargo-wix`) ou Inno Setup no Windows; AppImage opcional.
 
 Arquivos em `packaging/`:
 
@@ -135,20 +141,20 @@ Arquivos em `packaging/`:
 ## CI/CD (GitHub Actions)
 
 - `.github/workflows/ci.yml`: a cada push/PR em `main` (ignora mudanças só em docs): `cargo fmt --check`, `clippy -D warnings`, `cargo test --workspace` e o smoke headless no Linux (`cargo build -p will-ia -p will-app -p fake-claude` + `scripts/smoke.sh`, que usa `will-ia serve`); `cargo check -p will-ia -p will-app` no Windows e no macOS em paralelo. Um push novo cancela o run anterior.
-- `.github/workflows/release.yml`: em tag `v*` (ou manual), `cargo build --release -p will-ia -p will-app` numa matriz em paralelo (`BINS: will-ia will-ia-app`):
+- `.github/workflows/release.yml`: em tag `v*` (ou manual), numa matriz em paralelo, cada job compila `cargo build --release -p will-ia -p will-app` e **depois** `-p will-setup` com `WILL_SETUP_PAYLOAD_DIR=${{ github.workspace }}/target/<triple>/release` (caminho absoluto; o instalador embute os dois binários recém-compilados), e monta **um pacote**:
 
-| Job | Runner | Target | Artefatos |
+| Job | Runner | Target | Artefato |
 |---|---|---|---|
-| linux-x86_64 | `ubuntu-22.04` | `x86_64-unknown-linux-gnu` | `will-ia-<v>-linux-x86_64.tar.gz` (os dois binários), `.deb` (cargo-deb: `will-ia`, `will-ia-app`, `.desktop`, user unit do systemd) |
-| windows-x86_64 | `windows-latest` | `x86_64-pc-windows-msvc` | `will-ia-<v>-windows-x86_64.zip` (`will-ia.exe` + `will-ia-app.exe`) |
-| macos-x86_64 | `macos-latest` (compilação cruzada para Intel) | `x86_64-apple-darwin` | `.tar.gz` (os dois) e `will-ia.app` zipado (não assinado; `will-ia-app` principal + `will-ia` em `Contents/MacOS/`) |
-| macos-aarch64 | `macos-latest` (Apple Silicon) | `aarch64-apple-darwin` | idem |
+| linux-x86_64 | `ubuntu-22.04` | `x86_64-unknown-linux-gnu` | `will-ia-<v>-linux-x86_64.tar.gz` + `will-ia_<v>-1_amd64.deb` (cargo-deb `--no-build`) |
+| windows-x86_64 | `windows-latest` | `x86_64-pc-windows-msvc` | `will-ia-<v>-windows-x86_64.zip` |
+| macos-x86_64 | `macos-latest` (compilação cruzada para Intel) | `x86_64-apple-darwin` | `will-ia-<v>-macos-x86_64.zip` |
+| macos-aarch64 | `macos-latest` (Apple Silicon) | `aarch64-apple-darwin` | `will-ia-<v>-macos-aarch64.zip` |
 
-  O job final monta `will-ia-<v>-portable.zip` (pasta `will-ia/` com `bin/` contendo os oito binários `will-ia-<plat>` e `will-ia-app-<plat>`, `will-ia.sh`, `will-ia.cmd`, `README.md` e o marcador `portable`), gera `SHA256SUMS.txt` e publica tudo numa GitHub Release com notas automáticas.
+  O job final `release` só junta os artefatos, gera `SHA256SUMS.txt` e publica a GitHub Release com notas automáticas mais um corpo fixo em português (o que é cada arquivo e como instalar). Conteúdo de cada pacote na seção "Empacotamento por SO".
 - Publicar uma versão: `git tag v0.1.0 && git push origin v0.1.0`.
 - Assinatura/notarização (macOS) e instalador Windows ficam para depois. Sem notarização, o Gatekeeper mostra "Apple could not verify … is free of malware" (macOS 15 não aceita mais o botão direito → Abrir). Para liberar:
-  - binários soltos: `xattr -d com.apple.quarantine ./will-ia-macos-aarch64 ./will-ia-app-macos-aarch64 && chmod +x ./will-ia-macos-aarch64 ./will-ia-app-macos-aarch64`;
-  - `.app`: `xattr -dr com.apple.quarantine will-ia.app`;
+  - pacote da release: `xattr -dr com.apple.quarantine "Instalar will-ia.app" will-ia.app` (dentro da pasta descompactada);
+  - binários soltos (ex.: portátil): `xattr -d com.apple.quarantine bin/will-ia-macos-aarch64 bin/will-ia-app-macos-aarch64 && chmod +x …`;
   - ou, depois da primeira tentativa, Ajustes do Sistema › Privacidade e Segurança › "Abrir Mesmo Assim".
   O `packaging/portable/README.md` repete essa instrução. Com um certificado Developer ID, o `release.yml` passa a assinar (`codesign --options runtime`) e notarizar (`notarytool`), e o aviso some.
 

@@ -42,6 +42,7 @@ depends = "$auto"
 assets = [
   ["target/release/will-ia", "usr/bin/", "755"],
   ["target/release/will-ia-app", "usr/bin/", "755"],
+  ["target/release/will-ia-setup", "usr/bin/", "755"],
   ["../../packaging/linux/will-ia.desktop", "usr/share/applications/", "644"],
   ["../../packaging/systemd/will-ia.service", "usr/lib/systemd/user/", "644"],
   ["../../README.md", "usr/share/doc/will-ia/", "644"],

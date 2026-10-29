@@ -46,7 +46,9 @@ O que precisa existir na máquina hospedeira: o Claude Code CLI (`claude`) no PA
 Montar o pacote: copie os binários de cada plataforma para `bin/` com os nomes acima
 (`cargo build --release -p will-ia -p will-app` gera `target/release/will-ia` e
 `target/release/will-ia-app`), os dois lançadores e crie o arquivo `portable` vazio.
-Nenhum outro arquivo é necessário. O workflow `release.yml` monta esse zip a cada tag.
+Nenhum outro arquivo é necessário. Desde 2026-10-29 o `release.yml` **não** publica mais esse
+zip: monte-o à mão com os binários `will-ia`/`will-ia-app` do `.tar.gz`/`.zip` de cada
+plataforma da release, renomeados como acima (`docs/13`).
 
 ## macOS: "Apple could not verify … is free of malware"
 

@@ -1,19 +1,29 @@
 name: Release
 
-# Dispara em tags `v*` (ex.: v0.1.0) ou manualmente. Gera, em paralelo, os binários
-# de Linux x86_64, Windows x86_64, macOS x86_64 e macOS aarch64, mais o pacote
-# portátil (pendrive) com todos eles, e publica tudo numa GitHub Release.
+# Dispara em tags `v*` (ex.: v0.1.5) ou manualmente. Compila, em paralelo, Linux x86_64,
+# Windows x86_64, macOS x86_64 e macOS aarch64 e publica UM pacote por SO (e por
+# arquitetura no macOS) numa GitHub Release. Layout decidido em 2026-10-29 (docs/13):
 #
-# Desde a etapa 3 de docs/26 (ADR-0019) são DOIS binários por plataforma:
-#   will-ia      servidor residente (+ bandeja quando há desktop; `serve` = headless)
-#   will-ia-app  app desktop (egui), cliente do servidor
-# Cada tar.gz/zip, o .deb, o .app e o pacote portátil levam os dois.
+#   will-ia-<v>-macos-aarch64.zip     "Instalar will-ia.app" (instalador) + will-ia.app (app + servidor)
+#   will-ia-<v>-macos-x86_64.zip        + README.md, LICENSE, docs/
+#   will-ia-<v>-windows-x86_64.zip    will-ia-setup.exe, will-ia.exe, will-ia-app.exe + README.md, LICENSE, docs/
+#   will-ia-<v>-linux-x86_64.tar.gz   will-ia-setup, will-ia, will-ia-app + README.md, LICENSE, docs/,
+#                                       packaging/linux/, packaging/systemd/
+#   will-ia_<v>-1_amd64.deb           cargo-deb (crates/will-ia/Cargo.toml): os três binários em /usr/bin,
+#                                       .desktop do app e user unit do servidor
+#   SHA256SUMS.txt                    de todos os acima
 #
-# Desde a v0.1.5 (ADR-0021) há um TERCEIRO binário por plataforma, o instalador:
-#   will-ia-setup  assistente de instalação/atualização por usuário, com os dois
-#                  binários acima EMBUTIDOS (WILL_SETUP_PAYLOAD_DIR no build).
-# Publicado como will-ia-setup-<versão>-<plataforma>[.exe] (Linux/Windows) e
-# "Instalar will-ia.app" zipado (macOS).
+# Cada pacote descompacta numa pasta `will-ia-<v>-<plataforma>/`; o usuário abre o instalador
+# (`will-ia-setup`, docs/27) ou usa os binários soltos à mão.
+#
+# Três binários por plataforma (ADR-0019 + ADR-0021):
+#   will-ia        servidor residente (+ bandeja quando há desktop; `serve` = headless)
+#   will-ia-app    app desktop (egui), cliente do servidor
+#   will-ia-setup  instalador/atualizador por usuário, com os dois acima EMBUTIDOS
+#                  (WILL_SETUP_PAYLOAD_DIR no build) — por isso ele é compilado DEPOIS dos outros.
+#
+# Não publicamos mais: pacote portátil (`packaging/portable/` continua no repo, montado à mão),
+# `.app.zip` separados, binários soltos por plataforma.
 
 on:
   push:
@@ -21,7 +31,7 @@ on:
   workflow_dispatch:
     inputs:
       version:
-        description: "Versão (ex.: 0.1.0). Vazio = usa a versão do Cargo.toml"
+        description: "Versão (ex.: 0.1.5). Vazio = usa a versão do Cargo.toml"
         required: false
         default: ""
 
@@ -32,8 +42,10 @@ env:
   CARGO_TERM_COLOR: always
   # nome do produto (prefixo dos pacotes)
   NAME: will-ia
-  # binários gerados por plataforma (separados por espaço)
+  # binários do payload (servidor + app), compilados primeiro e embutidos no instalador
   BINS: will-ia will-ia-app
+  # instalador
+  SETUP: will-ia-setup
 
 jobs:
   version:
@@ -105,38 +117,55 @@ jobs:
           WILL_SETUP_PAYLOAD_DIR: ${{ github.workspace }}/target/${{ matrix.target }}/release
         run: cargo build --release -p will-setup --target ${{ matrix.target }}
 
-      - name: Empacotar (tar.gz / zip)
+      # Um pacote por plataforma. A pasta de staging `dist/<name>/` vira o conteúdo do
+      # arquivo (o usuário descompacta e já vê a pasta com o instalador dentro).
+      - name: Empacotar (um pacote por plataforma)
         shell: bash
         run: |
           set -euo pipefail
-          out=dist; mkdir -p "$out"
           rel="target/${{ matrix.target }}/release"
-          stage="$out/stage"; mkdir -p "$stage"
-          # os dois binários lado a lado: o servidor acha o app na própria pasta
-          for b in $BINS; do
-            cp "$rel/${b}${{ matrix.ext }}" "$stage/"
-          done
+          ext="${{ matrix.ext }}"
+          name="${NAME}-${VERSION}-${{ matrix.name }}"
+          out=dist; stage="$out/$name"
+          rm -rf "$stage"; mkdir -p "$stage"
+
+          # comum a todos: README, licença e documentação
           cp README.md LICENSE "$stage/"
           cp -r docs "$stage/docs"
-          if [[ "${{ runner.os }}" == "Linux" ]]; then
-            mkdir -p "$stage/packaging"
-            cp -r packaging/linux packaging/systemd "$stage/packaging/"
-          fi
-          name="${NAME}-${VERSION}-${{ matrix.name }}"
-          if [[ "${{ runner.os }}" == "Windows" ]]; then
-            (cd "$stage" && 7z a -tzip "../${name}.zip" . >/dev/null)
-          else
-            tar -czf "$out/${name}.tar.gz" -C "$stage" .
-          fi
-          # binários soltos com nome por plataforma, para o pacote portátil
-          for b in $BINS; do
-            cp "$rel/${b}${{ matrix.ext }}" "$out/${b}-${{ matrix.name }}${{ matrix.ext }}"
-          done
-          # instalador (Linux/Windows: binário único; macOS vira .app no passo abaixo)
-          if [[ "${{ runner.os }}" != "macOS" ]]; then
-            cp "$rel/will-ia-setup${{ matrix.ext }}" "$out/will-ia-setup-${VERSION}-${{ matrix.name }}${{ matrix.ext }}"
-            chmod +x "$out/will-ia-setup-${VERSION}-${{ matrix.name }}${{ matrix.ext }}" || true
-          fi
+
+          case "${{ runner.os }}" in
+            macOS)
+              # will-ia.app: executável principal = o app; o servidor fica ao lado em Contents/MacOS/
+              # (o app o encontra e o servidor acha o app na mesma pasta ao lançá-lo pela bandeja)
+              app="$stage/${NAME}.app"
+              mkdir -p "$app/Contents/MacOS" "$app/Contents/Resources"
+              cp "$rel/will-ia-app" "$app/Contents/MacOS/will-ia-app"
+              cp "$rel/will-ia"     "$app/Contents/MacOS/will-ia"
+              sed "s/__VERSION__/${VERSION}/g" packaging/macos/Info.plist > "$app/Contents/Info.plist"
+              # "Instalar will-ia.app": duplo clique abre o assistente (payload dentro do binário)
+              setup="$stage/Instalar will-ia.app"
+              mkdir -p "$setup/Contents/MacOS" "$setup/Contents/Resources"
+              cp "$rel/${SETUP}" "$setup/Contents/MacOS/${SETUP}"
+              sed "s/__VERSION__/${VERSION}/g" packaging/macos/Setup-Info.plist > "$setup/Contents/Info.plist"
+              chmod +x "$app/Contents/MacOS/"* "$setup/Contents/MacOS/"*
+              # não assinado/notarizado: o usuário remove a quarentena (xattr -dr com.apple.quarantine)
+              # ou libera em Privacidade e Segurança › "Abrir Mesmo Assim" (docs/13).
+              # `zip -y` preserva symlinks e os bits de execução; a pasta de staging vira a raiz do zip.
+              (cd "$out" && zip -qr -y "${name}.zip" "$name")
+              ;;
+            Windows)
+              for b in $SETUP $BINS; do cp "$rel/${b}${ext}" "$stage/"; done
+              (cd "$out" && 7z a -tzip "${name}.zip" "$name" >/dev/null)
+              ;;
+            Linux)
+              for b in $SETUP $BINS; do cp "$rel/${b}${ext}" "$stage/"; chmod +x "$stage/${b}${ext}"; done
+              # .desktop do app e user unit do servidor, para instalação manual/de sistema
+              mkdir -p "$stage/packaging"
+              cp -r packaging/linux packaging/systemd "$stage/packaging/"
+              tar -czf "$out/${name}.tar.gz" -C "$out" "$name"
+              ;;
+          esac
+
           rm -rf "$stage"
           ls -la "$out"
 
@@ -144,30 +173,10 @@ jobs:
         if: runner.os == 'Linux'
         run: |
           cargo install cargo-deb --locked
-          # os assets do .deb (will-ia, will-ia-app, .desktop, user unit) estão em crates/will-ia/Cargo.toml
+          # assets do .deb (will-ia, will-ia-app, will-ia-setup, .desktop, user unit) em crates/will-ia/Cargo.toml;
+          # com --target o cargo-deb reescreve target/release/ → target/<triple>/release/
           cargo deb -p will-ia --no-build --target ${{ matrix.target }} -o dist/
           ls -la dist/*.deb
-
-      - name: .app (macOS)
-        if: runner.os == 'macOS'
-        shell: bash
-        run: |
-          set -euo pipefail
-          rel="target/${{ matrix.target }}/release"
-          app="dist/${NAME}.app"; mkdir -p "$app/Contents/MacOS" "$app/Contents/Resources"
-          # executável principal do bundle = o app; o servidor fica ao lado em Contents/MacOS/
-          # (o app o encontra e o servidor acha o app na mesma pasta ao lançá-lo pela bandeja)
-          cp "$rel/will-ia-app" "$app/Contents/MacOS/will-ia-app"
-          cp "$rel/will-ia" "$app/Contents/MacOS/will-ia"
-          sed "s/__VERSION__/${VERSION}/g" packaging/macos/Info.plist > "$app/Contents/Info.plist"
-          # não assinado/notarizado: o usuário remove a quarentena (xattr -dr com.apple.quarantine)
-          # ou libera em Privacidade e Segurança › "Abrir Mesmo Assim" (ver docs/13)
-          (cd dist && zip -qr "${NAME}-${VERSION}-${{ matrix.name }}.app.zip" "${NAME}.app" && rm -rf "${NAME}.app")
-          # instalador como .app (duplo clique abre o assistente; o payload está dentro do binário)
-          setup="dist/Instalar will-ia.app"; mkdir -p "$setup/Contents/MacOS" "$setup/Contents/Resources"
-          cp "$rel/will-ia-setup" "$setup/Contents/MacOS/will-ia-setup"
-          sed "s/__VERSION__/${VERSION}/g" packaging/macos/Setup-Info.plist > "$setup/Contents/Info.plist"
-          (cd dist && zip -qr "will-ia-setup-${VERSION}-${{ matrix.name }}.app.zip" "Instalar will-ia.app" && rm -rf "Instalar will-ia.app")
 
       - uses: actions/upload-artifact@v4
         with:
@@ -175,43 +184,24 @@ jobs:
           path: dist/*
           if-no-files-found: error
 
-  portable:
-    name: pacote portátil + release
+  release:
+    name: juntar + SHA256 + publicar
     needs: [version, build]
     runs-on: ubuntu-22.04
     env:
       VERSION: ${{ needs.version.outputs.version }}
     steps:
-      - uses: actions/checkout@v4
       - uses: actions/download-artifact@v4
         with:
           path: artifacts
-      - name: Montar pacote portátil (pendrive)
+      - name: Juntar artefatos e gerar SHA256SUMS.txt
         shell: bash
         run: |
           set -euo pipefail
           mkdir -p release
-          # coleta todos os artefatos num diretório plano
+          # um diretório por job de build → tudo num diretório plano
           find artifacts -type f -exec cp {} release/ \;
-          # pacote portátil: bin/ com os dois binários por SO + lançadores + marcador
-          p="portable/${NAME}"; mkdir -p "$p/bin"
-          for b in $BINS; do
-            for plat in linux-x86_64 macos-x86_64 macos-aarch64; do
-              f="release/${b}-${plat}"
-              [[ -f "$f" ]] && cp "$f" "$p/bin/" && chmod +x "$p/bin/$(basename "$f")"
-            done
-            f="release/${b}-windows-x86_64.exe"
-            [[ -f "$f" ]] && cp "$f" "$p/bin/"
-          done
-          cp packaging/portable/will-ia.sh packaging/portable/will-ia.cmd packaging/portable/README.md "$p/"
-          chmod +x "$p/will-ia.sh"
-          : > "$p/portable"
-          (cd portable && zip -qr "../release/${NAME}-${VERSION}-portable.zip" "${NAME}")
-          # os binários soltos ficam só dentro do portátil
-          for b in $BINS; do
-            rm -f release/${b}-linux-x86_64 release/${b}-macos-x86_64 release/${b}-macos-aarch64 release/${b}-windows-x86_64.exe
-          done
-          (cd release && sha256sum * > SHA256SUMS.txt)
+          (cd release && sha256sum * > SHA256SUMS.txt && cat SHA256SUMS.txt)
           ls -la release
       - uses: actions/upload-artifact@v4
         with:
@@ -224,3 +214,30 @@ jobs:
           name: will-ia v${{ env.VERSION }}
           generate_release_notes: true
           files: release/*
+          body: |
+            ## Pacotes
+
+            Um pacote por sistema (e por arquitetura no macOS). Cada um traz o **instalador `will-ia-setup`**,
+            o **servidor `will-ia`** e o **app `will-ia-app`**, mais `README.md`, `LICENSE` e `docs/`.
+
+            | Arquivo | Para quem | Conteúdo |
+            |---|---|---|
+            | `will-ia-${{ env.VERSION }}-macos-aarch64.zip` | Mac com Apple Silicon (M1/M2/M3/M4) | `Instalar will-ia.app` (instalador) + `will-ia.app` (app + servidor) |
+            | `will-ia-${{ env.VERSION }}-macos-x86_64.zip` | Mac com Intel | idem |
+            | `will-ia-${{ env.VERSION }}-windows-x86_64.zip` | Windows 10/11 64 bits | `will-ia-setup.exe`, `will-ia.exe`, `will-ia-app.exe` |
+            | `will-ia-${{ env.VERSION }}-linux-x86_64.tar.gz` | Linux x86_64 (qualquer distro) | `will-ia-setup`, `will-ia`, `will-ia-app` + `packaging/linux/`, `packaging/systemd/` |
+            | `will-ia_${{ env.VERSION }}-1_amd64.deb` | Debian/Ubuntu e derivados | instala os três binários em `/usr/bin`, o `.desktop` do app e a user unit do servidor |
+            | `SHA256SUMS.txt` | conferência | `sha256sum -c SHA256SUMS.txt --ignore-missing` |
+
+            ## Como instalar
+
+            1. Baixe o pacote do seu sistema e **descompacte**.
+            2. **Abra o instalador** (`Instalar will-ia.app` no macOS, `will-ia-setup.exe` no Windows, `./will-ia-setup` no Linux). Ele instala/atualiza por usuário, registra o servidor para subir no login, cria os atalhos e **preserva os seus dados** (`docs/27`).
+            3. Detalhes por sistema:
+               - **macOS** (não notarizado): se aparecer "Apple não conseguiu verificar…", libere em *Ajustes do Sistema › Privacidade e Segurança › Abrir Mesmo Assim* ou rode `xattr -dr com.apple.quarantine "Instalar will-ia.app" will-ia.app`.
+               - **Windows**: no SmartScreen clique em *Mais informações › Executar assim mesmo*.
+               - **Linux sem tela** (servidor): `./will-ia-setup --yes` (modo texto automático; `--status` só mostra o que foi detectado).
+               - **Debian/Ubuntu** (instalação de sistema): `sudo apt install ./will-ia_${{ env.VERSION }}-1_amd64.deb` e depois `systemctl --user enable --now will-ia` (ou abra o app pelo menu).
+
+            Os binários soltos (`will-ia`, `will-ia-app`) continuam dentro do pacote para quem prefere instalar à mão
+            ou montar o modo portátil (`packaging/portable/`, `docs/13`).
