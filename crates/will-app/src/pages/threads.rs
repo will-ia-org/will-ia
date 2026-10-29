@@ -596,6 +596,10 @@ impl ThreadsPage {
                             }
                             self.input.push_str(&text);
                             self.focus_input = true;
+                            // "Falar" é falar E enviar: ao soltar, a transcrição vai direto
+                            // pra thread (junto com o que já estava no campo). Se um envio
+                            // ainda está em voo, `send` não faz nada e o texto fica no campo.
+                            self.send(cx);
                         }
                     }
                     Err(e) => cx.toasts.error(trf("Transcrição falhou: {}", &[&e])),
@@ -1330,7 +1334,7 @@ impl ThreadsPage {
                                 send_now = true;
                             }
                             // Falar (ditado): segure para gravar; solte para transcrever
-                            // no campo (Whisper via servidor). Só com o módulo de voz pronto.
+                            // (Whisper via servidor) e ENVIAR direto. Só com o módulo de voz pronto.
                             let voice_ready = matches!(
                                 cx.snap.modules.get(&will_core::Module::Realtime),
                                 Some(will_core::ModuleStatus::Running)
@@ -1371,7 +1375,7 @@ impl ThreadsPage {
                                 let r = ui
                                     .add_enabled(!busy && !transcribing, b)
                                     .on_hover_text(tr(
-                                    "Segure para falar; solte para transcrever no campo (Whisper).",
+                                    "Segure para falar; ao soltar, transcreve (Whisper) e envia na hora.",
                                 ));
                                 // Começa ao pressionar sobre o botão; continua
                                 // enquanto o botão do mouse estiver pressionado em

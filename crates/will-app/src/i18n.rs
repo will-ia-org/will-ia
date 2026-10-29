@@ -1004,7 +1004,7 @@ pub static TABLE: &[(&str, &str)] = &[
     ("binário do servidor (will-ia) não encontrado ao lado do app nem no PATH", "server binary (will-ia) not found next to the app nor on PATH"),
     ("● {}s", "● {}s"),
     ("…", "…"),
-    ("Segure para falar; solte para transcrever no campo (Whisper).", "Hold to speak; release to transcribe into the field (Whisper)."),
+    ("Segure para falar; ao soltar, transcreve (Whisper) e envia na hora.", "Hold to speak; on release it transcribes (Whisper) and sends right away."),
     ("Não entendi nada no áudio.", "Could not make out anything in the audio."),
     ("Transcrição falhou: {}", "Transcription failed: {}"),
     ("Gravação muito curta.", "Recording too short."),

@@ -290,4 +290,4 @@ egui/eframe em `crates/will-app` (ADR-0016, ADR-0019). Modo imediato: cada pági
 
 ### Ditado no campo de mensagem (Threads)
 
-Com o módulo Voz pronto (habilitado + chave da OpenAI), o campo de mensagem ganha o botão **Falar** ao lado de Anexar/Enviar. Segure com o mouse para gravar (o botão fica vermelho com o tempo), solte para transcrever: o app grava o microfone em 16 kHz, manda o WAV para `POST /api/voice/transcribe` e **insere o texto no campo sem enviar**; Ctrl+Enter envia quando quiser. Gravações curtas (< 0,25 s) são ignoradas; erros aparecem em toast.
+Com o módulo Voz pronto (habilitado + chave da OpenAI), o campo de mensagem ganha o botão **Falar** ao lado de Anexar/Enviar. Segure com o mouse para gravar (o botão fica vermelho com o contador de segundos); ao soltar, o áudio vai ao servidor (`POST /api/voice/transcribe`, Whisper), o texto entra no campo (depois do que já estava digitado) e a mensagem é **enviada na hora** para a thread (desde 2026-10-29: "falar e enviar", sem o segundo clique). Se um envio anterior ainda estiver em andamento, o texto fica no campo para enviar manualmente. Gravação muito curta ou áudio sem fala viram um aviso.
