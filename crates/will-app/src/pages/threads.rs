@@ -983,12 +983,6 @@ impl ThreadsPage {
                 {
                     self.action(cx, t.id, "Reiniciar");
                 }
-                if ui
-                    .add_enabled(t.pending > 0, egui::Button::new(tr("interromper")))
-                    .clicked()
-                {
-                    self.action(cx, t.id, "Interromper");
-                }
                 if self.rename_buf.is_none() && ui.button(tr("renomear")).clicked() {
                     self.rename_buf = Some(title_of(t));
                 }
@@ -1437,6 +1431,25 @@ impl ThreadsPage {
                                             self.pending_files.push(p);
                                         }
                                     }
+                                }
+                            }
+                            // Interromper: só com turno em execução, em vermelho
+                            // (à esquerda de Anexar; manda o interrupt ao claude).
+                            if t.pending > 0 || has_live {
+                                let b = egui::Button::new(
+                                    egui::RichText::new(tr("Interromper"))
+                                        .color(egui::Color32::WHITE),
+                                )
+                                .fill(egui::Color32::from_rgb(200, 60, 60))
+                                .min_size(egui::vec2(96.0, 34.0));
+                                if ui
+                                    .add(b)
+                                    .on_hover_text(tr(
+                                        "Para o turno atual (o processo continua vivo).",
+                                    ))
+                                    .clicked()
+                                {
+                                    self.action(cx, t.id, "Interromper");
                                 }
                             }
                         });
