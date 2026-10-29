@@ -432,18 +432,40 @@ impl GooglePage {
                     let id = ui::s(a, "id");
                     let email = ui::s(a, "email");
                     let status = ui::s(a, "status");
+                    let pal = ui::palette(ui.visuals().dark_mode);
                     egui::Frame::new()
-                        .inner_margin(egui::Margin::symmetric(0, 4))
+                        .fill(pal.card_alt)
+                        .stroke(egui::Stroke::new(1.0, pal.border))
+                        .corner_radius(8.0)
+                        .inner_margin(egui::Margin::symmetric(14, 10))
+                        .outer_margin(egui::Margin { left: 0, right: 0, top: 0, bottom: 6 })
                         .show(ui, |ui| {
-                            ui.horizontal_wrapped(|ui| {
-                                ui.label(egui::RichText::new(&email).strong());
-                                let (label, tone) = account_status(&status);
+                            ui.set_width(ui.available_width());
+                            let (label, tone) = account_status(&status);
+                            ui.horizontal(|ui| {
+                                ui.spacing_mut().item_spacing.x = 8.0;
+                                ui::dot(ui, tone);
+                                ui.label(egui::RichText::new(&email).font(ui::semibold(14.0)));
                                 ui::badge(ui, label, tone);
-                                for sc in scope_labels(a) {
-                                    ui::badge(ui, &sc, Tone::Info);
+                            });
+                            // escopos agrupados por produto (um chip por produto; o que
+                            // falta para os módulos ligados aparece em amarelo)
+                            let missing_now = missing_scopes(a, &st.saved);
+                            ui.add_space(4.0);
+                            ui.horizontal_wrapped(|ui| {
+                                ui.spacing_mut().item_spacing = egui::vec2(6.0, 6.0);
+                                ui.add_space(18.0);
+                                for (head, detail) in scope_groups(a) {
+                                    ui::chip2(ui, head, &detail, Tone::Info);
+                                }
+                                for k in &missing_now {
+                                    let (head, detail) = scope_split(k);
+                                    ui::chip2(ui, head, &trf("falta: {}", &[&detail]), Tone::Warning);
                                 }
                             });
+                            ui.add_space(2.0);
                             ui.horizontal_wrapped(|ui| {
+                                ui.add_space(18.0);
                                 let connected = ui::fmt_dt(&a["connected_at"]);
                                 if !connected.is_empty() {
                                     ui.label(
@@ -460,28 +482,17 @@ impl GooglePage {
                                             .small(),
                                     );
                                 }
-                                ui.label(egui::RichText::new(format!("· id {id}")).weak().small());
+                                ui.label(
+                                    egui::RichText::new(format!("· id {}", id.get(..8).unwrap_or(&id)))
+                                        .weak()
+                                        .small(),
+                                )
+                                .on_hover_text(&id);
                             });
-                            let missing = missing_scopes(a, &st.saved);
-                            if !missing.is_empty() {
-                                ui.horizontal_wrapped(|ui| {
-                                    ui.spacing_mut().item_spacing.x = 6.0;
-                                    ui.label(
-                                        egui::RichText::new(tr("faltam para os módulos ligados:"))
-                                            .small()
-                                            .color(Tone::Warning.color(ui.visuals().dark_mode)),
-                                    );
-                                    for k in &missing {
-                                        let label = SCOPE_OPTIONS
-                                            .iter()
-                                            .find(|(kk, _)| kk == k)
-                                            .map(|(_, l)| tr(l))
-                                            .unwrap_or(k);
-                                        ui::badge(ui, label, Tone::Warning);
-                                    }
-                                });
-                            }
+                            let missing = missing_now;
+                            ui.add_space(4.0);
                             ui.horizontal(|ui| {
+                                ui.add_space(18.0);
                                 let reauthorizing = self
                                     .flow
                                     .as_ref()
@@ -1075,46 +1086,6 @@ fn account_status(status: &str) -> (&'static str, Tone) {
     }
 }
 
-/// Escopos concedidos (URLs do Google ou chaves lógicas) → rótulos curtos (no
-/// idioma da UI); omite identidade.
-fn scope_labels(account: &Value) -> Vec<String> {
-    let Some(arr) = account.get("scopes").and_then(|s| s.as_array()) else {
-        return Vec::new();
-    };
-    let mut out: Vec<String> = Vec::new();
-    for sc in arr.iter().filter_map(|s| s.as_str()) {
-        let label = match sc {
-            "openid" | "email" | "profile" => continue,
-            s if s.ends_with("calendar.readonly") || s == "calendar" || s == "calendar_read" => {
-                tr("Agenda (ler)")
-            }
-            s if s.ends_with("calendar.events")
-                || s.ends_with("/calendar")
-                || s == "calendar_write" =>
-            {
-                tr("Agenda (criar/editar)")
-            }
-            s if s.ends_with("gmail.readonly") || s == "gmail" || s == "gmail_read" => {
-                tr("Gmail (ler)")
-            }
-            s if s.ends_with("gmail.send") || s == "gmail_send" => tr("Gmail (enviar)"),
-            s if s.ends_with("gmail.modify") || s == "gmail_modify" => {
-                tr("Gmail (arquivar/marcar/rotular)")
-            }
-            s if s.ends_with("drive.readonly") || s == "drive" || s == "drive_read" => {
-                tr("Drive (ler)")
-            }
-            s if s.ends_with("/auth/drive") || s == "drive_write" => tr("Drive (ler e escrever)"),
-            s if s.ends_with("userinfo.email") || s.ends_with("userinfo.profile") => continue,
-            s => s.rsplit('/').next().unwrap_or(s),
-        };
-        if !out.iter().any(|l| l == label) {
-            out.push(label.to_string());
-        }
-    }
-    out
-}
-
 /// Chaves lógicas (`SCOPE_OPTIONS`) que a conta já tem, a partir das URLs
 /// concedidas. `drive` completo implica `drive` (ler); `calendar.events`
 /// implica `calendar` (ler) etc.
@@ -1155,6 +1126,50 @@ fn granted_logical(account: &Value) -> Vec<&'static str> {
                 add("drive_write");
             }
             _ => {}
+        }
+    }
+    out
+}
+
+/// (produto, capacidade) de uma chave lógica: `gmail_send` → ("Gmail", "enviar").
+fn scope_split(key: &str) -> (&'static str, &'static str) {
+    match key {
+        "calendar" => (tr("Agenda"), tr("ler")),
+        "calendar_write" => (tr("Agenda"), tr("criar/editar")),
+        "gmail" => (tr("Gmail"), tr("ler")),
+        "gmail_send" => (tr("Gmail"), tr("enviar")),
+        "gmail_modify" => (tr("Gmail"), tr("arquivar/marcar/rotular")),
+        "drive" => (tr("Drive"), tr("ler")),
+        "drive_write" => (tr("Drive"), tr("ler e escrever")),
+        _ => ("?", ""),
+    }
+}
+
+/// Escopos concedidos agrupados por produto, na ordem Agenda · Gmail · Drive:
+/// ("Gmail", "ler · enviar"). `drive_write` já implica ler, então vira só
+/// "ler e escrever".
+fn scope_groups(account: &Value) -> Vec<(&'static str, String)> {
+    let g = granted_logical(account);
+    let mut out: Vec<(&'static str, String)> = Vec::new();
+    for keys in [
+        &["calendar", "calendar_write"][..],
+        &["gmail", "gmail_send", "gmail_modify"][..],
+        &["drive", "drive_write"][..],
+    ] {
+        let mut caps: Vec<&'static str> = Vec::new();
+        let mut head = "";
+        for k in keys {
+            if g.contains(k) {
+                let (h, c) = scope_split(k);
+                head = h;
+                caps.push(c);
+            }
+        }
+        if *keys == ["drive", "drive_write"] && caps.len() == 2 {
+            caps.remove(0);
+        }
+        if !caps.is_empty() {
+            out.push((head, caps.join(" · ")));
         }
     }
     out
@@ -1239,6 +1254,19 @@ mod tests {
     }
 
     #[test]
+    fn scope_groups_by_product() {
+        let a = serde_json::json!({"scopes": ["https://www.googleapis.com/auth/gmail.send", "https://www.googleapis.com/auth/calendar.readonly", "https://www.googleapis.com/auth/drive"]});
+        let g = scope_groups(&a);
+        assert_eq!(g[0].0, "Agenda");
+        assert_eq!(g[0].1, "ler");
+        assert_eq!(g[1].0, "Gmail");
+        assert_eq!(g[1].1, "ler · enviar");
+        assert_eq!(g[2].0, "Drive");
+        assert_eq!(g[2].1, "ler e escrever");
+        assert_eq!(scope_split("gmail_modify").1, "arquivar/marcar/rotular");
+    }
+
+    #[test]
     fn granted_and_missing_scopes() {
         let a = serde_json::json!({"scopes": ["openid", "https://www.googleapis.com/auth/gmail.modify", "https://www.googleapis.com/auth/calendar.readonly"]});
         let g = granted_logical(&a);
@@ -1259,15 +1287,6 @@ mod tests {
         assert_eq!(
             missing_scopes(&a, &st),
             vec!["calendar_write", "gmail_send"]
-        );
-    }
-
-    #[test]
-    fn scope_labels_dedup_and_skip_identity() {
-        let a = serde_json::json!({"scopes": ["openid", "email", "https://www.googleapis.com/auth/calendar.readonly", "https://www.googleapis.com/auth/calendar.events", "https://www.googleapis.com/auth/gmail.readonly", "gmail"]});
-        assert_eq!(
-            scope_labels(&a),
-            vec!["Agenda (ler)", "Agenda (criar/editar)", "Gmail (ler)"]
         );
     }
 }

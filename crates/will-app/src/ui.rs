@@ -373,7 +373,36 @@ pub fn badge(ui: &mut Ui, text: &str, tone: Tone) {
         .corner_radius(10.0)
         .inner_margin(egui::Margin::symmetric(8, 2))
         .show(ui, |ui| {
-            ui.label(RichText::new(text).color(color).small());
+            // sem quebra interna: num `horizontal_wrapped` o chip inteiro vai para a
+            // linha de baixo em vez de virar uma coluna de letras.
+            ui.add(
+                egui::Label::new(RichText::new(text).color(color).small())
+                    .wrap_mode(egui::TextWrapMode::Extend),
+            );
+        });
+}
+
+/// Chip de dois tons: rótulo forte + detalhe fraco ("Gmail · ler, enviar").
+pub fn chip2(ui: &mut Ui, head: &str, detail: &str, tone: Tone) {
+    let dark = ui.visuals().dark_mode;
+    let color = tone.color(dark);
+    let fill = color.linear_multiply(if dark { 0.22 } else { 0.12 });
+    egui::Frame::new()
+        .fill(fill)
+        .corner_radius(8.0)
+        .inner_margin(egui::Margin::symmetric(9, 3))
+        .show(ui, |ui| {
+            ui.spacing_mut().item_spacing.x = 5.0;
+            ui.add(
+                egui::Label::new(RichText::new(head).color(color).small().strong())
+                    .wrap_mode(egui::TextWrapMode::Extend),
+            );
+            if !detail.is_empty() {
+                ui.add(
+                    egui::Label::new(RichText::new(detail).color(color).small())
+                        .wrap_mode(egui::TextWrapMode::Extend),
+                );
+            }
         });
 }
 
