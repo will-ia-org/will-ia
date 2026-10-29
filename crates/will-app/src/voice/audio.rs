@@ -770,35 +770,6 @@ pub fn wav_pcm16_mono(samples: &[i16], rate: u32) -> Vec<u8> {
     w
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn resampler_halves_rate() {
-        let mut r = Resampler::new(48_000, 24_000);
-        let input: Vec<f32> = (0..96).map(|i| i as f32).collect();
-        let mut out = Vec::new();
-        r.process(&input, &mut out);
-        assert!((out.len() as i64 - 48).abs() <= 1, "{}", out.len());
-        // monotônico crescente
-        assert!(out.windows(2).all(|w| w[1] >= w[0]));
-    }
-
-    #[test]
-    fn resampler_keeps_phase_between_calls() {
-        let mut r = Resampler::new(44_100, 24_000);
-        let mut total = 0;
-        for _ in 0..100 {
-            let input = vec![0.5f32; 441];
-            let mut out = Vec::new();
-            r.process(&input, &mut out);
-            total += out.len();
-        }
-        assert!((total as i64 - 24_000).abs() <= 2, "{total}");
-    }
-}
-
 /// Reprodução única de um trecho PCM16 LE mono (o "ouvir resumo" da thread):
 /// abre um stream de saída, reamostra para a taxa do dispositivo e termina
 /// sozinho quando o áudio acaba. Soltar o valor interrompe a reprodução.
@@ -907,5 +878,34 @@ impl Player {
     pub fn playing(&self) -> bool {
         !self.done.load(Ordering::Relaxed)
             && self.started.elapsed().as_secs_f32() < self.total_secs + 2.0
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn resampler_halves_rate() {
+        let mut r = Resampler::new(48_000, 24_000);
+        let input: Vec<f32> = (0..96).map(|i| i as f32).collect();
+        let mut out = Vec::new();
+        r.process(&input, &mut out);
+        assert!((out.len() as i64 - 48).abs() <= 1, "{}", out.len());
+        // monotônico crescente
+        assert!(out.windows(2).all(|w| w[1] >= w[0]));
+    }
+
+    #[test]
+    fn resampler_keeps_phase_between_calls() {
+        let mut r = Resampler::new(44_100, 24_000);
+        let mut total = 0;
+        for _ in 0..100 {
+            let input = vec![0.5f32; 441];
+            let mut out = Vec::new();
+            r.process(&input, &mut out);
+            total += out.len();
+        }
+        assert!((total as i64 - 24_000).abs() <= 2, "{total}");
     }
 }
