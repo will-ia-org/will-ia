@@ -13,24 +13,85 @@ pub struct CostsPage {
     summary: Loader<Value>,
     rows: Loader<Value>,
     source: String,
+    /// Fontes já vistas nos dados (resumo "todas" e registros), para o filtro
+    /// oferecer também o que o código ainda não conhece por nome.
+    seen_sources: Vec<String>,
 }
 
+/// Fontes gravadas em `ai_costs` pelo código (valor → rótulo), na ordem do filtro.
+/// Quem grava: `will-realtime` (`voice`), `orchestrator` (`claude`,
+/// `thread_summary`), `api/integrations` (`voice_stt`, `voice_summary`, `voice_tts`).
+/// `telegram_*` ficam por compatibilidade com registros antigos.
+const KNOWN_SOURCES: [(&str, &str); 8] = [
+    ("voice", "Voz (tempo real)"),
+    ("voice_stt", "Voz · transcrição"),
+    ("voice_tts", "Voz · áudio (TTS)"),
+    ("voice_summary", "Voz · resumo"),
+    ("claude", "Claude Code"),
+    ("thread_summary", "Resumo de thread"),
+    ("telegram_stt", "Telegram · transcrição"),
+    ("telegram_tts", "Telegram · áudio"),
+];
+
 fn source_label(s: &str) -> &str {
-    match s {
-        "voice" => tr("Voz"),
-        "claude" => tr("Claude Code"),
-        "telegram_stt" => tr("Telegram · transcrição"),
-        "telegram_tts" => tr("Telegram · áudio"),
-        other => other,
-    }
+    KNOWN_SOURCES
+        .iter()
+        .find(|(k, _)| *k == s)
+        .map(|(_, l)| tr(l))
+        .unwrap_or(s)
 }
 
 fn source_tone(s: &str) -> Tone {
     match s {
-        "voice" => Tone::Info,
-        "claude" => Tone::Success,
+        "voice" | "voice_stt" | "voice_tts" | "voice_summary" => Tone::Info,
+        "claude" | "thread_summary" => Tone::Success,
         _ => Tone::Neutral,
     }
+}
+
+/// Opções do filtro: "todas", as fontes conhecidas (ordem fixa) e, no fim, as
+/// vistas nos dados que o código não conhece (ordem alfabética, rótulo = valor
+/// bruto). Sem duplicatas.
+fn source_options(seen: &[String]) -> Vec<(String, String)> {
+    let mut out: Vec<(String, String)> = vec![(String::new(), tr("todas").to_string())];
+    for (k, l) in KNOWN_SOURCES {
+        out.push((k.to_string(), tr(l).to_string()));
+    }
+    let mut extra: Vec<&String> = seen
+        .iter()
+        .filter(|s| !s.is_empty() && !KNOWN_SOURCES.iter().any(|(k, _)| k == s))
+        .collect();
+    extra.sort();
+    extra.dedup();
+    for s in extra {
+        out.push((s.clone(), s.clone()));
+    }
+    out
+}
+
+/// Fontes presentes num resumo (`today`/`last_7d`/`last_30d`/`all_time`) ou
+/// numa lista de registros.
+fn sources_in(v: &Value) -> Vec<String> {
+    let mut out = Vec::new();
+    let mut push = |s: &str| {
+        if !s.is_empty() && !out.iter().any(|x: &String| x == s) {
+            out.push(s.to_string());
+        }
+    };
+    if let Some(rows) = v.as_array() {
+        for r in rows {
+            push(&ui::s(r, "source"));
+        }
+    } else if let Some(o) = v.as_object() {
+        for b in ["today", "last_7d", "last_30d", "all_time"] {
+            if let Some(a) = o.get(b).and_then(|x| x.as_array()) {
+                for x in a {
+                    push(&ui::s(x, "source"));
+                }
+            }
+        }
+    }
+    out
 }
 
 fn unit_label(k: &str) -> &str {
@@ -95,24 +156,29 @@ impl CostsPage {
         {
             self.reload(cx);
         }
-        self.summary.poll();
-        self.rows.poll();
+        let got_summary = self.summary.poll();
+        let got_rows = self.rows.poll();
+        if got_summary || got_rows {
+            for v in [&self.summary.data, &self.rows.data].into_iter().flatten() {
+                for src in sources_in(v) {
+                    if !self.seen_sources.contains(&src) {
+                        self.seen_sources.push(src);
+                    }
+                }
+            }
+        }
 
         ui::heading(ui, tr("Custos de IA"), Some(tr("Voz: estimativa pela tabela de preços (Voz › Preços). Claude: valor informado pelo CLI a cada turno.")));
 
         // ---- filtro (vale para o resumo e para os registros) ----
         ui.horizontal(|ui| {
             ui.label(egui::RichText::new(tr("Fonte")).strong());
-            if ui::select(
-                ui,
-                "cost-source",
-                &mut self.source,
-                &[
-                    ("", tr("todas")),
-                    ("voice", tr("Voz")),
-                    ("claude", tr("Claude Code")),
-                ],
-            ) {
+            let options = source_options(&self.seen_sources);
+            let opts: Vec<(&str, &str)> = options
+                .iter()
+                .map(|(k, l)| (k.as_str(), l.as_str()))
+                .collect();
+            if ui::select(ui, "cost-source", &mut self.source, &opts) {
                 self.summary.loaded_at = None;
                 self.rows.loaded_at = None;
             }
@@ -274,5 +340,52 @@ impl CostsPage {
                     });
             }
         });
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn options_known_first_then_unknown_sorted_dedup() {
+        let seen = vec![
+            "zeta".to_string(),
+            "claude".to_string(),
+            "alpha".to_string(),
+            "zeta".to_string(),
+            String::new(),
+        ];
+        let o = source_options(&seen);
+        assert_eq!(o[0].0, "");
+        let known: Vec<&str> = o[1..=KNOWN_SOURCES.len()]
+            .iter()
+            .map(|(k, _)| k.as_str())
+            .collect();
+        assert_eq!(known[0], "voice");
+        assert!(known.contains(&"thread_summary"));
+        let tail: Vec<&str> = o[KNOWN_SOURCES.len() + 1..]
+            .iter()
+            .map(|(k, _)| k.as_str())
+            .collect();
+        assert_eq!(tail, vec!["alpha", "zeta"]);
+        assert_eq!(o.iter().filter(|(k, _)| k == "claude").count(), 1);
+        // desconhecida: rótulo = valor bruto
+        assert_eq!(o.last().map(|(_, l)| l.as_str()), Some("zeta"));
+    }
+
+    #[test]
+    fn sources_in_summary_and_rows() {
+        let summary = serde_json::json!({
+            "today": [{"source": "voice"}],
+            "last_7d": [{"source": "claude"}, {"source": "voice"}],
+            "last_30d": [],
+            "all_time": [{"source": "voice_tts"}]
+        });
+        assert_eq!(sources_in(&summary), vec!["voice", "claude", "voice_tts"]);
+        let rows = serde_json::json!([{"source": "thread_summary"}, {"source": "thread_summary"}, {"source": ""}]);
+        assert_eq!(sources_in(&rows), vec!["thread_summary"]);
+        assert_eq!(source_label("voice_tts"), "Voz · áudio (TTS)");
+        assert_eq!(source_label("misterio"), "misterio");
     }
 }
