@@ -1606,7 +1606,6 @@ pub static TABLE: &[(&str, &str)] = &[
     ("Uma leitura por vez", "One reading at a time"),
     ("Começar outra resposta interrompe a anterior. O roteiro gerado aparece ao passar o mouse sobre o botão.", "Starting another reply stops the previous one. The generated script shows when hovering the button."),
     ("O áudio das respostas no Telegram usa o prompt padrão deste resumo, com a voz e a velocidade configuradas na seção Telegram.", "Telegram reply audio uses this summary's default prompt, with the voice and speed set in the Telegram section."),
-    ("Interromper", "Interrupt"),
     ("Para o turno atual (o processo continua vivo).", "Stops the current turn (the process stays alive)."),
     ("ouvir de novo", "listen again"),
     ("Ouvir de novo não custa", "Listening again is free"),
