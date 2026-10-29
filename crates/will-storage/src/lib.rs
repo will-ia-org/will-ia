@@ -4,6 +4,7 @@ pub mod costs;
 pub mod google;
 pub mod logs;
 pub mod mcp;
+pub mod migrate;
 pub mod schedules;
 pub mod secrets;
 pub mod settings;
@@ -58,7 +59,21 @@ impl Storage {
             .max_connections(8)
             .connect_with(opts)
             .await?;
-        sqlx::migrate!("./migrations").run(&pool).await?;
+        migrate::run(&pool, Some(path)).await?;
+        Ok(Self { pool })
+    }
+
+    /// Abre o arquivo **sem** rodar migrations (diagnóstico e testes).
+    pub async fn open_raw(path: &Path) -> Result<Self> {
+        let opts = SqliteConnectOptions::new()
+            .filename(path)
+            .create_if_missing(false)
+            .journal_mode(SqliteJournalMode::Wal)
+            .busy_timeout(Duration::from_secs(5));
+        let pool = SqlitePoolOptions::new()
+            .max_connections(2)
+            .connect_with(opts)
+            .await?;
         Ok(Self { pool })
     }
 
@@ -71,7 +86,7 @@ impl Storage {
             .max_connections(1)
             .connect_with(opts)
             .await?;
-        sqlx::migrate!("./migrations").run(&pool).await?;
+        migrate::run(&pool, None).await?;
         Ok(Self { pool })
     }
 

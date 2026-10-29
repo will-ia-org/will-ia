@@ -259,7 +259,7 @@ CREATE TABLE events_log (                 -- eventos operacionais para a aba Log
 ## Acesso
 
 - `sqlx` com `SqlitePool` (1 conexão de escrita, N de leitura), `PRAGMA journal_mode=WAL; synchronous=NORMAL; foreign_keys=ON; busy_timeout=5000`.
-- Migrations embutidas (`sqlx::migrate!`).
+- Migrations embutidas (`sqlx::migrate!`), aplicadas por um runner **tolerante** (`will_storage::migrate::run`) em vez do `run()` padrão, que derrubava o serviço na subida com bancos de máquinas de usuário: checksum diferente da mesma versão (`VersionMismatch`, ex.: binário de teste com outro texto no `.sql`) → aceita a versão embutida e corrige o checksum; `ALTER TABLE … ADD COLUMN` em coluna que já existe (`duplicate column name`) ou `CREATE` de algo já existente → marca a migration como aplicada sem rodar (`skip`); banco com versão que o binário não conhece (`VersionMissing`, downgrade) → só aviso; migration parcial (`success = 0`) → linha removida e reaplicada. Antes da primeira migration pendente num banco em disco, cópia `will-ia.db.antes-de-<versão>` via `VACUUM INTO` (best-effort, não sobrescreve). Qualquer outro erro continua fatal e vai para `logs/will-ia-fatal.log`.
 - Repositórios por agregado (`ThreadRepo`, `TurnRepo`, `TokenRepo`, `TelegramRepo`, `McpLogRepo`), todos atrás de traits de `will-core`.
 - Escritas frequentes (pilha de status, offset) com debounce de 200 ms em memória e flush no shutdown, como na referência.
 
