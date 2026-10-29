@@ -298,6 +298,52 @@ impl Storage {
         Ok(v)
     }
 
+    /// Troca o texto de uma mensagem (edição) mantendo o FTS em dia (gatilho `au`).
+    pub async fn wa_set_text(&self, account_id: &str, id: &str, text: &str) -> Result<bool> {
+        let r = sqlx::query("UPDATE wa_messages SET text = ? WHERE account_id = ? AND id = ?")
+            .bind(text)
+            .bind(account_id)
+            .bind(id)
+            .execute(&self.pool)
+            .await?;
+        Ok(r.rows_affected() > 0)
+    }
+
+    /// Remove uma mensagem do índice (apagada no WhatsApp).
+    pub async fn wa_delete_message(&self, account_id: &str, id: &str) -> Result<bool> {
+        let r = sqlx::query("DELETE FROM wa_messages WHERE account_id = ? AND id = ?")
+            .bind(account_id)
+            .bind(id)
+            .execute(&self.pool)
+            .await?;
+        Ok(r.rows_affected() > 0)
+    }
+
+    /// Estado de um envio nosso: `(status, error, at, chat_jid, kind)`.
+    #[allow(clippy::type_complexity)]
+    pub async fn wa_get_outbox(
+        &self,
+        account_id: &str,
+        id: &str,
+    ) -> Result<Option<(String, Option<String>, String, String, String)>> {
+        let r = sqlx::query(
+            "SELECT status, error, at, chat_jid, kind FROM wa_outbox WHERE account_id = ? AND id = ?",
+        )
+        .bind(account_id)
+        .bind(id)
+        .fetch_optional(&self.pool)
+        .await?;
+        Ok(r.map(|row| {
+            (
+                row.get::<String, _>("status"),
+                row.get::<Option<String>, _>("error"),
+                row.get::<String, _>("at"),
+                row.get::<String, _>("chat_jid"),
+                row.get::<String, _>("kind"),
+            )
+        }))
+    }
+
     pub async fn wa_get_message(&self, account_id: &str, id: &str) -> Result<Option<WaMessage>> {
         let r = sqlx::query("SELECT * FROM wa_messages WHERE account_id = ? AND id = ?")
             .bind(account_id)

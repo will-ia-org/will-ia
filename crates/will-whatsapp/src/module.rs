@@ -29,6 +29,17 @@ const BACKOFF_MIN_SECS: u64 = 1;
 const BACKOFF_MAX_SECS: u64 = 60;
 const EVENT_CHANNEL_CAPACITY: usize = 512;
 
+/// Síntese de voz (texto → Ogg/Opus) fornecida pelo serviço quando há chave da
+/// OpenAI; usada por `whatsapp_send_voice { text }`. `None` = só envio de arquivo.
+pub type Tts = Arc<
+    dyn Fn(
+            String,
+        )
+            -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<Vec<u8>, String>> + Send>>
+        + Send
+        + Sync,
+>;
+
 /// Dependências injetadas pelo serviço.
 pub struct WhatsAppDeps {
     pub storage: Storage,
@@ -36,6 +47,8 @@ pub struct WhatsAppDeps {
     pub bus: EventBus,
     /// Raiz da base de conhecimento (mídia vai para `<kb>/<media_dir>`).
     pub kb_path: PathBuf,
+    /// Texto → áudio de voz (opcional; ver [`Tts`]).
+    pub tts: Option<Tts>,
 }
 
 /// Fábrica de backend por conta: `(account_id, diretório do store, canal de eventos)`.
@@ -320,6 +333,10 @@ impl WhatsAppModule {
 
     pub fn storage(&self) -> &Storage {
         &self.deps.storage
+    }
+
+    pub fn tts(&self) -> Option<Tts> {
+        self.deps.tts.clone()
     }
 
     pub fn kb_path(&self) -> &PathBuf {

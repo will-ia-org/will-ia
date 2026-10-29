@@ -74,6 +74,20 @@ pub enum BackendEvent {
     },
 }
 
+/// Referência a uma mensagem já conhecida (do índice), para reagir, editar ou
+/// apagar: o protocolo precisa do chat, do id, de quem mandou e, em grupo, do
+/// participante.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct MessageRef {
+    pub chat_jid: String,
+    pub message_id: String,
+    pub from_me: bool,
+    /// JID de quem enviou (só importa em grupo, para mensagens de outros).
+    pub sender_jid: Option<String>,
+    /// Instante da mensagem (segundos Unix), usado em "apagar para mim".
+    pub timestamp: Option<i64>,
+}
+
 #[async_trait::async_trait]
 pub trait WhatsAppBackend: Send + Sync {
     /// `"real"` ou `"mock"` (aparece em `status()`).
@@ -118,6 +132,30 @@ pub trait WhatsAppBackend: Send + Sync {
     async fn fetch_group(&self, jid: &str) -> Result<serde_json::Value, String>;
     /// Telefone (dígitos) → JID se o número estiver no WhatsApp; `None` se não estiver.
     async fn resolve_phone(&self, phone: &str) -> Result<Option<String>, String>;
+    /// Reage a uma mensagem com um emoji; `""` remove a reação.
+    async fn send_reaction(&self, msg: &MessageRef, emoji: &str) -> Result<(), String>;
+    /// Edita o texto de uma mensagem **minha** (janela de ~15 min do WhatsApp).
+    async fn edit_message(&self, msg: &MessageRef, new_text: &str) -> Result<(), String>;
+    /// `for_everyone`: revoga (minha mensagem, ou de outro se eu for admin do
+    /// grupo); senão apaga só para mim (app state).
+    async fn delete_message(&self, msg: &MessageRef, for_everyone: bool) -> Result<(), String>;
+    /// Envia um cartão de contato (vCard). Retorna o id da mensagem.
+    async fn send_contact(
+        &self,
+        chat_jid: &str,
+        display_name: &str,
+        vcard: &str,
+    ) -> Result<String, String>;
+    /// Envia um áudio como **mensagem de voz** (PTT). Retorna o id da mensagem.
+    async fn send_voice(
+        &self,
+        chat_jid: &str,
+        path: &Path,
+        duration_secs: Option<u32>,
+    ) -> Result<String, String>;
+    /// Dados públicos de um contato: `{jid, lid, is_business, verified_name,
+    /// status, picture_url, business: {...}|null}`.
+    async fn contact_info(&self, jid: &str) -> Result<serde_json::Value, String>;
     fn connected(&self) -> bool;
     /// `{jid, phone, push_name, platform}`
     fn me(&self) -> Option<serde_json::Value>;
@@ -149,6 +187,34 @@ pub fn phone_digits(phone: &str) -> Option<String> {
 
 pub fn jid_from_phone(digits: &str) -> String {
     format!("{digits}@{USER_SERVER}")
+}
+
+/// vCard 3.0 mínimo para um contato (nome + telefones), como o WhatsApp monta.
+pub fn build_vcard(name: &str, phones: &[String], org: Option<&str>) -> String {
+    let esc = |s: &str| {
+        s.replace('\\', "\\\\")
+            .replace(';', "\\;")
+            .replace(',', "\\,")
+            .replace('\n', "\\n")
+    };
+    let mut v = String::new();
+    v.push_str("BEGIN:VCARD\nVERSION:3.0\n");
+    v.push_str(&format!("N:;{};;;\n", esc(name)));
+    v.push_str(&format!("FN:{}\n", esc(name)));
+    if let Some(o) = org.filter(|o| !o.trim().is_empty()) {
+        v.push_str(&format!("ORG:{};\n", esc(o)));
+    }
+    for ph in phones {
+        let digits: String = ph.chars().filter(|c| c.is_ascii_digit()).collect();
+        if digits.is_empty() {
+            continue;
+        }
+        v.push_str(&format!(
+            "TEL;type=CELL;type=VOICE;waid={digits}:+{digits}\n"
+        ));
+    }
+    v.push_str("END:VCARD\n");
+    v
 }
 
 /// Extensão de arquivo sugerida para um mime type de mídia.
@@ -230,5 +296,19 @@ mod tests {
         assert_eq!(jid_from_phone("5511"), "5511@s.whatsapp.net");
         assert_eq!(ext_for_mime("image/jpeg"), "jpg");
         assert_eq!(media_class(mime_for_path(Path::new("a.PDF"))), "document");
+    }
+
+    #[test]
+    fn vcard() {
+        let v = build_vcard(
+            "Ana; Silva",
+            &["+55 (11) 99999-9999".into()],
+            Some("Devmania"),
+        );
+        assert!(v.starts_with("BEGIN:VCARD\nVERSION:3.0\n"), "{v}");
+        assert!(v.contains("FN:Ana\\; Silva\n"), "{v}");
+        assert!(v.contains("ORG:Devmania;\n"));
+        assert!(v.contains("TEL;type=CELL;type=VOICE;waid=5511999999999:+5511999999999\n"));
+        assert!(v.ends_with("END:VCARD\n"));
     }
 }

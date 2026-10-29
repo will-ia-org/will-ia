@@ -5,7 +5,10 @@
 //! "largas" (`list_chats`, `search_messages`, `list_contacts`) agregam todas as
 //! contas e as demais exigem `account`.
 
-use crate::backend::{is_group_jid, jid_from_phone, mime_for_path, phone_digits, phone_from_jid};
+use crate::backend::{
+    build_vcard, is_group_jid, jid_from_phone, mime_for_path, phone_digits, phone_from_jid,
+    MessageRef,
+};
 use crate::module::{WaAccount, WhatsAppModule};
 use chrono::{Duration, Utc};
 use serde_json::{json, Value};
@@ -34,10 +37,17 @@ pub enum ToolKind {
     MarkRead,
     SendMessage,
     SendMedia,
+    React,
+    MessageStatus,
+    EditMessage,
+    DeleteMessage,
+    SendContact,
+    SendVoice,
+    ContactInfo,
 }
 
 impl ToolKind {
-    pub const ALL: [ToolKind; 9] = [
+    pub const ALL: [ToolKind; 16] = [
         ToolKind::ListChats,
         ToolKind::GetMessages,
         ToolKind::SearchMessages,
@@ -47,6 +57,13 @@ impl ToolKind {
         ToolKind::MarkRead,
         ToolKind::SendMessage,
         ToolKind::SendMedia,
+        ToolKind::React,
+        ToolKind::MessageStatus,
+        ToolKind::EditMessage,
+        ToolKind::DeleteMessage,
+        ToolKind::SendContact,
+        ToolKind::SendVoice,
+        ToolKind::ContactInfo,
     ];
 
     pub fn name(&self) -> &'static str {
@@ -60,6 +77,13 @@ impl ToolKind {
             ToolKind::MarkRead => "whatsapp_mark_read",
             ToolKind::SendMessage => "whatsapp_send_message",
             ToolKind::SendMedia => "whatsapp_send_media",
+            ToolKind::React => "whatsapp_react",
+            ToolKind::MessageStatus => "whatsapp_message_status",
+            ToolKind::EditMessage => "whatsapp_edit_message",
+            ToolKind::DeleteMessage => "whatsapp_delete_message",
+            ToolKind::SendContact => "whatsapp_send_contact",
+            ToolKind::SendVoice => "whatsapp_send_voice",
+            ToolKind::ContactInfo => "whatsapp_contact_info",
         }
     }
 
@@ -163,6 +187,74 @@ impl ToolKind {
                 }),
                 vec!["chat_id", "path"],
                 ToolPolicy::Confirm,
+            ),
+            ToolKind::React => (
+                "Reage a uma mensagem com um emoji (👍 ❤️ 😂…). `emoji` vazio remove a reação. Exige aprovação. Com várias contas, informe `account` (a mesma da mensagem).",
+                json!({
+                    "message_id": {"type": "string", "description": "message_id (de whatsapp_get_messages/whatsapp_search_messages)."},
+                    "emoji": {"type": "string", "description": "Um emoji; vazio = remover a reação."}
+                }),
+                vec!["message_id", "emoji"],
+                ToolPolicy::Confirm,
+            ),
+            ToolKind::MessageStatus => (
+                "Estado de entrega de uma mensagem ENVIADA por nós: sent (saiu), delivered (chegou ao aparelho), read (lida/ouvida) ou error. Vem dos recibos do WhatsApp indexados. Com várias contas, informe `account`.",
+                json!({
+                    "message_id": {"type": "string", "description": "message_id devolvido por whatsapp_send_*."}
+                }),
+                vec!["message_id"],
+                ToolPolicy::Auto,
+            ),
+            ToolKind::EditMessage => (
+                "Edita o texto de uma mensagem que NÓS enviamos (o WhatsApp permite por ~15 min). Exige aprovação. Com várias contas, informe `account`.",
+                json!({
+                    "message_id": {"type": "string", "description": "message_id da mensagem nossa."},
+                    "text": {"type": "string", "description": "Novo texto."}
+                }),
+                vec!["message_id", "text"],
+                ToolPolicy::Confirm,
+            ),
+            ToolKind::DeleteMessage => (
+                "Apaga uma mensagem: `for_everyone` true (padrão) = apagar para todos (só mensagens nossas, ou de outros se formos admin do grupo); false = apagar só para mim. Exige aprovação. Com várias contas, informe `account`.",
+                json!({
+                    "message_id": {"type": "string", "description": "message_id (do índice)."},
+                    "for_everyone": {"type": "boolean", "description": "true = para todos (padrão); false = só para mim."}
+                }),
+                vec!["message_id"],
+                ToolPolicy::Confirm,
+            ),
+            ToolKind::SendContact => (
+                "Envia um cartão de contato (vCard). Informe `name` + `phones` (o cartão é montado) OU um `vcard` pronto. Exige aprovação. Nunca use sem pedido explícito do usuário.",
+                json!({
+                    "chat_id": {"type": "string", "description": "JID do chat/contato ou nome exato."},
+                    "phone": {"type": "string", "description": "Telefone com DDI (só dígitos), se o envio para não salvos estiver habilitado."},
+                    "name": {"type": "string", "description": "Nome exibido no cartão."},
+                    "phones": {"type": "array", "items": {"type": "string"}, "description": "Telefones do contato, com DDI."},
+                    "org": {"type": "string", "description": "Empresa/organização (opcional)."},
+                    "vcard": {"type": "string", "description": "vCard completo (alternativa a name/phones)."}
+                }),
+                vec![],
+                ToolPolicy::Confirm,
+            ),
+            ToolKind::SendVoice => (
+                "Envia uma MENSAGEM DE VOZ (áudio PTT, com onda sonora). `path` = arquivo de áudio dentro da KB (ogg/opus de preferência; m4a/mp3 também) OU `text` = fala sintetizada (TTS, se houver chave da OpenAI). Exige aprovação. Nunca use sem pedido explícito do usuário.",
+                json!({
+                    "chat_id": {"type": "string", "description": "JID do chat/contato ou nome exato."},
+                    "phone": {"type": "string", "description": "Telefone com DDI (só dígitos), se o envio para não salvos estiver habilitado."},
+                    "path": {"type": "string", "description": "Arquivo de áudio dentro da KB (absoluto ou relativo à KB)."},
+                    "text": {"type": "string", "description": "Texto a ser falado (sintetizado em voz); alternativa a path."},
+                    "duration_secs": {"type": "integer", "minimum": 1, "description": "Duração em segundos (opcional; melhora a exibição)."}
+                }),
+                vec![],
+                ToolPolicy::Confirm,
+            ),
+            ToolKind::ContactInfo => (
+                "Informações públicas de um contato: se está no WhatsApp, recado (\"about\"), foto do perfil (URL), se é conta comercial (e o perfil comercial: descrição, e-mail, site, endereço, horários), nome verificado, mais o que o índice local sabe (nome, telefone). Com várias contas, informe `account`.",
+                json!({
+                    "contact": {"type": "string", "description": "JID, telefone com DDI ou nome exato do contato."}
+                }),
+                vec!["contact"],
+                ToolPolicy::Auto,
             ),
         };
         properties["account"] = json!({"type": "string", "description": account_desc});
@@ -285,6 +377,44 @@ impl WillTool for WaTool {
                     .unwrap_or_default();
                 format!("Enviar arquivo {path} por WhatsApp{via} para {target}{caption}")
             }
+            ToolKind::React => format!(
+                "Reagir com {} à mensagem {} no WhatsApp{via}",
+                arg_opt_str(args, "emoji")
+                    .filter(|e| !e.is_empty())
+                    .unwrap_or("(remover reação)"),
+                arg_opt_str(args, "message_id").unwrap_or("?")
+            ),
+            ToolKind::EditMessage => format!(
+                "Editar mensagem {} no WhatsApp{via}: {}",
+                arg_opt_str(args, "message_id").unwrap_or("?"),
+                truncate(arg_opt_str(args, "text").unwrap_or(""), 200)
+            ),
+            ToolKind::DeleteMessage => format!(
+                "Apagar mensagem {} no WhatsApp{via} ({})",
+                arg_opt_str(args, "message_id").unwrap_or("?"),
+                if arg_opt_bool(args, "for_everyone").unwrap_or(true) {
+                    "para todos"
+                } else {
+                    "só para mim"
+                }
+            ),
+            ToolKind::SendContact => format!(
+                "Enviar contato \"{}\" por WhatsApp{via} para {}",
+                arg_opt_str(args, "name").unwrap_or("(vCard)"),
+                arg_opt_str(args, "chat_id")
+                    .or_else(|| arg_opt_str(args, "phone"))
+                    .unwrap_or("?")
+            ),
+            ToolKind::SendVoice => format!(
+                "Enviar mensagem de voz por WhatsApp{via} para {}: {}",
+                arg_opt_str(args, "chat_id")
+                    .or_else(|| arg_opt_str(args, "phone"))
+                    .unwrap_or("?"),
+                arg_opt_str(args, "text")
+                    .map(|t| truncate(t, 160))
+                    .or_else(|| arg_opt_str(args, "path").map(str::to_string))
+                    .unwrap_or_default()
+            ),
             _ => format!("{} {}", self.kind.name(), truncate(&args.to_string(), 300)),
         }
     }
@@ -304,6 +434,13 @@ impl WillTool for WaTool {
                     ToolKind::MarkRead => mark_read(&m, &acc, &args).await?,
                     ToolKind::SendMessage => send_message(&m, &acc, &args).await?,
                     ToolKind::SendMedia => send_media(&m, &acc, &args).await?,
+                    ToolKind::React => react(&m, &acc, &args).await?,
+                    ToolKind::MessageStatus => message_status(&m, &acc, &args).await?,
+                    ToolKind::EditMessage => edit_message(&m, &acc, &args).await?,
+                    ToolKind::DeleteMessage => delete_message(&m, &acc, &args).await?,
+                    ToolKind::SendContact => send_contact(&m, &acc, &args).await?,
+                    ToolKind::SendVoice => send_voice(&m, &acc, &args).await?,
+                    ToolKind::ContactInfo => contact_info(&m, &acc, &args).await?,
                 };
                 out["account"] = json!(acc.id);
                 out["account_label"] = json!(acc.label());
@@ -1005,6 +1142,383 @@ async fn send_media(m: &WhatsAppModule, acc: &WaAccount, args: &Value) -> Result
             Err(ToolError::Failed(format!("falha ao enviar mídia: {e}")))
         }
     }
+}
+
+// ----- ferramentas novas (reação, status, edição, apagar, contato, voz, info) -----
+
+/// Mensagem do índice + referência de protocolo.
+async fn indexed_message(
+    m: &WhatsAppModule,
+    acc: &WaAccount,
+    id: &str,
+) -> Result<(will_storage::whatsapp::WaMessage, MessageRef), ToolError> {
+    let msg = m
+        .storage()
+        .wa_get_message(&acc.id, id)
+        .await
+        .map_err(db_err)?
+        .ok_or_else(|| {
+            ToolError::InvalidArgs(format!(
+                "mensagem {id} não encontrada no índice da conta {}",
+                acc.label()
+            ))
+        })?;
+    let r = MessageRef {
+        chat_jid: msg.chat_jid.clone(),
+        message_id: msg.id.clone(),
+        from_me: msg.from_me,
+        sender_jid: msg.sender_jid.clone(),
+        timestamp: Some(msg.at.timestamp()),
+    };
+    Ok((msg, r))
+}
+
+async fn react(m: &WhatsAppModule, acc: &WaAccount, args: &Value) -> Result<Value, ToolError> {
+    let id = arg_str(args, "message_id")?;
+    let emoji = arg_opt_str(args, "emoji").unwrap_or("").trim();
+    if emoji.chars().count() > 8 {
+        return Err(ToolError::InvalidArgs(
+            "emoji deve ser um único emoji".into(),
+        ));
+    }
+    let (msg, r) = indexed_message(m, acc, id).await?;
+    acc.backend
+        .send_reaction(&r, emoji)
+        .await
+        .map_err(|e| ToolError::Failed(format!("falha ao reagir: {e}")))?;
+    Ok(json!({
+        "ok": true,
+        "message_id": id,
+        "chat_id": msg.chat_jid,
+        "emoji": emoji,
+        "removed": emoji.is_empty(),
+    }))
+}
+
+async fn message_status(
+    m: &WhatsAppModule,
+    acc: &WaAccount,
+    args: &Value,
+) -> Result<Value, ToolError> {
+    let id = arg_str(args, "message_id")?;
+    let st = m.storage();
+    let outbox = st.wa_get_outbox(&acc.id, id).await.map_err(db_err)?;
+    let msg = st.wa_get_message(&acc.id, id).await.map_err(db_err)?;
+    let Some((status, error, at, chat_jid, kind)) = outbox else {
+        return match msg {
+            Some(x) if !x.from_me => Err(ToolError::InvalidArgs(format!(
+                "mensagem {id} não é nossa (recebida de {}); o status só existe para envios",
+                x.sender_name.or(x.sender_jid).unwrap_or_default()
+            ))),
+            Some(x) => Ok(json!({
+                "message_id": id,
+                "chat_id": x.chat_jid,
+                "status": "unknown",
+                "hint": "enviada por outro aparelho (telefone) ou antes do índice; sem recibos registrados",
+            })),
+            None => Err(ToolError::InvalidArgs(format!(
+                "mensagem {id} não encontrada na conta {}",
+                acc.label()
+            ))),
+        };
+    };
+    let label = match status.as_str() {
+        "sent" => "enviada (1 tique)",
+        "delivered" => "entregue (2 tiques)",
+        "read" => "lida (2 tiques azuis)",
+        "played" => "ouvida",
+        "error" => "falhou",
+        _ => "desconhecido",
+    };
+    let chat_name = st
+        .wa_get_chat(&acc.id, &chat_jid)
+        .await
+        .ok()
+        .flatten()
+        .and_then(|c| c.name);
+    Ok(json!({
+        "message_id": id,
+        "chat_id": chat_jid,
+        "chat_name": chat_name,
+        "kind": kind,
+        "status": status,
+        "status_label": label,
+        "error": error,
+        "sent_at": at,
+        "is_group": is_group_jid(&chat_jid),
+        "note": if is_group_jid(&chat_jid) { "em grupo, `read` indica o primeiro participante que leu" } else { "" },
+    }))
+}
+
+async fn edit_message(
+    m: &WhatsAppModule,
+    acc: &WaAccount,
+    args: &Value,
+) -> Result<Value, ToolError> {
+    let id = arg_str(args, "message_id")?;
+    let text = arg_str(args, "text")?;
+    if text.trim().is_empty() || text.len() > 65_000 {
+        return Err(ToolError::InvalidArgs(
+            "text vazio ou maior que 65000 bytes".into(),
+        ));
+    }
+    let (msg, r) = indexed_message(m, acc, id).await?;
+    if !msg.from_me {
+        return Err(ToolError::Forbidden(
+            "só mensagens enviadas por nós podem ser editadas".into(),
+        ));
+    }
+    if msg.kind != "text" {
+        return Err(ToolError::InvalidArgs(format!(
+            "só mensagens de texto podem ser editadas (esta é {})",
+            msg.kind
+        )));
+    }
+    acc.backend
+        .edit_message(&r, text)
+        .await
+        .map_err(|e| ToolError::Failed(format!("falha ao editar: {e}")))?;
+    let _ = m.storage().wa_set_text(&acc.id, id, text).await;
+    Ok(json!({"ok": true, "message_id": id, "chat_id": msg.chat_jid, "text": text}))
+}
+
+async fn delete_message(
+    m: &WhatsAppModule,
+    acc: &WaAccount,
+    args: &Value,
+) -> Result<Value, ToolError> {
+    let id = arg_str(args, "message_id")?;
+    let for_everyone = arg_opt_bool(args, "for_everyone").unwrap_or(true);
+    let (msg, r) = indexed_message(m, acc, id).await?;
+    if for_everyone && !msg.from_me && !is_group_jid(&msg.chat_jid) {
+        return Err(ToolError::Forbidden(
+            "numa conversa 1:1 só dá para apagar para todos as mensagens enviadas por nós; use for_everyone=false".into(),
+        ));
+    }
+    acc.backend
+        .delete_message(&r, for_everyone)
+        .await
+        .map_err(|e| ToolError::Failed(format!("falha ao apagar: {e}")))?;
+    let _ = m.storage().wa_delete_message(&acc.id, id).await;
+    Ok(json!({"ok": true, "message_id": id, "chat_id": msg.chat_jid, "for_everyone": for_everyone}))
+}
+
+async fn send_contact(
+    m: &WhatsAppModule,
+    acc: &WaAccount,
+    args: &Value,
+) -> Result<Value, ToolError> {
+    let (jid, chat_name) = resolve_send_target(m, acc, args).await?;
+    let (name, vcard) = match arg_opt_str(args, "vcard") {
+        Some(v) if v.contains("BEGIN:VCARD") => {
+            let name = arg_opt_str(args, "name")
+                .map(str::to_string)
+                .or_else(|| {
+                    v.lines()
+                        .find_map(|l| l.strip_prefix("FN:"))
+                        .map(|n| n.trim().to_string())
+                })
+                .unwrap_or_else(|| "Contato".into());
+            (name, v.to_string())
+        }
+        Some(_) => {
+            return Err(ToolError::InvalidArgs(
+                "vcard inválido (sem BEGIN:VCARD)".into(),
+            ))
+        }
+        None => {
+            let name = arg_str(args, "name")?.trim().to_string();
+            let phones: Vec<String> = args
+                .get("phones")
+                .and_then(|p| p.as_array())
+                .map(|a| {
+                    a.iter()
+                        .filter_map(|x| x.as_str().map(str::to_string))
+                        .collect()
+                })
+                .unwrap_or_default();
+            let phones: Vec<String> = phones.iter().filter_map(|p| phone_digits(p)).collect();
+            if name.is_empty() || phones.is_empty() {
+                return Err(ToolError::InvalidArgs(
+                    "informe name e ao menos um telefone válido em phones (ou um vcard pronto)"
+                        .into(),
+                ));
+            }
+            let vcard = build_vcard(&name, &phones, arg_opt_str(args, "org"));
+            (name, vcard)
+        }
+    };
+    check_rate_limit(m, acc).await?;
+    match acc.backend.send_contact(&jid, &name, &vcard).await {
+        Ok(id) => {
+            record_sent(
+                m,
+                acc,
+                &id,
+                &jid,
+                "contact",
+                Some(format!("📇 {name}")),
+                None,
+            )
+            .await;
+            Ok(
+                json!({"ok": true, "message_id": id, "chat_id": jid, "chat_name": chat_name, "name": name}),
+            )
+        }
+        Err(e) => {
+            let id = format!("err-{}", uuid::Uuid::new_v4());
+            let _ = m
+                .storage()
+                .wa_record_outbox(&acc.id, &id, &jid, "contact", "error", Some(&e), None)
+                .await;
+            Err(ToolError::Failed(format!("falha ao enviar contato: {e}")))
+        }
+    }
+}
+
+async fn send_voice(m: &WhatsAppModule, acc: &WaAccount, args: &Value) -> Result<Value, ToolError> {
+    let (jid, chat_name) = resolve_send_target(m, acc, args).await?;
+    let duration = arg_opt_i64(args, "duration_secs").map(|d| d.max(1) as u32);
+    let (path, synthesized) = match (arg_opt_str(args, "path"), arg_opt_str(args, "text")) {
+        (Some(p), _) => (resolve_kb_path(m.kb_path(), p)?, false),
+        (None, Some(text)) => {
+            let text = text.trim();
+            if text.is_empty() || text.len() > 4000 {
+                return Err(ToolError::InvalidArgs(
+                    "text vazio ou maior que 4000 bytes".into(),
+                ));
+            }
+            let tts = m.tts().ok_or_else(|| {
+                ToolError::Unavailable(
+                    "síntese de voz indisponível (sem chave da OpenAI em Configurações → Voz); envie um arquivo em `path`".into(),
+                )
+            })?;
+            let bytes = tts(text.to_string())
+                .await
+                .map_err(|e| ToolError::Failed(format!("síntese de voz: {e}")))?;
+            let dir = m.media_dir().join("voz");
+            std::fs::create_dir_all(&dir)
+                .map_err(|e| ToolError::Failed(format!("criar {}: {e}", dir.display())))?;
+            let p = dir.join(format!("voz-{}.ogg", uuid::Uuid::new_v4()));
+            std::fs::write(&p, &bytes)
+                .map_err(|e| ToolError::Failed(format!("gravar {}: {e}", p.display())))?;
+            (p, true)
+        }
+        (None, None) => {
+            return Err(ToolError::InvalidArgs(
+                "informe path (áudio na KB) ou text".into(),
+            ))
+        }
+    };
+    let mime = mime_for_path(&path);
+    if !mime.starts_with("audio/") {
+        return Err(ToolError::InvalidArgs(format!(
+            "o arquivo precisa ser áudio (ogg/opus, m4a, mp3, wav); {} é {mime}",
+            path.display()
+        )));
+    }
+    check_rate_limit(m, acc).await?;
+    match acc.backend.send_voice(&jid, &path, duration).await {
+        Ok(id) => {
+            let text = arg_opt_str(args, "text")
+                .map(|t| format!("🎤 {}", truncate(t, 500)))
+                .or_else(|| {
+                    path.file_name()
+                        .map(|f| format!("🎤 {}", f.to_string_lossy()))
+                });
+            record_sent(m, acc, &id, &jid, "audio", text, None).await;
+            Ok(json!({
+                "ok": true,
+                "message_id": id,
+                "chat_id": jid,
+                "chat_name": chat_name,
+                "path": path,
+                "synthesized": synthesized,
+                "mime": mime,
+            }))
+        }
+        Err(e) => {
+            let id = format!("err-{}", uuid::Uuid::new_v4());
+            let _ = m
+                .storage()
+                .wa_record_outbox(&acc.id, &id, &jid, "audio", "error", Some(&e), None)
+                .await;
+            Err(ToolError::Failed(format!("falha ao enviar voz: {e}")))
+        }
+    }
+}
+
+async fn contact_info(
+    m: &WhatsAppModule,
+    acc: &WaAccount,
+    args: &Value,
+) -> Result<Value, ToolError> {
+    let raw = arg_str(args, "contact")?.trim();
+    let st = m.storage();
+    // Número cru: confere no servidor se está no WhatsApp (JID canônico).
+    let mut on_whatsapp: Option<bool> = None;
+    let jid = if let Some(digits) = (!raw.contains('@')).then(|| phone_digits(raw)).flatten() {
+        match acc.backend.resolve_phone(&digits).await {
+            Ok(Some(j)) => {
+                on_whatsapp = Some(true);
+                j
+            }
+            Ok(None) => {
+                return Ok(json!({
+                    "contact": raw,
+                    "phone": digits,
+                    "on_whatsapp": false,
+                }))
+            }
+            Err(e) => {
+                tracing::debug!("resolve_phone {digits}: {e}");
+                resolve_chat_id(m, acc, raw).await?
+            }
+        }
+    } else {
+        resolve_chat_id(m, acc, raw).await?
+    };
+    // Dados locais (nome da agenda, push name, telefone).
+    let local = st
+        .wa_search_contacts(&acc.id, Some(&jid), 5)
+        .await
+        .map_err(db_err)?
+        .into_iter()
+        .find(|c| c.jid == jid);
+    let phone = local
+        .as_ref()
+        .and_then(|c| c.phone.clone())
+        .or_else(|| phone_from_jid(&jid));
+    // usync não responde para LID: consulta pelo JID de telefone quando o temos.
+    let query_jid = if jid.ends_with("@lid") {
+        phone
+            .as_deref()
+            .map(jid_from_phone)
+            .unwrap_or_else(|| jid.clone())
+    } else {
+        jid.clone()
+    };
+    let remote = acc
+        .backend
+        .contact_info(&query_jid)
+        .await
+        .map_err(|e| ToolError::Failed(format!("consulta ao WhatsApp: {e}")))?;
+    let chat = st.wa_get_chat(&acc.id, &jid).await.ok().flatten();
+    let mut out = json!({
+        "contact": raw,
+        "jid": jid,
+        "phone": phone,
+        "on_whatsapp": on_whatsapp.unwrap_or(true),
+        "name": local.as_ref().and_then(|c| c.name.clone()).or_else(|| chat.as_ref().and_then(|c| c.name.clone())),
+        "push_name": local.as_ref().and_then(|c| c.push_name.clone()),
+        "last_message_at": chat.as_ref().and_then(|c| c.last_message_at.as_ref().map(rfc3339)),
+    });
+    if let Value::Object(r) = remote {
+        for (k, v) in r {
+            out[k] = v;
+        }
+    }
+    Ok(out)
 }
 
 // ----- ferramentas (agregadas: várias contas, sem `account`) -----

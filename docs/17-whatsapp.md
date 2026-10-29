@@ -57,6 +57,19 @@ Prefixo `whatsapp_`. Cada uma tem toggle e **política** (`auto` / `confirmar` /
 | `whatsapp_mark_read` | `chat_id` | ok | auto (toggle: enviar recibo azul ou só local) |
 | `whatsapp_send_message` | `chat_id` ou `phone`, `text`, `reply_to?` | `message_id` | **confirmar** |
 | `whatsapp_send_media` | `chat_id`, `path` (dentro da KB), `caption?` | `message_id` | **confirmar** |
+| `whatsapp_react` | `message_id`, `emoji` (vazio = remover) | ok | **confirmar** |
+| `whatsapp_message_status` | `message_id` (de um envio nosso) | `status: sent\|delivered\|read\|played\|error` + rótulo, `sent_at`, `error` (do `wa_outbox`, atualizado pelos recibos) | auto |
+| `whatsapp_edit_message` | `message_id` (nossa, texto), `text` | ok; índice atualizado | **confirmar** |
+| `whatsapp_delete_message` | `message_id`, `for_everyone?` (padrão true; em 1:1 só mensagens nossas) | ok; sai do índice | **confirmar** |
+| `whatsapp_send_contact` | `chat_id` ou `phone`, `name` + `phones[]` (+ `org?`) **ou** `vcard` | `message_id` | **confirmar** |
+| `whatsapp_send_voice` | `chat_id` ou `phone`, `path` (áudio na KB) **ou** `text` (TTS OpenAI: voz/velocidade do "ouvir resumo"), `duration_secs?` | `message_id`, `synthesized` | **confirmar** |
+| `whatsapp_contact_info` | `contact` (JID, telefone ou nome) | `on_whatsapp`, `jid`, `phone`, `name`, `push_name`, `status` (recado), `picture_url`, `is_business`, `verified_name`, `business {description, email, website, address, business_hours}`, `devices` | auto |
+
+Notas das ferramentas de 2026-10-29 (lote 1):
+- Reagir/editar/apagar usam a **chave da mensagem** reconstruída do índice (`chat`, `id`, `from_me`, remetente em grupo) — `MessageRef` em `backend.rs`. Editar só mensagens nossas de texto; apagar para todos só as nossas (ou de outros se formos admin do grupo); "só para mim" vale para qualquer uma.
+- `whatsapp_message_status` lê o `wa_outbox`, que `handle_receipt` já atualiza (`sent → delivered → read/played`). Mensagens enviadas pelo telefone (fora do índice) voltam `unknown`.
+- `whatsapp_send_voice { text }` depende da chave da OpenAI do módulo de voz: o servidor injeta `WhatsAppDeps.tts` (closure que chama `OpenAi::synthesize` em Ogg/Opus). O arquivo gerado fica em `<media_dir>/voz/`. Sem chave, a ferramenta pede `path`.
+- `whatsapp_contact_info` consulta o servidor por `usync` (`get_user_info`), foto (`get_profile_picture`) e perfil comercial; LID é convertido para o JID de telefone conhecido antes da consulta.
 
 Seleção de conta (`account`):
 - Exatamente **uma** conta conectada → ela é usada (com `account` informado, precisa bater).

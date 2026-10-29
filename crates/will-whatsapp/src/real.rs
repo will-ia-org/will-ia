@@ -7,7 +7,7 @@
 
 use crate::backend::{
     ext_for_mime, is_group_jid, media_class, mime_for_path, phone_from_jid, BackendEvent,
-    IncomingMessage, WhatsAppBackend,
+    IncomingMessage, MessageRef, WhatsAppBackend,
 };
 use base64::prelude::*;
 use chrono::{DateTime, Utc};
@@ -20,6 +20,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use tokio::sync::mpsc;
 use whatsapp_rust::bot::{Bot, BotHandle};
+use whatsapp_rust::buffa;
 use whatsapp_rust::client::Client;
 use whatsapp_rust::download::DownloadParams;
 use whatsapp_rust::media::{
@@ -27,6 +28,7 @@ use whatsapp_rust::media::{
     ImageOptions, VideoOptions,
 };
 use whatsapp_rust::pair_code::PairCodeOptions;
+use whatsapp_rust::send::RevokeType;
 use whatsapp_rust::store::SqliteStore;
 use whatsapp_rust::upload::UploadOptions;
 use whatsapp_rust::wacore::download::{Downloadable, MediaType};
@@ -460,6 +462,158 @@ impl WhatsAppBackend for RealBackend {
         }))
     }
 
+    async fn send_reaction(&self, msg: &MessageRef, emoji: &str) -> Result<(), String> {
+        let client = self.connected_client()?;
+        let (jid, key, _) = message_key(msg)?;
+        client
+            .send_reaction(jid, key, emoji)
+            .await
+            .map(|_| ())
+            .map_err(|e| e.to_string())
+    }
+
+    async fn edit_message(&self, msg: &MessageRef, new_text: &str) -> Result<(), String> {
+        let client = self.connected_client()?;
+        let jid = parse_jid(&msg.chat_jid)?;
+        client
+            .edit_message(jid, msg.message_id.clone(), wa::Message::text(new_text))
+            .await
+            .map(|_| ())
+            .map_err(|e| e.to_string())
+    }
+
+    async fn delete_message(&self, msg: &MessageRef, for_everyone: bool) -> Result<(), String> {
+        let client = self.connected_client()?;
+        let (jid, _, participant) = message_key(msg)?;
+        if for_everyone {
+            let revoke = if msg.from_me {
+                RevokeType::Sender
+            } else {
+                let sender = msg
+                    .sender_jid
+                    .as_deref()
+                    .ok_or("mensagem de outro sem remetente conhecido")?;
+                RevokeType::Admin {
+                    original_sender: parse_jid(sender)?,
+                }
+            };
+            return client
+                .revoke_message(jid, msg.message_id.clone(), revoke)
+                .await
+                .map_err(|e| e.to_string());
+        }
+        client
+            .chat_actions()
+            .delete_message_for_me(
+                &jid,
+                participant.as_ref(),
+                &msg.message_id,
+                msg.from_me,
+                false,
+                msg.timestamp,
+            )
+            .await
+            .map_err(|e| e.to_string())
+    }
+
+    async fn send_contact(
+        &self,
+        chat_jid: &str,
+        display_name: &str,
+        vcard: &str,
+    ) -> Result<String, String> {
+        let client = self.connected_client()?;
+        let jid = parse_jid(chat_jid)?;
+        let message = wa::Message {
+            contact_message: buffa::MessageField::some(wa::message::ContactMessage {
+                display_name: Some(display_name.to_string()),
+                vcard: Some(vcard.to_string()),
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+        let res = client
+            .send_message(jid, message)
+            .await
+            .map_err(|e| e.to_string())?;
+        Ok(res.message_id)
+    }
+
+    async fn send_voice(
+        &self,
+        chat_jid: &str,
+        path: &Path,
+        duration_secs: Option<u32>,
+    ) -> Result<String, String> {
+        let client = self.connected_client()?;
+        let jid = parse_jid(chat_jid)?;
+        let data = tokio::fs::read(path)
+            .await
+            .map_err(|e| format!("ler {}: {e}", path.display()))?;
+        let mime = match mime_for_path(path) {
+            "audio/ogg" => "audio/ogg; codecs=opus".to_string(),
+            other => other.to_string(),
+        };
+        let upload = client
+            .upload(data, MediaType::Audio, UploadOptions::new())
+            .await
+            .map_err(|e| format!("upload: {e}"))?;
+        let message = audio_message(
+            upload,
+            AudioOptions {
+                mimetype: Some(mime),
+                ptt: Some(true),
+                duration_seconds: duration_secs,
+                ..Default::default()
+            },
+        );
+        let res = client
+            .send_message(jid, message)
+            .await
+            .map_err(|e| e.to_string())?;
+        Ok(res.message_id)
+    }
+
+    async fn contact_info(&self, jid: &str) -> Result<Value, String> {
+        let client = self.connected_client()?;
+        let j = parse_jid(jid)?;
+        let contacts = client.contacts();
+        let infos = contacts
+            .get_user_info(std::slice::from_ref(&j))
+            .await
+            .map_err(|e| e.to_string())?;
+        let info = infos.get(&j).or_else(|| infos.values().next());
+        let picture = contacts
+            .get_profile_picture(&j, false)
+            .await
+            .ok()
+            .flatten()
+            .map(|p| p.url);
+        let is_business = info.map(|i| i.is_business).unwrap_or(false);
+        let business = if is_business {
+            client
+                .get_business_profile(&j)
+                .await
+                .ok()
+                .flatten()
+                .and_then(|b| serde_json::to_value(b).ok())
+        } else {
+            None
+        };
+        Ok(json!({
+            "jid": j.to_non_ad_string(),
+            "lid": info.and_then(|i| i.lid.as_ref().map(|l| l.to_non_ad_string())),
+            "is_business": is_business,
+            "verified_name": info
+                .and_then(|i| i.verified_name.as_ref())
+                .and_then(|v| v.name.clone()),
+            "status": info.and_then(|i| i.status.clone()),
+            "picture_url": picture,
+            "devices": info.map(|i| i.devices.len()).unwrap_or(0),
+            "business": business,
+        }))
+    }
+
     fn connected(&self) -> bool {
         self.shared.connected.load(Ordering::SeqCst)
             && self
@@ -472,6 +626,31 @@ impl WhatsAppBackend for RealBackend {
     fn me(&self) -> Option<Value> {
         self.shared.me.lock().clone()
     }
+}
+
+fn parse_jid(s: &str) -> Result<Jid, String> {
+    Jid::from_str(s).map_err(|e| format!("JID inválido {s}: {e}"))
+}
+
+/// Chave de protocolo de uma mensagem conhecida: `(chat, MessageKey, participante)`.
+/// Em grupo, mensagem de outro precisa do participante (remetente).
+fn message_key(msg: &MessageRef) -> Result<(Jid, wa::MessageKey, Option<Jid>), String> {
+    let chat = parse_jid(&msg.chat_jid)?;
+    let participant = if is_group_jid(&msg.chat_jid) && !msg.from_me {
+        match msg.sender_jid.as_deref() {
+            Some(s) => Some(parse_jid(s)?),
+            None => None,
+        }
+    } else {
+        None
+    };
+    let key = wa::MessageKey {
+        remote_jid: Some(msg.chat_jid.clone()),
+        from_me: Some(msg.from_me),
+        id: Some(msg.message_id.clone()),
+        participant: participant.as_ref().map(|p| p.to_non_ad_string()),
+    };
+    Ok((chat, key, participant))
 }
 
 impl Shared {

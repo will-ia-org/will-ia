@@ -10,7 +10,7 @@
 //!   por número pareado, backends criados por [`BackendFactory`]), loop único de
 //!   eventos `(account_id, BackendEvent)` → índice por conta, eventos
 //!   `Event::WhatsApp{state, detail}` (JSON com `account_id`) no barramento,
-//!   poda por retenção e `ToolProvider` com as 9 ferramentas (parâmetro `account`).
+//!   poda por retenção e `ToolProvider` com as 16 ferramentas (parâmetro `account`).
 
 pub mod backend;
 pub mod mock;
@@ -19,10 +19,10 @@ pub mod module;
 pub mod real;
 pub mod tools;
 
-pub use backend::{BackendEvent, IncomingMessage, WhatsAppBackend};
-pub use mock::{MockBackend, MockSent};
+pub use backend::{BackendEvent, IncomingMessage, MessageRef, WhatsAppBackend};
+pub use mock::{MockAction, MockBackend, MockSent};
 pub use module::{
-    is_default_label, BackendFactory, ConnState, WaAccount, WhatsAppDeps, WhatsAppModule,
+    is_default_label, BackendFactory, ConnState, Tts, WaAccount, WhatsAppDeps, WhatsAppModule,
 };
 #[cfg(feature = "real")]
 pub use real::RealBackend;

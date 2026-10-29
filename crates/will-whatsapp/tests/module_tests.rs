@@ -12,6 +12,7 @@ use will_core::{
     AppPaths, Event, EventBus, ModuleStatus, ToolContext, ToolError, ToolOutput, ToolProvider,
 };
 use will_storage::Storage;
+use will_whatsapp::MockAction;
 use will_whatsapp::{
     BackendEvent, BackendFactory, ConnState, IncomingMessage, MockBackend, WhatsAppDeps,
     WhatsAppModule,
@@ -118,6 +119,7 @@ async fn harness(
         paths: paths(&tmp),
         bus,
         kb_path: kb,
+        tts: None,
     };
     let module = WhatsAppModule::new(deps, settings, factory);
     Harness {
@@ -415,14 +417,26 @@ async fn tools_unavailable_when_disconnected() {
             "whatsapp_download_media",
             "whatsapp_mark_read",
             "whatsapp_send_message",
-            "whatsapp_send_media"
+            "whatsapp_send_media",
+            "whatsapp_react",
+            "whatsapp_message_status",
+            "whatsapp_edit_message",
+            "whatsapp_delete_message",
+            "whatsapp_send_contact",
+            "whatsapp_send_voice",
+            "whatsapp_contact_info"
         ]
     );
     for t in h.module.tools() {
         let spec = t.spec();
         assert_eq!(spec.family, "whatsapp");
         assert_eq!(spec.requires, vec![will_core::Module::WhatsApp]);
-        let confirm = spec.name.starts_with("whatsapp_send_");
+        // Efeito externo = confirmar: envios, reação, edição e apagar.
+        let confirm = spec.name.starts_with("whatsapp_send_")
+            || matches!(
+                spec.name.as_str(),
+                "whatsapp_react" | "whatsapp_edit_message" | "whatsapp_delete_message"
+            );
         assert_eq!(
             spec.default_policy == will_core::ToolPolicy::Confirm,
             confirm,
@@ -1182,6 +1196,7 @@ async fn new_default_without_real_feature_reports_unavailable() {
         paths: paths(&tmp),
         bus: EventBus::default(),
         kb_path: tmp.path().to_path_buf(),
+        tts: None,
     };
     let m = WhatsAppModule::new_default(deps, settings());
     let err = m.pair(None, None, None).await.unwrap_err();
@@ -1553,4 +1568,264 @@ async fn update_settings_and_set_account_reconcile_accounts() {
     h.module.start().await.unwrap();
     assert!(h.module.account(ACC1).unwrap().is_connected());
     assert_eq!(h.module.module_status(), ModuleStatus::Running);
+}
+
+#[tokio::test]
+async fn lote1_react_status_edit_delete_contact_voice_info() {
+    let s = WhatsAppSettings {
+        send_rate_limit_count: 0,
+        ..settings()
+    };
+    let h = connected_harness(s).await;
+    let ana = "5511911111111@s.whatsapp.net";
+    h.b()
+        .push(BackendEvent::Message(msg(
+            "m1",
+            ana,
+            ana,
+            "oi, tudo bem?",
+            false,
+            10,
+        )))
+        .await;
+    h.b()
+        .push(BackendEvent::Message(msg(
+            "m2", ana, ME1, "tudo sim", true, 5,
+        )))
+        .await;
+    wait_indexed(&h, 2).await;
+
+    // --- reagir (qualquer mensagem; chave reconstruída do índice)
+    let out = call(
+        &h.module,
+        "whatsapp_react",
+        json!({"message_id": "m1", "emoji": "👍"}),
+    )
+    .await
+    .unwrap();
+    assert_eq!(out.structured.unwrap()["ok"], true);
+    match h.b().actions().last() {
+        Some(MockAction::Reaction { msg, emoji }) => {
+            assert_eq!(emoji, "👍");
+            assert_eq!(msg.message_id, "m1");
+            assert_eq!(msg.chat_jid, ana);
+            assert!(!msg.from_me);
+        }
+        other => panic!("esperava Reaction, veio {other:?}"),
+    }
+    // remover reação = emoji vazio
+    let out = call(
+        &h.module,
+        "whatsapp_react",
+        json!({"message_id": "m1", "emoji": ""}),
+    )
+    .await
+    .unwrap();
+    assert_eq!(out.structured.unwrap()["removed"], true);
+
+    // --- editar: só mensagens nossas
+    let r = call(
+        &h.module,
+        "whatsapp_edit_message",
+        json!({"message_id": "m1", "text": "x"}),
+    )
+    .await;
+    assert!(matches!(r, Err(ToolError::Forbidden(_))), "{r:?}");
+    let out = call(
+        &h.module,
+        "whatsapp_edit_message",
+        json!({"message_id": "m2", "text": "tudo ótimo"}),
+    )
+    .await
+    .unwrap();
+    assert_eq!(out.structured.unwrap()["ok"], true);
+    let out = call(&h.module, "whatsapp_get_messages", json!({"chat_id": ana}))
+        .await
+        .unwrap();
+    let v = out.structured.unwrap();
+    let m2 = v["messages"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|m| m["message_id"] == "m2")
+        .unwrap();
+    assert_eq!(m2["text"], "tudo ótimo");
+
+    // --- apagar: em 1:1, "para todos" só as nossas; "só para mim" qualquer uma
+    let r = call(
+        &h.module,
+        "whatsapp_delete_message",
+        json!({"message_id": "m1"}),
+    )
+    .await;
+    assert!(matches!(r, Err(ToolError::Forbidden(_))), "{r:?}");
+    let out = call(
+        &h.module,
+        "whatsapp_delete_message",
+        json!({"message_id": "m1", "for_everyone": false}),
+    )
+    .await
+    .unwrap();
+    assert_eq!(out.structured.unwrap()["for_everyone"], false);
+    assert!(matches!(
+        h.b().actions().last(),
+        Some(MockAction::Delete {
+            for_everyone: false,
+            ..
+        })
+    ));
+    let out = call(&h.module, "whatsapp_get_messages", json!({"chat_id": ana}))
+        .await
+        .unwrap();
+    assert_eq!(out.structured.unwrap()["count"], 1, "m1 saiu do índice");
+
+    // --- contato (vCard montado)
+    let out = call(
+        &h.module,
+        "whatsapp_send_contact",
+        json!({"chat_id": ana, "name": "Bia Souza", "phones": ["+55 11 98888-7777"], "org": "Devmania"}),
+    )
+    .await
+    .unwrap();
+    let v = out.structured.unwrap();
+    assert_eq!(v["ok"], true);
+    let contact_id = v["message_id"].as_str().unwrap().to_string();
+    match h.b().actions().last() {
+        Some(MockAction::Contact {
+            chat_jid,
+            name,
+            vcard,
+        }) => {
+            assert_eq!(chat_jid, ana);
+            assert_eq!(name, "Bia Souza");
+            assert!(vcard.contains("waid=5511988887777"), "{vcard}");
+            assert!(vcard.contains("ORG:Devmania;"), "{vcard}");
+        }
+        other => panic!("esperava Contact, veio {other:?}"),
+    }
+    // sem name/phones nem vcard → argumento inválido
+    let r = call(
+        &h.module,
+        "whatsapp_send_contact",
+        json!({"chat_id": ana, "name": "Só nome"}),
+    )
+    .await;
+    assert!(matches!(r, Err(ToolError::InvalidArgs(_))), "{r:?}");
+
+    // --- voz: arquivo dentro da KB; text sem TTS configurado → indisponível
+    let kb = h.tmp.path().join("kb");
+    std::fs::write(kb.join("nota.ogg"), b"OggS fake").unwrap();
+    let out = call(
+        &h.module,
+        "whatsapp_send_voice",
+        json!({"chat_id": ana, "path": "nota.ogg", "duration_secs": 7}),
+    )
+    .await
+    .unwrap();
+    let v = out.structured.unwrap();
+    assert_eq!(v["synthesized"], false);
+    let voice_id = v["message_id"].as_str().unwrap().to_string();
+    assert!(matches!(
+        h.b().actions().last(),
+        Some(MockAction::Voice {
+            duration_secs: Some(7),
+            ..
+        })
+    ));
+    let r = call(
+        &h.module,
+        "whatsapp_send_voice",
+        json!({"chat_id": ana, "text": "olá em voz"}),
+    )
+    .await;
+    assert!(matches!(r, Err(ToolError::Unavailable(_))), "{r:?}");
+    std::fs::write(kb.join("foto.png"), b"png").unwrap();
+    let r = call(
+        &h.module,
+        "whatsapp_send_voice",
+        json!({"chat_id": ana, "path": "foto.png"}),
+    )
+    .await;
+    assert!(matches!(r, Err(ToolError::InvalidArgs(_))), "{r:?}");
+
+    // --- status: sent → delivered → read pelos recibos; recebida não tem status
+    let st = |id: &str| json!({"message_id": id});
+    let out = call(&h.module, "whatsapp_message_status", st(&voice_id))
+        .await
+        .unwrap();
+    assert_eq!(out.structured.unwrap()["status"], "sent");
+    h.b()
+        .push(BackendEvent::Receipt {
+            chat_jid: ana.into(),
+            message_ids: vec![voice_id.clone(), contact_id.clone()],
+            kind: "delivered".into(),
+        })
+        .await;
+    settle().await;
+    let out = call(&h.module, "whatsapp_message_status", st(&contact_id))
+        .await
+        .unwrap();
+    assert_eq!(out.structured.unwrap()["status"], "delivered");
+    h.b()
+        .push(BackendEvent::Receipt {
+            chat_jid: ana.into(),
+            message_ids: vec![voice_id.clone()],
+            kind: "played".into(),
+        })
+        .await;
+    settle().await;
+    let out = call(&h.module, "whatsapp_message_status", st(&voice_id))
+        .await
+        .unwrap();
+    let v = out.structured.unwrap();
+    assert_eq!(v["status"], "read");
+    assert_eq!(v["kind"], "audio");
+    let r = call(&h.module, "whatsapp_message_status", st("m2")).await; // nossa, mas do "telefone"
+    assert_eq!(r.unwrap().structured.unwrap()["status"], "unknown");
+    let r = call(&h.module, "whatsapp_message_status", st("nope")).await;
+    assert!(matches!(r, Err(ToolError::InvalidArgs(_))), "{r:?}");
+
+    // --- info de contato: junta índice + consulta ao backend
+    h.module
+        .storage()
+        .wa_upsert_contact(&contact(ACC1, ana, "Ana Lima"))
+        .await
+        .unwrap();
+    let out = call(
+        &h.module,
+        "whatsapp_contact_info",
+        json!({"contact": "Ana Lima"}),
+    )
+    .await
+    .unwrap();
+    let v = out.structured.unwrap();
+    assert_eq!(v["jid"], ana);
+    assert_eq!(v["name"], "Ana Lima");
+    assert_eq!(v["on_whatsapp"], true);
+    assert_eq!(v["status"], "mock: disponível");
+    assert_eq!(v["is_business"], true);
+    // número que não está no WhatsApp
+    h.b().set_phone("5511900009999", None);
+    let out = call(
+        &h.module,
+        "whatsapp_contact_info",
+        json!({"contact": "+55 11 90000-9999"}),
+    )
+    .await
+    .unwrap();
+    assert_eq!(out.structured.unwrap()["on_whatsapp"], false);
+
+    // --- resumo de aprovação das novas ferramentas
+    let tool = h
+        .module
+        .tools()
+        .into_iter()
+        .find(|t| t.spec().name == "whatsapp_send_voice")
+        .unwrap();
+    let summary = tool.approval_summary(&json!({"chat_id": ana, "text": "olá"}));
+    assert!(
+        summary.contains("mensagem de voz") && summary.contains("olá"),
+        "{summary}"
+    );
+    assert_eq!(h.module.tools().len(), 16);
 }

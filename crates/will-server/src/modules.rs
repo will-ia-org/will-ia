@@ -518,12 +518,35 @@ pub async fn start_whatsapp(state: &Arc<AppState>) {
             m
         }
         None => {
+            // Voz sintetizada para `whatsapp_send_voice { text }`: usa a chave da
+            // OpenAI e a voz/velocidade do "ouvir resumo" (Configurações → Voz).
+            let tts: will_whatsapp::Tts = {
+                let st = state.clone();
+                std::sync::Arc::new(move |text: String| {
+                    let st = st.clone();
+                    Box::pin(async move {
+                        let key = openai_key(&st).await.ok_or_else(|| {
+                            "sem chave da OpenAI (Configurações → Voz)".to_string()
+                        })?;
+                        let cfg = st.settings().realtime.summary;
+                        let voice = if cfg.voice.trim().is_empty() {
+                            st.settings().realtime.voice
+                        } else {
+                            cfg.voice
+                        };
+                        will_realtime::openai::OpenAi::new(key)
+                            .synthesize(&text, &voice, cfg.speed)
+                            .await
+                    })
+                })
+            };
             let m = will_whatsapp::WhatsAppModule::new_default(
                 will_whatsapp::WhatsAppDeps {
                     storage: state.storage.clone(),
                     paths: state.paths.clone(),
                     bus: state.bus.clone(),
                     kb_path: kb,
+                    tts: Some(tts),
                 },
                 s.clone(),
             );
