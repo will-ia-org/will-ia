@@ -28,6 +28,7 @@
 | 24 | [Agendamentos](24-scheduler.md) | Scheduler: cron/único por thread, laço de disparo, recriação da thread dona, ferramentas `schedule_*` |
 | 25 | [Browser CDP](25-browser-cdp.md) | Proxy local do Chrome DevTools Protocol para o agent-browser: `AGENT_BROWSER_CDP`, lançamento do navegador sob demanda, log de tráfego, instalação do CLI e da skill |
 | 26 | [Separação cliente/servidor](26-cliente-servidor.md) | Fase 5 (planejada): servidor residente + app cliente HTTP/WS, contas, voz por usuário, impactos e etapas |
+| 27 | [Instalador](27-instalador.md) | `will-ia-setup`: assistente de instalação/atualização por usuário (Windows/Linux/macOS), binários embutidos, serviço no login, atalhos, dados preservados, CLI |
 | — | [ADRs](adr/README.md) | Decisões arquiteturais |
 | — | [Diagnósticos](diagnosticos/) | Investigações de problemas reais com evidências, causa-raiz e correção (ex.: Browser CDP × Chrome sem `/json/version`, 2026-10-28) |
 

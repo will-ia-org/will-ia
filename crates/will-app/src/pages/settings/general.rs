@@ -19,6 +19,10 @@ impl GeneralPage {
             Some(tr("Comportamento do aplicativo nesta máquina.")),
         );
         let portable = cx.snap.portable_root.is_some();
+        // Instalado pelo will-ia-setup (docs/27): o início com o sistema é o
+        // LaunchAgent/unit/chave Run do instalador; não registrar um segundo
+        // mecanismo (no macOS seriam dois servidores no login).
+        let managed = installer_managed();
         ui::section(ui, tr("Aplicativo"), |ui| {
             let g = &mut st.draft.general;
             ui::field(
@@ -26,11 +30,13 @@ impl GeneralPage {
                 tr("Iniciar com o sistema"),
                 Some(if portable {
                     tr("Indisponível em modo portátil (pendrive).")
+                } else if managed {
+                    tr("Gerenciado pelo instalador (will-ia-setup): para mudar, rode o instalador de novo.")
                 } else {
                     tr("Registra o will-ia no login do usuário (inicia na bandeja).")
                 }),
                 |ui| {
-                    ui.add_enabled_ui(!portable, |ui| {
+                    ui.add_enabled_ui(!portable && !managed, |ui| {
                         ui::toggle(ui, &mut g.autostart);
                     });
                 },
@@ -113,9 +119,10 @@ impl GeneralPage {
         }
         st.save_bar(ui, cx.svc, "general");
 
-        // Aplica autostart quando o valor salvo muda (não em modo portátil).
+        // Aplica autostart quando o valor salvo muda (não em modo portátil nem
+        // quando o instalador cuida disso).
         let saved = st.saved.general.autostart && !portable;
-        if self.last_autostart != Some(saved) {
+        if !managed && self.last_autostart != Some(saved) {
             self.last_autostart = Some(saved);
             self.autostart_error = apply_autostart(saved).err();
         }
@@ -194,4 +201,13 @@ fn apply_autostart(enable: bool) -> Result<(), String> {
         al.disable().map_err(|e| format!("autostart: {e}"))?;
     }
     Ok(())
+}
+
+/// `<data_dir>/install-manifest.json` existe = instalado pelo `will-ia-setup`,
+/// que registra o início com o sistema por conta própria.
+fn installer_managed() -> bool {
+    will_core::AppPaths::resolve()
+        .data_dir
+        .join("install-manifest.json")
+        .is_file()
 }

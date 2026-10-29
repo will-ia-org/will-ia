@@ -163,6 +163,7 @@ pub static TABLE: &[(&str, &str)] = &[
     ("Comportamento do aplicativo nesta máquina.", "How the app behaves on this machine."),
     ("Aplicativo", "Application"),
     ("Iniciar com o sistema", "Start with the system"),
+    ("Gerenciado pelo instalador (will-ia-setup): para mudar, rode o instalador de novo.", "Managed by the installer (will-ia-setup): run the installer again to change it."),
     ("Indisponível em modo portátil (pendrive).", "Unavailable in portable mode (USB drive)."),
     ("Registra o will-ia no login do usuário (inicia na bandeja).", "Registers will-ia at user login (starts in the tray)."),
     ("Idioma da UI", "UI language"),

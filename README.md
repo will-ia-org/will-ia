@@ -96,7 +96,9 @@ Coloque os binários (`will-ia-<os>-<arch>` e `will-ia-app-<os>-<arch>`) em `bin
 
 ## Distribuição
 
-Binários prontos em [Releases](https://github.com/will-ia-org/will-ia/releases), sempre com `will-ia` **e** `will-ia-app` juntos: Linux x86_64 (`.tar.gz` e `.deb`, com `.desktop` do app e *user unit* do servidor: `systemctl --user enable --now will-ia`), Windows x86_64 (`.zip` com os dois `.exe`), macOS Intel e Apple Silicon (`.tar.gz` e `will-ia.app`, cujo executável principal é o app e leva o servidor ao lado), e o pacote portátil `will-ia-<versão>-portable.zip` para pendrive. Gerados pelo workflow `release.yml` a cada tag `v*`. Instalador Windows, `.dmg` e notarização ficam para depois; detalhes em [`docs/13`](docs/13-plataformas-e-distribuicao.md).
+**Jeito recomendado: o instalador.** Em [Releases](https://github.com/will-ia-org/will-ia/releases) baixe `will-ia-setup-<versão>-<plataforma>` (Linux/Windows) ou `will-ia-setup-<versão>-macos-<arch>.app.zip` (macOS), abra e siga o assistente: ele instala/atualiza por usuário, registra o servidor no login, cria os atalhos e preserva seus dados (`docs/27`). Servidor sem tela: `./will-ia-setup --yes`.
+
+Pacotes manuais, sempre com `will-ia` **e** `will-ia-app` juntos: Linux x86_64 (`.tar.gz` e `.deb`, com `.desktop` do app e *user unit* do servidor: `systemctl --user enable --now will-ia`), Windows x86_64 (`.zip` com os dois `.exe`), macOS Intel e Apple Silicon (`.tar.gz` e `will-ia.app`, cujo executável principal é o app e leva o servidor ao lado), e o pacote portátil `will-ia-<versão>-portable.zip` para pendrive. Gerados pelo workflow `release.yml` a cada tag `v*`. Instalador Windows, `.dmg` e notarização ficam para depois; detalhes em [`docs/13`](docs/13-plataformas-e-distribuicao.md).
 
 ## Documentação
 

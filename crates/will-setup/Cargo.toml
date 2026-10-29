@@ -1,0 +1,25 @@
+[package]
+name = "will-setup"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "will-ia-setup — instalador/atualizador por usuário (assistente gráfico ou CLI) do servidor will-ia e do app will-ia-app"
+build = "build.rs"
+
+[[bin]]
+name = "will-ia-setup"
+path = "src/main.rs"
+
+[dependencies]
+will-platform.workspace = true
+anyhow.workspace = true
+clap.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+chrono.workspace = true
+directories.workspace = true
+eframe.workspace = true
+egui.workspace = true
+
+[lints]
+workspace = true

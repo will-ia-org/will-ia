@@ -211,6 +211,21 @@ pub fn is_dangerous_kb(path: &Path) -> bool {
     false
 }
 
+/// Windows: um binário com `windows_subsystem = "windows"` não tem console; quando
+/// é chamado de um terminal (modo CLI), religa a saída ao console do pai para
+/// `println!` aparecer. Nos outros SOs não faz nada.
+pub fn attach_parent_console() {
+    #[cfg(windows)]
+    {
+        use windows_sys::Win32::System::Console::{AttachConsole, ATTACH_PARENT_PROCESS};
+        // SAFETY: chamada simples da API do Windows, sem ponteiros; falha (sem pai com
+        // console) é ignorada.
+        unsafe {
+            let _ = AttachConsole(ATTACH_PARENT_PROCESS);
+        }
+    }
+}
+
 #[cfg(test)]
 mod which_tests {
     use super::*;

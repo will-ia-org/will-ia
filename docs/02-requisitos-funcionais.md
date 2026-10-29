@@ -201,3 +201,16 @@ Convenção de identificação: `RF-<módulo>-<nº>`. Prioridade: **M** (Must, M
 | RF-LOG-01 | Logs estruturados em arquivo com rotação diária e retenção configurável. | M |
 | RF-LOG-02 | A seção Logs da UI mostra os últimos eventos com filtro por módulo e nível. | S |
 | RF-LOG-03 | Botão "Exportar diagnóstico" gera um zip com logs (segredos redigidos), configuração sanitizada e versões. | C |
+
+## RF-INST — Instalador (`will-ia-setup`, ADR-0021)
+
+| ID | Requisito | Prioridade |
+|---|---|---|
+| RF-INST-01 | Um binário por plataforma (Windows, Linux, macOS) com `will-ia` e `will-ia-app` embutidos; assistente gráfico (egui) com Boas-vindas → Verificações → Opções → Instalação → Concluído e modo texto equivalente (`--cli`, `--yes`), automático sem sessão gráfica. | M |
+| RF-INST-02 | Instalação **por usuário**, sem privilégios: binários em `~/Applications/will-ia.app` · `~/.local/bin` · `%LOCALAPPDATA%\Programs\will-ia`; verificação prévia de permissão de escrita. | M |
+| RF-INST-03 | Detectar instalação existente (versão por `--version`), dados existentes, serviço registrado/em execução, processos vivos e instalações manuais anteriores; avisar downgrade/reparo. | M |
+| RF-INST-04 | Atualização: parar serviço e processos (forçando o servidor residente após 5 s), trocar binários atomicamente, religar; **nunca** alterar a pasta de dados (só `install-manifest.json`). | M |
+| RF-INST-05 | Registrar o servidor para iniciar com o sistema: LaunchAgent `dev.will.will-ia` (macOS; absorve `com.will.will-ia` e o Login Item do app), autostart `.desktop` ou user unit systemd (Linux), chave Run (Windows); opção de desligar. | M |
+| RF-INST-06 | Atalhos do app: symlink na Mesa (macOS), `.desktop` no menu e na Área de Trabalho (Linux), `.lnk` no Menu Iniciar e na Área de Trabalho (Windows). | S |
+| RF-INST-07 | `--uninstall` remove serviço, atalhos, binários e manifesto preservando os dados; `--purge` apaga os dados mediante confirmação. | S |
+| RF-INST-08 | Não configurar nada do produto (Telegram, Google, WhatsApp, Claude): isso é do app. | M |

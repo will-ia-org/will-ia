@@ -107,6 +107,10 @@ Sem `sudo` para instalar `libasound2-dev`, é possível apontar `PKG_CONFIG_PATH
 - Dois binários (etapa 3 de `docs/26`): `crates/will-ia` (servidor + bandeja) e `crates/will-app` (app egui, cliente via `crates/will-client`); o antigo `crates/will-desktop` não existe mais. Validado só no Linux (headless pelo `smoke.sh`; GUI sem teste interativo completo). O núcleo (`will-server`) e o servidor rodam em qualquer SO sem libs de GUI.
 - `packaging/` tem `linux/will-ia.desktop` (entrada de menu do **app**), `systemd/will-ia.service` (user unit do **servidor**, `serve`), `macos/Info.plist` e `portable/` (lançadores + README). Os workflows `ci.yml` e `release.yml` compilam `-p will-ia -p will-app` e empacotam os dois binários por SO e no portátil (seção CI/CD).
 
+## Instalador (`will-ia-setup`)
+
+Desde a v0.1.5 cada release traz um **terceiro binário**, o instalador por usuário (`docs/27`, ADR-0021): assistente gráfico (ou `--cli`) que grava os dois binários na pasta do usuário, registra o servidor no login (LaunchAgent / autostart ou user unit / chave Run), cria atalhos e, numa atualização, para o que está rodando, troca os binários e religa, preservando a pasta de dados. É o caminho recomendado na máquina pessoal; os pacotes abaixo continuam para instalação manual/de sistema.
+
 ## Empacotamento por SO
 
 Todo bundle leva **os dois binários** (`will-ia` e `will-ia-app`, `.exe` no Windows) na mesma pasta.

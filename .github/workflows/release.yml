@@ -8,6 +8,12 @@ name: Release
 #   will-ia      servidor residente (+ bandeja quando há desktop; `serve` = headless)
 #   will-ia-app  app desktop (egui), cliente do servidor
 # Cada tar.gz/zip, o .deb, o .app e o pacote portátil levam os dois.
+#
+# Desde a v0.1.5 (ADR-0021) há um TERCEIRO binário por plataforma, o instalador:
+#   will-ia-setup  assistente de instalação/atualização por usuário, com os dois
+#                  binários acima EMBUTIDOS (WILL_SETUP_PAYLOAD_DIR no build).
+# Publicado como will-ia-setup-<versão>-<plataforma>[.exe] (Linux/Windows) e
+# "Instalar will-ia.app" zipado (macOS).
 
 on:
   push:
@@ -92,6 +98,13 @@ jobs:
       - name: Compilar (servidor + app)
         run: cargo build --release -p will-ia -p will-app --target ${{ matrix.target }}
 
+      - name: Compilar instalador (com os dois binários embutidos)
+        shell: bash
+        env:
+          # caminho ABSOLUTO: o build.rs roda com cwd = crates/will-setup
+          WILL_SETUP_PAYLOAD_DIR: ${{ github.workspace }}/target/${{ matrix.target }}/release
+        run: cargo build --release -p will-setup --target ${{ matrix.target }}
+
       - name: Empacotar (tar.gz / zip)
         shell: bash
         run: |
@@ -119,6 +132,11 @@ jobs:
           for b in $BINS; do
             cp "$rel/${b}${{ matrix.ext }}" "$out/${b}-${{ matrix.name }}${{ matrix.ext }}"
           done
+          # instalador (Linux/Windows: binário único; macOS vira .app no passo abaixo)
+          if [[ "${{ runner.os }}" != "macOS" ]]; then
+            cp "$rel/will-ia-setup${{ matrix.ext }}" "$out/will-ia-setup-${VERSION}-${{ matrix.name }}${{ matrix.ext }}"
+            chmod +x "$out/will-ia-setup-${VERSION}-${{ matrix.name }}${{ matrix.ext }}" || true
+          fi
           rm -rf "$stage"
           ls -la "$out"
 
@@ -145,6 +163,11 @@ jobs:
           # não assinado/notarizado: o usuário remove a quarentena (xattr -dr com.apple.quarantine)
           # ou libera em Privacidade e Segurança › "Abrir Mesmo Assim" (ver docs/13)
           (cd dist && zip -qr "${NAME}-${VERSION}-${{ matrix.name }}.app.zip" "${NAME}.app" && rm -rf "${NAME}.app")
+          # instalador como .app (duplo clique abre o assistente; o payload está dentro do binário)
+          setup="dist/Instalar will-ia.app"; mkdir -p "$setup/Contents/MacOS" "$setup/Contents/Resources"
+          cp "$rel/will-ia-setup" "$setup/Contents/MacOS/will-ia-setup"
+          sed "s/__VERSION__/${VERSION}/g" packaging/macos/Setup-Info.plist > "$setup/Contents/Info.plist"
+          (cd dist && zip -qr "will-ia-setup-${VERSION}-${{ matrix.name }}.app.zip" "Instalar will-ia.app" && rm -rf "Instalar will-ia.app")
 
       - uses: actions/upload-artifact@v4
         with:

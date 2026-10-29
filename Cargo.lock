@@ -9099,6 +9099,21 @@ dependencies = [
 ]
 
 [[package]]
+name = "will-setup"
+version = "0.1.4"
+dependencies = [
+ "anyhow",
+ "chrono",
+ "clap",
+ "directories",
+ "eframe",
+ "egui",
+ "serde",
+ "serde_json",
+ "will-platform",
+]
+
+[[package]]
 name = "will-storage"
 version = "0.1.4"
 dependencies = [

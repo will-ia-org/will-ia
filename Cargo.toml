@@ -17,6 +17,7 @@ members = [
   "tools/fake-claude",
   "crates/will-app",
   "crates/will-ia",
+  "crates/will-setup",
 ]
 default-members = [
   "crates/will-core",
@@ -35,6 +36,7 @@ default-members = [
   "tools/fake-claude",
   "crates/will-app",
   "crates/will-ia",
+  "crates/will-setup",
 ]
 
 [workspace.package]
