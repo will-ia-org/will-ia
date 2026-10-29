@@ -172,8 +172,14 @@ pub async fn start(opts: RunOptions) -> anyhow::Result<ServerHandle> {
     if paths.is_portable() {
         tracing::info!(root = %paths.portable_root.as_deref().map(|p| p.display().to_string()).unwrap_or_default(), "modo portátil");
     }
-    let secrets: Arc<dyn SecretStore> =
-        Arc::new(will_storage::AutoSecretStore::new(paths.secrets_file(), force_file).await);
+    let secrets: Arc<dyn SecretStore> = Arc::new(
+        will_storage::AutoSecretStore::new(
+            paths.secrets_file(),
+            paths.encrypted_secrets_file(),
+            force_file,
+        )
+        .await,
+    );
     tracing::info!(backend = secrets.backend(), "segredos");
 
     let approvals = ApprovalManager::new(bus.clone());

@@ -4,7 +4,7 @@
 
 | Ativo | Ameaça | Mitigação |
 |---|---|---|
-| Tokens Claude / OpenAI / Telegram | vazamento por arquivo, log, chat | keyring do SO; mascaramento (`…últimos 4`); redator de logs; nunca em `Settings` JSON |
+| Tokens Claude / OpenAI / Telegram | vazamento por arquivo, log, chat | keyring do SO (macOS: cofre cifrado + chave-mestra no Keychain, ADR-0024); mascaramento (`…últimos 4`); redator de logs; nunca em `Settings` JSON |
 | Base de conhecimento (arquivos pessoais) | agente edita/apaga além do esperado | modo `acceptEdits` + allowlist por padrão; bloqueio de pastas perigosas (home, raiz); aviso em `bypassPermissions` |
 | Máquina do usuário | execução arbitrária via tool Bash | allowlist restringe Bash a `tools/`; bypass só com confirmação |
 | Bot do Telegram | terceiros falam com o cérebro | deny-by-default: chat **e** user allowlist; só `/start` responde fora |

@@ -36,7 +36,7 @@ Convenção: `RNF-<categoria>-<nº>`.
 
 | ID | Requisito |
 |---|---|
-| RNF-SEC-01 | Segredos (tokens Claude, OpenAI, Telegram) armazenados exclusivamente no keyring do SO (Credential Manager, Keychain, Secret Service). Nunca em texto plano em disco nem em logs. |
+| RNF-SEC-01 | Segredos (tokens Claude, OpenAI, Telegram) armazenados no keyring do SO (Credential Manager, Secret Service) ou, no macOS, num cofre cifrado cuja chave-mestra é um único item do Keychain (ADR-0024). Nunca em texto plano em disco nem em logs. |
 | RNF-SEC-02 | Servidor MCP escuta apenas em `127.0.0.1`; cada requisição exige bearer token efêmero por spawn. |
 | RNF-SEC-03 | Telegram: deny-by-default. Sem allowlist configurada, o módulo não inicia. |
 | RNF-SEC-04 | O modo `bypassPermissions` do Claude Code exige confirmação explícita na UI com aviso de risco. |

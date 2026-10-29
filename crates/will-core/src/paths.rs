@@ -125,6 +125,12 @@ impl AppPaths {
         self.data_dir.join("secrets.json")
     }
 
+    /// Cofre cifrado (`EncryptedFileStore`): segredos em um arquivo, chave-mestra
+    /// num único item do keyring (ADR-0024).
+    pub fn encrypted_secrets_file(&self) -> PathBuf {
+        self.data_dir.join("secrets.enc")
+    }
+
     pub fn session_token_file(&self) -> PathBuf {
         self.data_dir.join("ui-session.token")
     }
