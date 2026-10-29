@@ -694,8 +694,10 @@ impl Toasts {
             return;
         }
         ctx.request_repaint_after(Duration::from_millis(500));
+        // Canto superior direito: fora do caminho do campo de mensagem e dos
+        // botões Enviar/Falar/Anexar (embaixo). Somem em 6 s ou com um clique.
         egui::Area::new(egui::Id::unique("toasts"))
-            .anchor(egui::Align2::RIGHT_BOTTOM, [-16.0, -16.0])
+            .anchor(egui::Align2::RIGHT_TOP, [-16.0, 16.0])
             .order(egui::Order::Foreground)
             .show(ctx, |ui| {
                 let dark = ui.visuals().dark_mode;
