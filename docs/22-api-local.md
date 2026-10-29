@@ -127,6 +127,9 @@ Códigos: **401** `token de sessão ausente` / `token de sessão inválido` (tam
 | GET | `/api/voice/status` | estado da sessão do usuário (`active`, `state`, …) + `user`, `sessions: [{ user, active, state }]` (todas), `max_sessions`, `active_sessions` |
 | WS | `/api/voice/audio?token=` | **único caminho de áudio** (app e clientes): liga à sessão do usuário do token; cliente envia PCM16 24 kHz mono (frames), recebe PCM16 do assistente; mensagens de texto JSON para controle (`{"type":"ptt","down":true}`, `{"type":"commit"}`) e eventos (`speaking`, `listening`, `transcript`) |
 | GET | `/api/voice/transcripts?limit` | |
+| POST | `/api/voice/transcribe?lang=` | corpo WAV PCM16 mono 16 kHz (até 32 MB): ditado do campo de mensagem (Whisper com a chave do módulo de voz) → `{ text, secs, usd }`; custo `voice_stt` |
+| POST | `/api/voice/summary` | `{ text }` → `{ summary, usd }`: resposta (Markdown) vira roteiro falável pelo modelo/prompt de `realtime.summary` (`docs/07`, "Ouvir resumo"); 400 se o módulo de voz estiver desligado, sem chave ou com o resumo desabilitado; custo `voice_summary` |
+| POST | `/api/voice/tts` | `{ text, voice? }` → PCM16 LE mono 24 kHz sem cabeçalho (`audio/L16; rate=24000`, header `X-Sample-Rate`), sintetizado com `realtime.summary.tts_model`/`voice`/`speed`; custo `voice_tts` |
 
 ### WhatsApp
 | Método | Rota | Descrição |

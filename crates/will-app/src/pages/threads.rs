@@ -61,6 +61,11 @@ pub struct ThreadsPage {
     /// Ditado (botão "Falar" segurado): gravador ativo e transcrição em voo.
     dictation: Option<crate::voice::audio::Recorder>,
     dictation_task: Option<Task<Value>>,
+    /// "Ouvir resumo" de uma resposta: resumo → TTS → reprodução (um por vez).
+    speak: Option<SpeakJob>,
+    /// Roteiros/áudios já gerados por turno (memória + disco): ouvir de novo não
+    /// refaz resumo nem TTS.
+    speak_cache: crate::speak_cache::SpeakCache,
     /// Altura medida do bloco de entrada no quadro anterior (define quanto
     /// sobra para o histórico sem a página rolar).
     bottom_h: f32,
@@ -162,6 +167,67 @@ fn copy_button(ui: &mut egui::Ui, pal: &ui::Palette, hover: &str) -> bool {
     )
     .on_hover_text(hover)
     .clicked()
+}
+
+/// Botão pequeno do rodapé (mesmo desenho do "copiar"), com rótulo variável e
+/// destaque opcional (usado pelo "ouvir" enquanto está tocando).
+fn small_button(
+    ui: &mut egui::Ui,
+    pal: &ui::Palette,
+    label: &str,
+    hover: &str,
+    highlight: bool,
+) -> bool {
+    ui.add(
+        egui::Button::new(egui::RichText::new(label).size(11.0).color(if highlight {
+            pal.accent
+        } else {
+            pal.text_weak
+        }))
+        .frame_when_inactive(false)
+        .corner_radius(6.0)
+        .min_size(egui::vec2(44.0, 18.0)),
+    )
+    .on_hover_text(hover)
+    .clicked()
+}
+
+/// Etapas do "ouvir resumo": o servidor resume a resposta num roteiro falável
+/// (`POST /api/voice/summary`), sintetiza (`POST /api/voice/tts`) e o app toca.
+enum SpeakStage {
+    Summarizing(Task<Value>),
+    Synthesizing(Task<(u32, Vec<u8>)>),
+    Playing(crate::voice::audio::Player),
+}
+
+/// Leitura em andamento de uma resposta (uma por vez na página).
+struct SpeakJob {
+    turn_id: String,
+    /// Roteiro devolvido pelo resumo (mostrado no hover do botão).
+    summary: Option<String>,
+    stage: SpeakStage,
+}
+
+/// Estado do "ouvir" visto por um card de resposta.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum SpeakState {
+    Idle,
+    Summarizing,
+    Synthesizing,
+    Playing,
+}
+
+/// O que os cards precisam saber sobre o "ouvir" e o que pedem de volta.
+struct SpeakUi {
+    /// Módulo de voz pronto (chave da OpenAI configurada): mostra o botão.
+    enabled: bool,
+    /// Leitura em andamento: (id do turno, etapa, roteiro).
+    current: Option<(String, SpeakState, Option<String>)>,
+    /// Pedido feito neste quadro: `Some((id, Some(texto)))` = começar;
+    /// `Some((id, None))` = parar.
+    request: Option<(String, Option<String>)>,
+    /// Roteiros já gerados (cache): o botão mostra "ouvir de novo" e o texto no hover.
+    cached: HashMap<String, String>,
 }
 
 /// Ícone "i" desenhado (círculo + letra), sem depender de glifos especiais.
@@ -310,7 +376,73 @@ impl ThreadsPage {
         }
     }
 
+    /// Avança o "ouvir resumo": resumo pronto → pede o áudio; áudio pronto →
+    /// toca no dispositivo de saída do módulo de voz; acabou → libera o botão.
+    fn poll_speak(&mut self, cx: &mut Cx) {
+        let Some(job) = &mut self.speak else {
+            return;
+        };
+        let mut finish: Option<Option<String>> = None; // Some(err) encerra
+        match &mut job.stage {
+            SpeakStage::Summarizing(t) => {
+                if let Some(r) = t.take() {
+                    match r {
+                        Ok(v) => {
+                            let summary = ui::s(&v, "summary").trim().to_string();
+                            if summary.is_empty() {
+                                finish = Some(Some(tr("o servidor não devolveu um resumo").into()));
+                            } else {
+                                job.summary = Some(summary.clone());
+                                job.stage = SpeakStage::Synthesizing(
+                                    cx.svc
+                                        .call(move |c| async move { c.voice_tts(&summary).await }),
+                                );
+                            }
+                        }
+                        Err(e) => finish = Some(Some(e)),
+                    }
+                }
+            }
+            SpeakStage::Synthesizing(t) => {
+                if let Some(r) = t.take() {
+                    match r {
+                        Ok((rate, pcm)) => {
+                            let dev = cx.snap.settings.realtime.output_device.clone();
+                            let p = crate::voice::audio::Player::start(&pcm, rate, dev.as_deref());
+                            match &p.error {
+                                Some(e) => finish = Some(Some(e.clone())),
+                                None => {
+                                    // guarda para ouvir de novo sem gastar tokens
+                                    let audio = Arc::new(crate::speak_cache::SpeakAudio {
+                                        summary: job.summary.clone().unwrap_or_default(),
+                                        rate,
+                                        pcm,
+                                    });
+                                    self.speak_cache.put(&job.turn_id, audio);
+                                    job.stage = SpeakStage::Playing(p);
+                                }
+                            }
+                        }
+                        Err(e) => finish = Some(Some(e)),
+                    }
+                }
+            }
+            SpeakStage::Playing(p) => {
+                if !p.playing() {
+                    finish = Some(None);
+                }
+            }
+        }
+        if let Some(err) = finish {
+            self.speak = None;
+            if let Some(e) = err {
+                cx.toasts.error(trf("Ouvir resumo: {}", &[&e]));
+            }
+        }
+    }
+
     fn poll(&mut self, cx: &mut Cx) {
+        self.poll_speak(cx);
         if let Some(t) = &self.dictation_task {
             if let Some(r) = t.take() {
                 self.dictation_task = None;
@@ -759,6 +891,30 @@ impl ThreadsPage {
         let has_live = live.is_some();
         let dark = ui.visuals().dark_mode;
         let pal = ui::palette(dark);
+        // "Ouvir resumo": só com o módulo de voz pronto (mesma regra do "Falar").
+        let mut speak_ui = SpeakUi {
+            enabled: cx.snap.settings.realtime.summary.enabled
+                && matches!(
+                    cx.snap.modules.get(&will_core::Module::Realtime),
+                    Some(will_core::ModuleStatus::Running)
+                ),
+            current: self.speak.as_ref().map(|j| {
+                let st = match j.stage {
+                    SpeakStage::Summarizing(_) => SpeakState::Summarizing,
+                    SpeakStage::Synthesizing(_) => SpeakState::Synthesizing,
+                    SpeakStage::Playing(_) => SpeakState::Playing,
+                };
+                (j.turn_id.clone(), st, j.summary.clone())
+            }),
+            request: None,
+            cached: turns
+                .iter()
+                .filter_map(|t| {
+                    let id = ui::s(t, "id");
+                    self.speak_cache.summary(&id).map(|s| (id, s))
+                })
+                .collect(),
+        };
         // Anexos são caminhos do servidor: em loopback a UI lê o disco; remoto,
         // miniaturas e "abrir" passam por `GET /api/files`.
         let mut acx = AttachCx {
@@ -829,7 +985,15 @@ impl ThreadsPage {
                             };
                             error_card(ui, pal, &msg);
                         } else if !text.is_empty() {
-                            assistant_card(ui, pal, &mut self.md_cache, acx.toasts, &text, turn);
+                            assistant_card(
+                                ui,
+                                pal,
+                                &mut self.md_cache,
+                                acx.toasts,
+                                &mut speak_ui,
+                                &text,
+                                turn,
+                            );
                         } else if turn.get("finished_at").map(|f| f.is_null()).unwrap_or(true)
                             && !has_live
                         {
@@ -856,6 +1020,43 @@ impl ThreadsPage {
                 }
                 ui.add_space(8.0);
             });
+
+        // "Ouvir resumo": começar (resumo no servidor) ou parar (solta o player).
+        if let Some((turn_id, text)) = speak_ui.request.take() {
+            match text {
+                Some(text) => {
+                    // Já gerado antes (memória/disco): toca direto, sem resumo nem TTS.
+                    if let Some(audio) = self.speak_cache.get(&turn_id) {
+                        let dev = cx.snap.settings.realtime.output_device.clone();
+                        let p = crate::voice::audio::Player::start(
+                            &audio.pcm,
+                            audio.rate,
+                            dev.as_deref(),
+                        );
+                        match &p.error {
+                            Some(e) => cx.toasts.error(trf("Ouvir resumo: {}", &[e])),
+                            None => {
+                                self.speak = Some(SpeakJob {
+                                    turn_id,
+                                    summary: Some(audio.summary.clone()),
+                                    stage: SpeakStage::Playing(p),
+                                });
+                            }
+                        }
+                    } else {
+                        self.speak = Some(SpeakJob {
+                            turn_id,
+                            summary: None,
+                            stage: SpeakStage::Summarizing(
+                                cx.svc
+                                    .call(move |c| async move { c.voice_summary(&text).await }),
+                            ),
+                        });
+                    }
+                }
+                None => self.speak = None,
+            }
+        }
 
         // arrastar-e-soltar: arquivos soltos na janela viram anexos pendentes
         let (dropped, hovering) = ui.ctx().input(|i| {
@@ -1436,6 +1637,7 @@ fn assistant_card(
     pal: &ui::Palette,
     cache: &mut egui_commonmark::CommonMarkCache,
     toasts: &mut ui::Toasts,
+    speak: &mut SpeakUi,
     text: &str,
     turn: &Value,
 ) {
@@ -1475,6 +1677,57 @@ fn assistant_card(
                             if copy_button(ui, pal, tr("copiar a resposta (Markdown)")) {
                                 ui.ctx().copy_text(text.to_string());
                                 toasts.success(tr("Resposta copiada."));
+                            }
+                            // ouvir: resumo falável + TTS (só com o módulo de voz pronto)
+                            if speak.enabled {
+                                let turn_id = ui::s(turn, "id");
+                                let mine = speak
+                                    .current
+                                    .as_ref()
+                                    .filter(|(id, _, _)| *id == turn_id);
+                                let state = mine.map(|(_, st, _)| *st).unwrap_or(SpeakState::Idle);
+                                let summary = mine.and_then(|(_, _, s)| s.clone());
+                                let cached = speak.cached.get(&turn_id);
+                                let (label, hover): (String, String) = match state {
+                                    SpeakState::Idle => match cached {
+                                        Some(s) => (
+                                            tr("ouvir de novo").into(),
+                                            format!("{}\n\n{}", tr("Áudio já gerado: toca na hora, sem gastar tokens."), s),
+                                        ),
+                                        None => (
+                                            tr("ouvir").into(),
+                                            tr("Ouvir um resumo falado desta resposta (resumo + voz pela OpenAI).").into(),
+                                        ),
+                                    },
+                                    SpeakState::Summarizing => (
+                                        tr("resumindo…").into(),
+                                        tr("Preparando um roteiro fluido para ouvir… (clique para cancelar)").into(),
+                                    ),
+                                    SpeakState::Synthesizing => (
+                                        tr("gerando áudio…").into(),
+                                        summary.clone().unwrap_or_else(|| tr("Gerando a voz… (clique para cancelar)").into()),
+                                    ),
+                                    SpeakState::Playing => (
+                                        tr("■ parar").into(),
+                                        summary.clone().unwrap_or_else(|| tr("Tocando o resumo (clique para parar)").into()),
+                                    ),
+                                };
+                                if state != SpeakState::Idle {
+                                    ui.ctx().request_repaint_after(
+                                        std::time::Duration::from_millis(250),
+                                    );
+                                }
+                                // Só uma leitura por vez: outro card em andamento desabilita este.
+                                let other_busy = speak.current.is_some() && mine.is_none();
+                                ui.add_enabled_ui(!other_busy, |ui| {
+                                    if small_button(ui, pal, &label, &hover, state == SpeakState::Playing) {
+                                        speak.request = Some(if state == SpeakState::Idle {
+                                            (turn_id.clone(), Some(text.to_string()))
+                                        } else {
+                                            (turn_id.clone(), None)
+                                        });
+                                    }
+                                });
                             }
                         });
                     });

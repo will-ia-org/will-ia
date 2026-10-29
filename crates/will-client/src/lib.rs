@@ -737,6 +737,40 @@ impl Client {
         )
         .await
     }
+    /// Resposta (Markdown) → roteiro falável `{ summary, usd }` (OpenAI no servidor).
+    pub async fn voice_summary(&self, text: &str) -> ApiResult {
+        self.post("voice/summary", Some(json!({ "text": text })))
+            .await
+    }
+    /// Texto → PCM16 LE mono (taxa no header `X-Sample-Rate`, 24 kHz) sintetizado
+    /// no servidor com a voz do módulo. Devolve `(taxa, pcm)`.
+    pub async fn voice_tts(&self, text: &str) -> Result<(u32, Vec<u8>), String> {
+        let resp = self
+            .http
+            .post(self.url("voice/tts"))
+            .bearer_auth(&self.token)
+            .json(&json!({ "text": text }))
+            .send()
+            .await
+            .map_err(|e| transport_error(&e))?;
+        let status = resp.status();
+        let rate = resp
+            .headers()
+            .get("x-sample-rate")
+            .and_then(|v| v.to_str().ok())
+            .and_then(|v| v.parse::<u32>().ok())
+            .unwrap_or(24_000);
+        let bytes = resp.bytes().await.map_err(|e| e.to_string())?;
+        if !status.is_success() {
+            let text = String::from_utf8_lossy(&bytes).to_string();
+            let msg = serde_json::from_str::<Value>(&text)
+                .ok()
+                .and_then(|v| v.get("error").and_then(|e| e.as_str()).map(str::to_string))
+                .unwrap_or_else(|| format!("HTTP {status}"));
+            return Err(msg);
+        }
+        Ok((rate, bytes.to_vec()))
+    }
     pub async fn voice_transcripts(&self, query: &[(&str, String)]) -> ApiResult {
         self.get_q("voice/transcripts", query).await
     }

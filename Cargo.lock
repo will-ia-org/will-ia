@@ -9014,6 +9014,7 @@ dependencies = [
  "chrono",
  "futures",
  "parking_lot",
+ "reqwest 0.13.5",
  "secrecy",
  "serde",
  "serde_json",
@@ -9138,6 +9139,7 @@ dependencies = [
  "url",
  "uuid",
  "will-core",
+ "will-realtime",
  "will-storage",
 ]
 

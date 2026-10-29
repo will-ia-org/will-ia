@@ -55,6 +55,17 @@ Ações: **Adicionar token** (abre instrução `claude setup-token`), **Testar**
 | Limite de minutos/dia | int opcional | vazio |
 | Sessões simultâneas (`max_sessions`) | int ≥ 1 | 3 |
 
+Subseção **Ouvir resumo (TTS)** (`realtime.summary`, lida a cada clique, sem reiniciar o módulo): o botão **ouvir** nas respostas da thread (`docs/07`).
+
+| Campo | Tipo | Padrão |
+|---|---|---|
+| Habilitar | bool | true |
+| Modelo do resumo (`model`) | string (chat completions) | `gpt-4o-mini` |
+| Prompt do resumo (`prompt`) | textarea (prompt de sistema; botão Restaurar padrão) | `default_speak_summary_prompt()` |
+| Modelo de voz (`tts_model`) | string | `gpt-4o-mini-tts` |
+| Voz da leitura (`voice`) | enum; vazio = mesma da sessão de voz | vazio |
+| Velocidade (`speed`) | 0,5–2,0 | 1,0 |
+
 Painel de sessão na mesma seção: **Iniciar/Parar** (a sessão é a do usuário logado), botão **segurar para falar** (PTT), estado (ouvindo / pensando / falando), nível do microfone e transcrições recentes. O indicador flutuante (`docs/07`) acompanha a sessão. Abaixo, **Sessões no servidor** (`GET /api/voice/status`: `sessions[] {user, active, state}`, `active_sessions / max_sessions`): quem está em sessão de voz agora; quando o teto está cheio, o botão Iniciar fica desabilitado com o motivo ("limite de N sessões atingido"). Dispositivos, atalho e PTT são do app; chave, modelo, persona, preços e teto são do servidor (admin).
 
 ### Telegram

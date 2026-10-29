@@ -139,6 +139,25 @@ pub const VOICE_CONFIG: Help = Help {
     ],
 };
 
+pub const VOICE_SPEAK: Help = Help {
+    title: "Ouvir um resumo falado das respostas",
+    intro: "Em Threads, cada resposta do agente ganha um botão \"ouvir\" ao lado de \"copiar\". Ao clicar, o servidor pede a um modelo de chat da OpenAI um roteiro fluido (frases corridas, sem código, links, IDs ou marcação) e sintetiza esse roteiro em voz; o app toca no dispositivo de saída escolhido acima. Clique de novo para parar.",
+    steps: &[
+        ("Pré-requisitos", "Chave da OpenAI cadastrada e módulo de voz habilitado (a sessão de voz não precisa estar ativa). Sem isso o botão não aparece."),
+        ("Ajustar o roteiro", "Edite o Prompt do resumo para mudar tamanho, tom ou o que deve ser omitido. Restaurar padrão volta ao texto original."),
+        ("Voz e velocidade", "Por padrão usa a mesma voz da sessão de voz; escolha outra e ajuste a velocidade se preferir."),
+    ],
+    notes: &[
+        ("Custo", "Duas chamadas por clique: o resumo (tokens do modelo de chat) e o TTS (por caractere do roteiro). Ambas entram na página Custos como voice_summary e voice_tts, estimadas."),
+        ("Uma leitura por vez", "Começar outra resposta interrompe a anterior. O roteiro gerado aparece ao passar o mouse sobre o botão."),
+        ("Ouvir de novo não custa", "O roteiro e o áudio ficam guardados por resposta (memória e disco do app). Clicar de novo toca na hora, sem chamar a OpenAI."),
+        ("Trocar de modelo", "Pode usar gpt-5-nano, gpt-4.1-mini, tts-1 etc. O servidor ajusta os parâmetros por família (temperatura, esforço de raciocínio, instruções do TTS) e, se a OpenAI recusar algum, remove e repete sozinho."),
+        ("Telegram", "O áudio das respostas no Telegram usa o prompt padrão deste resumo, com a voz e a velocidade configuradas na seção Telegram."),
+    ],
+    code: "",
+    links: &[("OpenAI: text to speech", "https://platform.openai.com/docs/guides/text-to-speech")],
+};
+
 pub const VOICE_PRICING: Help = Help {
     title: "Estimativa de custo da voz",
     intro: "A OpenAI não devolve o valor em dinheiro em cada resposta, só a contagem de tokens (texto e áudio, entrada, saída e cache). O app multiplica esses tokens pela tabela abaixo e registra na página Custos.",

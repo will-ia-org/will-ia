@@ -219,6 +219,53 @@ pub struct RealtimeSettings {
     pub sound_cues: bool,
     /// Tabela de preços (USD por 1M tokens) usada para ESTIMAR o custo da voz.
     pub pricing: VoicePricing,
+    /// "Ouvir resumo": resposta do agente → roteiro falável → TTS, no app.
+    pub summary: SpeakSummarySettings,
+}
+
+/// "Ouvir resumo" (botão "ouvir" nas respostas da thread): a resposta é
+/// resumida num roteiro fluido para ser ouvido e sintetizada em voz. Usa a
+/// mesma chave da OpenAI do módulo de voz; só aparece com o módulo ligado.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct SpeakSummarySettings {
+    pub enabled: bool,
+    /// Modelo de chat que escreve o roteiro (`gpt-4o-mini`).
+    pub model: String,
+    /// Prompt de sistema do resumo (o que pode e o que não pode ser lido).
+    pub prompt: String,
+    /// Modelo de síntese de voz (`gpt-4o-mini-tts`).
+    pub tts_model: String,
+    /// Voz do TTS; vazio = a mesma voz da sessão de voz (`realtime.voice`).
+    pub voice: String,
+    /// Velocidade da fala (0.5–2.0).
+    pub speed: f32,
+}
+impl Default for SpeakSummarySettings {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            model: "gpt-4o-mini".into(),
+            prompt: default_speak_summary_prompt().into(),
+            tts_model: "gpt-4o-mini-tts".into(),
+            voice: String::new(),
+            speed: 1.0,
+        }
+    }
+}
+
+/// Prompt padrão do "ouvir resumo" (também usado pelo áudio do Telegram).
+pub fn default_speak_summary_prompt() -> &'static str {
+    "Você recebe a RESPOSTA de um assistente e a transforma em um RESUMO FALADO, para ser ouvido como áudio (voz), em português do Brasil.\n\
+Objetivo: a pessoa entender o essencial só de ouvir, sem precisar ler.\n\
+Regras de audibilidade:\n\
+- O tamanho pode acompanhar a resposta: se ela for densa, o áudio pode ser mais longo. Não force encurtar a ponto de perder pontos importantes — cubra tudo que importa. Mas seja fluido, sem enrolação nem repetição.\n\
+- Linguagem falada e natural, como se estivesse explicando para a pessoa; pode usar \"você\".\n\
+- NÃO leia marcação: nada de marcadores de lista, números de item, hashes, asteriscos, crases, URLs, caminhos de arquivo, IDs/hashes longos, blocos de código ou símbolos. Converta listas em frases corridas.\n\
+- Diga números e siglas de forma falada e clara; expanda siglas quando ajudar.\n\
+- Foque no que foi pedido e na resposta/decisão principal; se houver próximos passos importantes, mencione em uma frase.\n\
+- Comece com \"Resumindo,\" e termine de forma natural.\n\
+Responda APENAS com o texto do roteiro do áudio, sem aspas e sem comentários."
 }
 
 /// Preços da Realtime API em USD por 1 milhão de tokens. Os padrões são os do
@@ -268,6 +315,7 @@ impl Default for RealtimeSettings {
             vad_threshold: 0.6,
             sound_cues: true,
             pricing: VoicePricing::default(),
+            summary: SpeakSummarySettings::default(),
         }
     }
 }

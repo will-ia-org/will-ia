@@ -288,6 +288,8 @@ pub fn router(state: App) -> Router {
             post(integrations::voice_transcribe)
                 .layer(axum::extract::DefaultBodyLimit::max(32 * 1024 * 1024)),
         )
+        .route("/voice/summary", post(integrations::voice_summary))
+        .route("/voice/tts", post(integrations::voice_tts))
         .route("/voice/audio", get(ws::voice_ws))
         .route("/whatsapp/status", get(integrations::wa_status))
         .route("/whatsapp/pair", post(integrations::wa_pair))

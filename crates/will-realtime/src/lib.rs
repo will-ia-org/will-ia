@@ -8,6 +8,7 @@
 //! `user_speaking`, `thinking`, `speaking`, `brain_working`, `stopped`, `error`.
 
 pub mod audio;
+pub mod openai;
 pub mod protocol;
 mod session;
 pub mod speech;

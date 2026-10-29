@@ -9,7 +9,6 @@ mod commands;
 pub mod conversation;
 mod events;
 mod handler;
-mod openai;
 mod sender;
 pub mod text;
 mod tool;
@@ -18,7 +17,6 @@ pub use sender::TelegramSender;
 pub use tool::SendMessageTool;
 
 use crate::conversation::Conversation;
-use crate::openai::OpenAi;
 use parking_lot::Mutex;
 use secrecy::{ExposeSecret, SecretString};
 use std::collections::HashMap;
@@ -37,6 +35,7 @@ use will_core::{
     ApprovalId, Event, EventBus, Module, ModuleStatus, Origin, SharedThreadHost, ThreadId,
     ToolProvider, WillTool,
 };
+use will_realtime::openai::OpenAi;
 use will_storage::Storage;
 
 /// Dependências injetadas pelo servidor.

@@ -112,6 +112,18 @@ Com `server_vad`, ao receber `input_audio_buffer.speech_started` enquanto áudio
 - O app envia/recebe esse PCM16 pelo WS `/api/voice/audio` do servidor (`will-client::VoiceLink`), autenticado pelo token do perfil, que o liga à sessão do usuário; clientes externos usam o mesmo WS com o mesmo formato. A latência extra é a da rede (ida e volta); aceitável em LAN/VPN.
 - Sem gravação em disco por padrão.
 
+## Ouvir resumo (TTS fora da sessão)
+
+Além da conversa por voz, cada resposta do agente na página Threads tem o botão **ouvir** (ao lado de "copiar"), que lê um **resumo falado** da resposta sem abrir sessão Realtime. É o mesmo pipeline do áudio do Telegram, agora compartilhado em `will_realtime::openai::OpenAi`:
+
+1. O app manda o Markdown da resposta em `POST /api/voice/summary { text }`. O servidor chama o modelo de chat configurado (`realtime.summary.model`, padrão `gpt-4o-mini`) com o **prompt do resumo** (`realtime.summary.prompt`, editável em Configurações → Voz → Ouvir resumo; padrão em `will_core::settings::default_speak_summary_prompt`), que transforma a resposta num roteiro fluido para ouvir: frases corridas, sem código, URLs, IDs, tabelas ou marcação. Devolve `{ summary, usd }`.
+2. O app manda o roteiro em `POST /api/voice/tts { text, voice? }`. O servidor sintetiza com `realtime.summary.tts_model` (padrão `gpt-4o-mini-tts`), a voz `realtime.summary.voice` (vazio = `realtime.voice`) e `realtime.summary.speed`, pedindo `response_format = pcm`, e devolve **PCM16 LE mono 24 kHz** sem cabeçalho (`Content-Type: audio/L16; rate=24000`, header `X-Sample-Rate`).
+3. O app guarda roteiro + PCM em `speak_cache` (memória e `<config>/will-ia-app/ouvir/<turn>.pcm|.json`, podado aos 200 mais recentes) e toca o PCM com `voice::audio::Player` (stream de saída `cpal` no dispositivo de saída configurado, reamostragem linear para a taxa do dispositivo) e libera o botão ao terminar. Clicar de novo em qualquer etapa cancela/para (o `Player` é solto e o stream fecha). Uma leitura por vez por página. **Ouvir de novo** a mesma resposta (botão "ouvir de novo", roteiro no hover) toca o áudio do cache sem chamar a OpenAI: zero tokens.
+
+Robustez à troca de modelo: o cliente (`OpenAi::post_tolerant`) monta os parâmetros por família — modelos de raciocínio (`gpt-5*`, `o1/o3/o4*`) recebem `reasoning_effort: minimal` e **sem** `temperature`; os demais, `temperature: 0.4`; `instructions` do TTS só fora de `tts-1*` — e, se mesmo assim a OpenAI responder 400 apontando um parâmetro não suportado (`error.param` + `unsupported_parameter`/`unsupported_value`), remove esse parâmetro e repete (até 3), registrando em log. Trocar `gpt-4o-mini` por `gpt-5-nano` (ou `gpt-4o-mini-tts` por `tts-1`) funciona sem erro na tela; erros de outra natureza (chave, cota, modelo inexistente) chegam com a mensagem da OpenAI.
+
+Condições: o botão só aparece com o módulo de voz em `Running` (chave da OpenAI válida e módulo habilitado — a mesma regra do botão **Falar** do ditado) e `realtime.summary.enabled`. Os dois endpoints recusam com 400 quando o módulo está desligado, sem chave ou com o resumo desabilitado. Custos estimados em `ai_costs`: `voice_summary` (tokens de entrada/saída do modelo de chat) e `voice_tts` (por caractere do roteiro), com `ref = user:<username>`.
+
 ## Reconexão e erros
 
 - Queda do WS durante a sessão: tentar reconectar 3× com backoff (1 s, 2 s, 4 s), recriando `session.update`; falhando, encerrar sessão com aviso sonoro curto e notificação.

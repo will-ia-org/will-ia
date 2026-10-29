@@ -6,6 +6,7 @@ license.workspace = true
 
 [dependencies]
 will-core.workspace = true
+will-realtime.workspace = true
 will-storage.workspace = true
 tokio.workspace = true
 tokio-util.workspace = true

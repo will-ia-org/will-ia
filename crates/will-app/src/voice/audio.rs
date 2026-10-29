@@ -798,3 +798,114 @@ mod tests {
         assert!((total as i64 - 24_000).abs() <= 2, "{total}");
     }
 }
+
+/// Reprodução única de um trecho PCM16 LE mono (o "ouvir resumo" da thread):
+/// abre um stream de saída, reamostra para a taxa do dispositivo e termina
+/// sozinho quando o áudio acaba. Soltar o valor interrompe a reprodução.
+pub struct Player {
+    _stream: Option<cpal::Stream>,
+    done: Arc<AtomicBool>,
+    pub error: Option<String>,
+    started: Instant,
+    total_secs: f32,
+}
+
+impl Player {
+    pub fn start(pcm16_le: &[u8], src_rate: u32, output_name: Option<&str>) -> Self {
+        let host = audio_host();
+        let done = Arc::new(AtomicBool::new(false));
+        let samples: VecDeque<f32> = pcm16_le
+            .as_chunks::<2>()
+            .0
+            .iter()
+            .map(|s| i16::from_le_bytes([s[0], s[1]]) as f32 / 32768.0)
+            .collect();
+        let total_secs = samples.len() as f32 / src_rate.max(1) as f32;
+        let fail = |msg: String, done: &Arc<AtomicBool>| {
+            done.store(true, Ordering::Relaxed);
+            Self {
+                _stream: None,
+                done: done.clone(),
+                error: Some(msg),
+                started: Instant::now(),
+                total_secs,
+            }
+        };
+        if samples.is_empty() {
+            return fail(tr("áudio vazio").into(), &done);
+        }
+        let Some(dev) = find_device(&host, output_name, false) else {
+            return fail(tr("nenhum dispositivo de saída de áudio").into(), &done);
+        };
+        let cfg = match dev.default_output_config() {
+            Ok(c) => c,
+            Err(e) => return fail(trf("alto-falante: {}", &[&e]), &done),
+        };
+        let rate = cfg.sample_rate();
+        let channels = cfg.channels() as usize;
+        let mut rs = Resampler::new(src_rate, rate);
+        let queue = Arc::new(Mutex::new(samples));
+        let q = queue.clone();
+        let done_cb = done.clone();
+        let mut src: Vec<f32> = Vec::new();
+        let mut dst: Vec<f32> = Vec::new();
+        let mut carry: VecDeque<f32> = VecDeque::new();
+        let stream_cfg: cpal::StreamConfig = low_latency_ms(&cfg, 80);
+        let err_fn = |e| tracing::warn!(error = %e, "stream de reprodução");
+        let build = dev.build_output_stream(
+            stream_cfg,
+            move |data: &mut [f32], _| {
+                let ch = channels.max(1);
+                let frames = data.len() / ch;
+                let missing = frames.saturating_sub(carry.len());
+                let need = ((missing as f64) * (src_rate as f64 / rate as f64)).ceil() as usize;
+                src.clear();
+                {
+                    let mut g = q.lock();
+                    for _ in 0..need {
+                        match g.pop_front() {
+                            Some(x) => src.push(x),
+                            None => break,
+                        }
+                    }
+                }
+                dst.clear();
+                rs.process(&src, &mut dst);
+                carry.extend(dst.drain(..));
+                for frame in data.chunks_mut(ch) {
+                    let v = carry.pop_front().unwrap_or(0.0);
+                    for c in frame.iter_mut() {
+                        *c = v;
+                    }
+                }
+                if src.is_empty() && carry.is_empty() {
+                    done_cb.store(true, Ordering::Relaxed);
+                }
+            },
+            err_fn,
+            None,
+        );
+        match build {
+            Ok(s) => {
+                if let Err(e) = s.play() {
+                    return fail(trf("alto-falante: {}", &[&e]), &done);
+                }
+                Self {
+                    _stream: Some(s),
+                    done,
+                    error: None,
+                    started: Instant::now(),
+                    total_secs,
+                }
+            }
+            Err(e) => fail(trf("alto-falante: {}", &[&e]), &done),
+        }
+    }
+
+    /// Ainda tocando (o callback marca `done` quando a fila esvazia; há também
+    /// um teto pela duração do áudio, caso o dispositivo pare de chamar).
+    pub fn playing(&self) -> bool {
+        !self.done.load(Ordering::Relaxed)
+            && self.started.elapsed().as_secs_f32() < self.total_secs + 2.0
+    }
+}

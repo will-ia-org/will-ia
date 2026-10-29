@@ -20,6 +20,7 @@ mod oauth_cb;
 mod pages;
 mod profiles;
 mod service;
+mod speak_cache;
 mod ui;
 mod voice;
 

@@ -258,6 +258,137 @@ pub async fn voice_transcribe(
     Ok(Json(json!({ "text": text, "secs": secs, "usd": usd })))
 }
 
+/// Corpo de `POST /api/voice/summary` e `/api/voice/tts`.
+#[derive(Debug, serde::Deserialize)]
+pub struct SpeechBody {
+    pub text: String,
+    /// Só no `tts`: voz da OpenAI; ausente = `realtime.voice` das configurações.
+    #[serde(default)]
+    pub voice: Option<String>,
+}
+
+/// Chave da OpenAI do módulo de voz, exigindo o módulo ligado (mesma regra do ditado).
+async fn speech_openai(state: &App) -> Result<will_realtime::openai::OpenAi, super::ApiError> {
+    if !state.settings().realtime.enabled {
+        return Err(bad("módulo de voz desligado"));
+    }
+    let key = crate::modules::openai_key(state)
+        .await
+        .ok_or_else(|| bad("sem chave da OpenAI (Configurações → Voz)"))?;
+    Ok(will_realtime::openai::OpenAi::new(key))
+}
+
+/// Configuração do "ouvir resumo" (Configurações → Voz), exigindo-o habilitado.
+fn speak_summary_cfg(
+    state: &App,
+) -> Result<will_core::settings::SpeakSummarySettings, super::ApiError> {
+    let cfg = state.settings().realtime.summary;
+    if !cfg.enabled {
+        return Err(bad("ouvir resumo desligado (Configurações → Voz)"));
+    }
+    Ok(cfg)
+}
+
+/// `POST /api/voice/summary { text }`: transforma uma resposta (Markdown) num
+/// **roteiro falável** — fluido, sem código/URLs/marcação — para o "ouvir
+/// resumo" do app. Usa a chave da OpenAI do módulo de voz; devolve
+/// `{ summary, usd }` e registra custo estimado em `ai_costs` (`voice_summary`).
+pub async fn voice_summary(
+    State(state): State<App>,
+    axum::extract::Extension(me): axum::extract::Extension<will_core::Principal>,
+    Json(b): Json<SpeechBody>,
+) -> ApiResult<Value> {
+    let text = b.text.trim();
+    if text.is_empty() {
+        return Err(bad("texto vazio"));
+    }
+    let ai = speech_openai(&state).await?;
+    let cfg = speak_summary_cfg(&state)?;
+    let sum = ai
+        .audible_summary_with(text, &cfg.model, &cfg.prompt)
+        .await
+        .map_err(|e| bad(format!("OpenAI: {e}")))?;
+    if sum.script.is_empty() {
+        return Err(bad("a OpenAI não devolveu um resumo"));
+    }
+    let usd = sum.usd();
+    let rec = will_storage::costs::NewAiCost {
+        source: "voice_summary".into(),
+        r#ref: Some(format!("user:{}", me.username)),
+        model: Some(cfg.model.clone()),
+        units: json!({
+            "prompt_tokens": sum.prompt_tokens,
+            "completion_tokens": sum.completion_tokens,
+        }),
+        usd,
+        estimated: true,
+        duration_secs: None,
+        note: Some(format!("resumo falável para {}", me.username)),
+    };
+    let _ = state.storage.add_ai_cost(&rec).await;
+    Ok(Json(json!({ "summary": sum.script, "usd": usd })))
+}
+
+/// `POST /api/voice/tts { text, voice? }`: sintetiza o texto com a voz do
+/// módulo (`realtime.voice`) e devolve **PCM16 LE mono 24 kHz** sem cabeçalho
+/// (`audio/L16; rate=24000`, header `X-Sample-Rate`). Custo estimado por
+/// caractere em `ai_costs` (`voice_tts`).
+pub async fn voice_tts(
+    State(state): State<App>,
+    axum::extract::Extension(me): axum::extract::Extension<will_core::Principal>,
+    Json(b): Json<SpeechBody>,
+) -> Result<axum::response::Response, super::ApiError> {
+    use axum::response::IntoResponse;
+    let text = b.text.trim().to_string();
+    if text.is_empty() {
+        return Err(bad("texto vazio"));
+    }
+    let ai = speech_openai(&state).await?;
+    let cfg = speak_summary_cfg(&state)?;
+    let voice = b
+        .voice
+        .map(|v| v.trim().to_string())
+        .filter(|v| !v.is_empty())
+        .or_else(|| Some(cfg.voice.trim().to_string()).filter(|v| !v.is_empty()))
+        .unwrap_or_else(|| state.settings().realtime.voice.clone());
+    let pcm = ai
+        .synthesize_pcm(&text, &cfg.tts_model, &voice, cfg.speed)
+        .await
+        .map_err(|e| bad(format!("OpenAI: {e}")))?;
+    if pcm.len() < 2 {
+        return Err(bad("a OpenAI não devolveu áudio"));
+    }
+    let chars = text.chars().count();
+    let secs = pcm.len() as f64 / (will_realtime::openai::TTS_PCM_RATE as f64 * 2.0);
+    let usd = will_realtime::openai::tts_usd(chars);
+    let rec = will_storage::costs::NewAiCost {
+        source: "voice_tts".into(),
+        r#ref: Some(format!("user:{}", me.username)),
+        model: Some(cfg.tts_model.clone()),
+        units: json!({ "chars": chars, "audio_secs": secs.round() as i64 }),
+        usd,
+        estimated: true,
+        duration_secs: Some(secs.round() as i64),
+        note: Some(format!("leitura de resumo para {}", me.username)),
+    };
+    let _ = state.storage.add_ai_cost(&rec).await;
+    let rate = will_realtime::openai::TTS_PCM_RATE;
+    Ok((
+        [
+            (
+                axum::http::header::CONTENT_TYPE,
+                format!("audio/L16; rate={rate}"),
+            ),
+            (
+                axum::http::HeaderName::from_static("x-sample-rate"),
+                rate.to_string(),
+            ),
+        ],
+        pcm,
+    )
+        .into_response())
+}
+
 pub async fn voice_transcripts(
     State(state): State<App>,
     Query(q): Query<Limit>,
