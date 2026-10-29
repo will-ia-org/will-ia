@@ -29,6 +29,7 @@
 | 25 | [Browser CDP](25-browser-cdp.md) | Proxy local do Chrome DevTools Protocol para o agent-browser: `AGENT_BROWSER_CDP`, lançamento do navegador sob demanda, log de tráfego, instalação do CLI e da skill |
 | 26 | [Separação cliente/servidor](26-cliente-servidor.md) | Fase 5 (planejada): servidor residente + app cliente HTTP/WS, contas, voz por usuário, impactos e etapas |
 | — | [ADRs](adr/README.md) | Decisões arquiteturais |
+| — | [Diagnósticos](diagnosticos/) | Investigações de problemas reais com evidências, causa-raiz e correção (ex.: Browser CDP × Chrome sem `/json/version`, 2026-10-28) |
 
 ## Projeto de referência
 

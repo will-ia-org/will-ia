@@ -511,6 +511,11 @@ pub struct BrowserSettings {
     pub upstream_port: u16,
     /// Subir o navegador quando ninguém responde no upstream.
     pub auto_launch: bool,
+    /// Anexar a um navegador já aberto na porta quando ele não tem `/json/*`
+    /// (Chrome sem `--remote-allow-origins`): lê `DevToolsActivePort` dos perfis do
+    /// usuário (Chrome/Chromium/Brave/Edge) além do dedicado. O Chrome pode pedir
+    /// "Allow remote debugging?" na primeira conexão.
+    pub attach_existing: bool,
     /// Caminho do executável; `None` = detectar (Chrome, Chromium, Brave, Edge, Chromium do agent-browser).
     pub browser_path: Option<String>,
     pub headless: bool,
@@ -535,6 +540,7 @@ impl Default for BrowserSettings {
             upstream_host: "127.0.0.1".into(),
             upstream_port: 9222,
             auto_launch: true,
+            attach_existing: true,
             browser_path: None,
             headless: false,
             user_data_dir: None,

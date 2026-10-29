@@ -110,6 +110,16 @@ impl BrowserPage {
             );
             ui::field(
                 ui,
+                tr("Anexar a navegador já aberto"),
+                Some(tr(
+                    "Se a porta está ocupada por um navegador sem /json/version (Chrome do seu perfil com depuração ligada por outro app), lê o DevToolsActivePort dos perfis do usuário e conecta pelo WebSocket. O Chrome pode pedir \"Allow remote debugging?\" uma vez por conexão.",
+                )),
+                |ui| {
+                    ui::toggle(ui, &mut b.attach_existing);
+                },
+            );
+            ui::field(
+                ui,
                 tr("Executável do navegador"),
                 Some(tr(
                     "Vazio = detectar (Chrome, Chromium, Brave, Edge, Chromium do agent-browser).",

@@ -23,3 +23,4 @@ Formato: contexto → decisão → consequências. Numeração sequencial; nunca
 | [0017](0017-scheduler-revive-threads.md) | Scheduler como módulo de ferramentas; disparo pelo stdin da thread dona; recriação da thread apagada (origem + sessão); perdidos ignorados | Aceita |
 | [0018](0018-browser-cdp-proxy.md) | Navegação pelo agent-browser via skill + `AGENT_BROWSER_CDP`; proxy CDP em loopback com lançamento do navegador sob demanda (perfil dedicado) | Aceita |
 | [0019](0019-cliente-servidor.md) | Separação cliente/servidor: app egui como cliente HTTP/WS de um servidor residente; contas por pessoa, threads compartilhadas | Aceita |
+| [0020](0020-browser-cdp-descoberta-sem-json.md) | Browser CDP: descoberta por `DevToolsActivePort` + síntese de `/json/*` quando o Chrome não tem HTTP de descoberta; `localhost` dual-stack; não lançar em porta ocupada; erros JSON | Aceita |

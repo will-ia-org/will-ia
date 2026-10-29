@@ -157,7 +157,7 @@ Eventos relacionados no WS `/api/events`: `ScheduleFired { schedule_id, thread_i
 
 | Método | Rota | Descrição |
 |---|---|---|
-| GET | `/api/browser/status` | `BrowserStatus`: `enabled`, `listening`, `listen_url`, `cdp_env`, `upstream`, `upstream_up`, `upstream_browser`, `launched { pid, path, headless, started_at }`, `launching`, `connections`, `active_connections`, `counters`, `last_seq`, `last_error`, `resolved_browser`, `user_data_dir` |
+| GET | `/api/browser/status` | `BrowserStatus`: `enabled`, `listening`, `listen_url`, `cdp_env`, `upstream`, `upstream_authority` (quem respondeu, ex. `[::1]:9222`), `upstream_source` (`http` \| `DevToolsActivePort (<perfil>)`), `upstream_http_discovery`, `upstream_up`, `upstream_browser`, `launched { pid, path, headless, started_at }`, `launching`, `connections`, `active_connections`, `counters`, `last_seq`, `last_error`, `resolved_browser`, `user_data_dir` |
 | GET | `/api/browser/detect` | `{ browsers: [{ name, path }] }` (Chrome, Chromium, Brave, Edge, Chromium do agent-browser) |
 | GET | `/api/browser/traffic?after=&limit=` | `{ entries: [TrafficEntry { seq, at, conn, dir, id, method, session_id, kind, preview, bytes }], last_seq, counters }` (`limit` 1–1000, padrão 200; `after` = último `seq` visto) |
 | POST | `/api/browser/traffic/clear` | `{ ok }` |
