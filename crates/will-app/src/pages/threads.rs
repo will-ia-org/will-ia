@@ -153,6 +153,69 @@ fn when_label(ui: &mut egui::Ui, pal: &ui::Palette, dt: Option<&chrono::DateTime
     }
 }
 
+/// Glifo discreto da origem da thread, desenhado com o painter (sem depender de
+/// fontes de ícones): aviãozinho = Telegram, janelinha = criada no app, microfone = voz.
+fn origin_icon(ui: &mut egui::Ui, pal: &ui::Palette, t: &ThreadSummary) -> egui::Response {
+    let (rect, resp) = ui.allocate_exact_size(egui::vec2(13.0, 13.0), egui::Sense::hover());
+    let color = if resp.hovered() {
+        pal.text
+    } else {
+        pal.text_weak
+    };
+    let st = egui::Stroke::new(1.1, color);
+    let p = ui.painter();
+    let c = rect.center();
+    match &t.origin {
+        will_core::Origin::Telegram { .. } => {
+            // aviãozinho de papel: triângulo apontando para a direita + dobra
+            let a = egui::pos2(rect.left() + 1.0, c.y - 0.5);
+            let b = egui::pos2(rect.right() - 1.0, rect.top() + 1.5);
+            let d = egui::pos2(rect.left() + 5.5, rect.bottom() - 1.0);
+            let m = egui::pos2(rect.left() + 5.5, c.y + 1.0);
+            p.line_segment([a, b], st);
+            p.line_segment([b, d], st);
+            p.line_segment([d, m], st);
+            p.line_segment([m, a], st);
+            p.line_segment([m, b], st);
+        }
+        will_core::Origin::Realtime => {
+            // microfone: cápsula + haste + base
+            let cap = egui::Rect::from_center_size(
+                egui::pos2(c.x, rect.top() + 4.5),
+                egui::vec2(4.5, 7.0),
+            );
+            p.rect_stroke(cap, 2.0, st, egui::StrokeKind::Middle);
+            p.line_segment(
+                [
+                    egui::pos2(c.x, rect.top() + 8.5),
+                    egui::pos2(c.x, rect.bottom() - 1.0),
+                ],
+                st,
+            );
+            p.line_segment(
+                [
+                    egui::pos2(c.x - 3.0, rect.bottom() - 1.0),
+                    egui::pos2(c.x + 3.0, rect.bottom() - 1.0),
+                ],
+                st,
+            );
+        }
+        will_core::Origin::Ui => {
+            // janelinha do app: retângulo com barra de título
+            let r = rect.shrink(1.5);
+            p.rect_stroke(r, 2.0, st, egui::StrokeKind::Middle);
+            p.line_segment(
+                [
+                    egui::pos2(r.left(), r.top() + 3.0),
+                    egui::pos2(r.right(), r.top() + 3.0),
+                ],
+                st,
+            );
+        }
+    }
+    resp.on_hover_text(origin_label(t))
+}
+
 /// Conteúdo do "i" do cabeçalho: origem, status, custo, sessão, atividade.
 fn thread_info_body(ui: &mut egui::Ui, pal: &ui::Palette, t: &ThreadSummary) {
     ui.set_min_width(260.0);
@@ -753,6 +816,7 @@ impl ThreadsPage {
                             ui.spacing_mut().item_spacing = egui::vec2(6.0, 0.0);
                             ui.horizontal(|ui| {
                                 ui::dot(ui, status_tone(t));
+                                origin_icon(ui, pal, t);
                                 ui.add(egui::Label::new(egui::RichText::new(title_of(t)).font(ui::medium(13.0))).truncate());
                             });
                             // resumo da conversa: até 3 linhas, itálico, truncado com "…"
@@ -881,7 +945,8 @@ impl ThreadsPage {
                 None => {
                     // Título truncado: um nome longo não pode empurrar o "i" nem
                     // invadir os botões alinhados à direita.
-                    let w = (ui.available_width() - 470.0).max(160.0);
+                    let w = (ui.available_width() - 490.0).max(160.0);
+                    origin_icon(ui, pal, t);
                     ui.scope(|ui| {
                         ui.set_max_width(w);
                         ui.add(
