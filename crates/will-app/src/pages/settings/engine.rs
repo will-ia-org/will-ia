@@ -194,7 +194,7 @@ impl EnginePage {
             ))
             .corner_radius(8.0)
             .inner_margin(egui::Margin::symmetric(14, 10));
-        let resp = frame.show(ui, |ui| {
+        frame.show(ui, |ui| {
             ui.set_width(ui.available_width());
             // ---- linha 1: identidade + ações ----
             ui.horizontal(|ui| {
@@ -286,20 +286,6 @@ impl EnginePage {
                 });
             }
         });
-        if active {
-            // barra de destaque à esquerda do card ativo
-            let r = resp.response.rect;
-            ui.painter().rect_filled(
-                egui::Rect::from_min_max(r.left_top(), egui::pos2(r.left() + 3.0, r.bottom())),
-                egui::CornerRadius {
-                    nw: 8,
-                    sw: 8,
-                    ne: 0,
-                    se: 0,
-                },
-                p.accent,
-            );
-        }
     }
 
     pub fn ui(&mut self, ui: &mut egui::Ui, cx: &mut Cx, st: &mut SettingsState) {
