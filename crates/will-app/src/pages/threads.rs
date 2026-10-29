@@ -783,7 +783,7 @@ impl ThreadsPage {
             ui.set_min_height(avail_h);
             // ----- lista -----
             ui.vertical(|ui| {
-                ui.set_width(228.0);
+                ui.set_width(296.0);
                 ui.set_min_height(avail_h);
                 ui.horizontal(|ui| {
                     ui.label(egui::RichText::new(tr("Threads")).font(ui::semibold(16.0)));
