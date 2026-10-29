@@ -42,6 +42,17 @@ fn main() {
             }
         }
     }
+    #[cfg(windows)]
+    {
+        let mut res = winresource::WindowsResource::new();
+        res.set_icon("../../assets/icon/will-ia.ico");
+        res.set("ProductName", "will-ia");
+        res.set("FileDescription", "Instalador do will-ia");
+        if let Err(e) = res.compile() {
+            println!("cargo:warning=recurso do Windows (ícone) não compilado: {e}");
+        }
+    }
+    println!("cargo:rerun-if-changed=../../assets/icon/will-ia.ico");
     if complete {
         println!("cargo:rustc-cfg=payload");
     } else {

@@ -18,3 +18,7 @@ pub fn available() -> bool {
 pub fn total_bytes() -> u64 {
     (SERVER.len() + APP.len()) as u64
 }
+
+/// Ícone do bundle do macOS (`Contents/Resources/will-ia.icns`, `CFBundleIconFile`).
+#[cfg(target_os = "macos")]
+pub const MACOS_ICNS: &[u8] = include_bytes!("../../../assets/icon/will-ia.icns");

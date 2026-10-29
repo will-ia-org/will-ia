@@ -312,7 +312,15 @@ pub fn write_binaries(plan: &Plan, log: &Log<'_>) -> Result<(), String> {
         let plist =
             crate::payload::MACOS_INFO_PLIST.replace("__VERSION__", crate::payload::VERSION);
         std::fs::write(contents.join("Info.plist"), plist).map_err(|e| e.to_string())?;
-        log(&format!("bundle {}", plan.install_dir.display()));
+        std::fs::write(
+            contents.join("Resources/will-ia.icns"),
+            crate::payload::MACOS_ICNS,
+        )
+        .map_err(|e| e.to_string())?;
+        log(&format!(
+            "bundle {} (Info.plist + ícone)",
+            plan.install_dir.display()
+        ));
     }
     log(&format!(
         "gravando {} ({})",
@@ -337,6 +345,8 @@ pub fn write_binaries(plan: &Plan, log: &Log<'_>) -> Result<(), String> {
                 &plan.install_dir.to_string_lossy(),
             ],
         );
+        // Finder/Dock guardam cache do ícone por mtime do bundle: "toca" pra atualizar.
+        let _ = run("touch", &[&plan.install_dir.to_string_lossy()]);
     }
     Ok(())
 }
@@ -738,6 +748,25 @@ pub fn install_shortcuts(plan: &Plan, desktop: bool, log: &Log<'_>) -> Result<()
         std::fs::write(&menu, &body).map_err(|e| e.to_string())?;
         log(&format!("entrada de menu: {}", menu.display()));
         let _ = run("update-desktop-database", &[&apps.to_string_lossy()]);
+        // Ícone `will-ia` no tema hicolor do usuário (menu, dock, alt-tab).
+        let hicolor = home().join(".local/share/icons/hicolor");
+        let mut n = 0;
+        for (size, bytes) in will_platform::icon::APP_PNGS {
+            let dir = hicolor.join(format!("{size}x{size}/apps"));
+            if std::fs::create_dir_all(&dir).is_ok()
+                && std::fs::write(dir.join(format!("{PRODUCT}.png")), bytes).is_ok()
+            {
+                n += 1;
+            }
+        }
+        let _ = run(
+            "gtk-update-icon-cache",
+            &["-f", "-t", &hicolor.to_string_lossy()],
+        );
+        log(&format!(
+            "ícones instalados em {} ({n} tamanhos)",
+            hicolor.display()
+        ));
         let d = desktop_dir().join(format!("{PRODUCT}.desktop"));
         if desktop {
             if let Some(p) = d.parent() {
@@ -771,10 +800,11 @@ pub fn install_shortcuts(plan: &Plan, desktop: bool, log: &Log<'_>) -> Result<()
         }
         for lnk in targets {
             let script = format!(
-                "$s=(New-Object -ComObject WScript.Shell).CreateShortcut('{}'); $s.TargetPath='{}'; $s.Arguments='--show'; $s.WorkingDirectory='{}'; $s.Description='will-ia'; $s.Save()",
+                "$s=(New-Object -ComObject WScript.Shell).CreateShortcut('{}'); $s.TargetPath='{}'; $s.Arguments='--show'; $s.WorkingDirectory='{}'; $s.IconLocation='{},0'; $s.Description='will-ia'; $s.Save()",
                 lnk.display().to_string().replace('\'', "''"),
                 plan.app_path.display().to_string().replace('\'', "''"),
                 plan.install_dir.display().to_string().replace('\'', "''"),
+                plan.app_path.display().to_string().replace('\'', "''"),
             );
             run(
                 "powershell",
@@ -818,6 +848,11 @@ pub fn remove_shortcuts(plan: &Plan, log: &Log<'_>) {
                 log(&format!("removido {}", p.display()));
             }
         }
+        let hicolor = home().join(".local/share/icons/hicolor");
+        for (size, _) in will_platform::icon::APP_PNGS {
+            let _ = std::fs::remove_file(hicolor.join(format!("{size}x{size}/apps/{PRODUCT}.png")));
+        }
+        log("ícones do tema removidos");
     }
     #[cfg(windows)]
     {

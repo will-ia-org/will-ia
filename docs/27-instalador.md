@@ -60,7 +60,7 @@ A pasta de instalação pode ser trocada em "Avançado" (GUI) ou `--dir` (CLI). 
    3. serviço: escreve o LaunchAgent/unit/autostart/Run e carrega; no macOS **absorve** o LaunchAgent
       manual antigo (bootout + renomeia para `.plist.bak.<data>`) e remove o Login Item "will-ia"
       que o app criava via `auto-launch` (evita dois servidores no login — o segundo só abriria o app);
-   4. atalhos; 5. manifesto `<data_dir>/install-manifest.json` (versão, caminhos, serviço, data);
+   4. atalhos e ícones (Linux: PNGs no tema `hicolor`; Windows: `.lnk` com `IconLocation` do `.exe`; macOS: `.icns` já gravado no bundle no passo 2); 5. manifesto `<data_dir>/install-manifest.json` (versão, caminhos, serviço, data);
    6. iniciar: `launchctl kickstart -k` / `systemctl --user restart` / processo destacado; espera
       `GET /api/health` na porta de `<data_dir>/api-port` (até 40 s) e abre o app (`will-ia-app --show`).
 5. **Concluído** — resumo, URL da API local e o log completo.
@@ -112,7 +112,6 @@ assinado/notarizado: no macOS o usuário libera em Privacidade e Segurança ou
 
 ## Limites conhecidos
 
-- Sem ícone próprio ainda (`Icon=will-ia` no Linux não resolve; `.lnk` usa o ícone do exe).
 - Não há rollback automático: a versão anterior não é guardada (os dados ficam intactos e qualquer
   instalador anterior reinstala a versão dele).
 - Instalação é **por usuário**; instalação de sistema (`/usr/bin`, `Program Files`, serviço de sistema)

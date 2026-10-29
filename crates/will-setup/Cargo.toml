@@ -23,3 +23,6 @@ egui.workspace = true
 
 [lints]
 workspace = true
+
+[target.'cfg(windows)'.build-dependencies]
+winresource = "0.1"

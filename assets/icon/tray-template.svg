@@ -1,0 +1,10 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1024" height="1024" viewBox="0 0 1024 1024">
+  <!-- bandeja do macOS (template: só alfa; o sistema pinta preto/branco) e Linux: as 5 barras sem fundo -->
+  <g fill="#000000">
+    <rect x="176" y="392" width="112" height="240" rx="56"/>
+    <rect x="344" y="272" width="112" height="480" rx="56"/>
+    <rect x="512" y="152" width="112" height="720" rx="56"/>
+    <rect x="680" y="272" width="112" height="480" rx="56"/>
+    <rect x="848" y="392" width="112" height="240" rx="56"/>
+  </g>
+</svg>

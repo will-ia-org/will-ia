@@ -142,11 +142,13 @@ jobs:
               cp "$rel/will-ia-app" "$app/Contents/MacOS/will-ia-app"
               cp "$rel/will-ia"     "$app/Contents/MacOS/will-ia"
               sed "s/__VERSION__/${VERSION}/g" packaging/macos/Info.plist > "$app/Contents/Info.plist"
+              cp assets/icon/will-ia.icns "$app/Contents/Resources/will-ia.icns"
               # "Instalar will-ia.app": duplo clique abre o assistente (payload dentro do binário)
               setup="$stage/Instalar will-ia.app"
               mkdir -p "$setup/Contents/MacOS" "$setup/Contents/Resources"
               cp "$rel/${SETUP}" "$setup/Contents/MacOS/${SETUP}"
               sed "s/__VERSION__/${VERSION}/g" packaging/macos/Setup-Info.plist > "$setup/Contents/Info.plist"
+              cp assets/icon/will-ia.icns "$setup/Contents/Resources/will-ia.icns"
               chmod +x "$app/Contents/MacOS/"* "$setup/Contents/MacOS/"*
               # não assinado/notarizado: o usuário remove a quarentena (xattr -dr com.apple.quarantine)
               # ou libera em Privacidade e Segurança › "Abrir Mesmo Assim" (docs/13).

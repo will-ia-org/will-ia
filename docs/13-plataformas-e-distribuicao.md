@@ -113,6 +113,20 @@ Sem `sudo` para instalar `libasound2-dev`, é possível apontar `PKG_CONFIG_PATH
 
 Desde a v0.1.5 cada release traz um **terceiro binário**, o instalador por usuário (`docs/27`, ADR-0021): assistente gráfico (ou `--cli`) que grava os dois binários na pasta do usuário, registra o servidor no login (LaunchAgent / autostart ou user unit / chave Run), cria atalhos e, numa atualização, para o que está rodando, troca os binários e religa, preservando a pasta de dados. É o caminho recomendado na máquina pessoal. Desde 2026-10-29 ele **vem dentro do pacote de cada plataforma** (não há mais download separado do instalador): descompacte e abra `Instalar will-ia.app` / `will-ia-setup.exe` / `./will-ia-setup`. Os binários soltos no mesmo pacote servem para instalação manual/de sistema.
 
+## Ícones
+
+Fonte única em `assets/icon/` (`will-ia.svg` = squircle azul com onda de voz; `tray-template.svg` = só as barras, para a barra de menus do macOS). `assets/icon/gerar.sh` produz os PNGs (16–1024), o `will-ia.icns` e o `will-ia.ico`. Onde cada um entra:
+
+| Onde | Como |
+|---|---|
+| Janela, barra de tarefas (Windows/Linux), Dock quando é o ícone da janela | `eframe` `with_icon` com o PNG 256 decodificado por `will_platform::icon` (embutido nos binários do app e do instalador) |
+| Dock / Finder / Launchpad (macOS) | `Contents/Resources/will-ia.icns` + `CFBundleIconFile` nos dois bundles (`will-ia.app`, `Instalar will-ia.app`); o release copia o `.icns`, e o `will-ia-setup` o grava ao instalar (e dá `touch` no bundle para o Finder renovar o cache) |
+| Barra de menus do macOS | `tray-icon` com o PNG *template* 44 px e `with_icon_as_template(true)` (preto/branco conforme o tema) |
+| Bandeja do Windows | `tray-icon` com o PNG colorido 32 px |
+| Bandeja do Linux (StatusNotifierItem) | `ksni` com pixmaps ARGB 22/32/48 vindos dos PNGs |
+| Menu/dock/alt-tab do Linux | `Icon=will-ia` no `.desktop` + PNGs instalados em `~/.local/share/icons/hicolor/<n>x<n>/apps/will-ia.png` pelo `will-ia-setup` (todos os tamanhos; `gtk-update-icon-cache` quando existe); o `.deb` instala em `/usr/share/icons/hicolor/` (48, 128, 256, 512) |
+| `.exe` do Windows (Explorer, atalhos, barra de tarefas) | recurso de ícone embutido por `build.rs` + `winresource` (`will-ia.ico`) nos três binários; os `.lnk` do instalador apontam `IconLocation` para o `.exe` do app |
+
 ## Empacotamento por SO
 
 Desde 2026-10-29 a release publica **um pacote por SO (e por arquitetura no macOS)**. Todo pacote descompacta numa pasta `will-ia-<versão>-<plataforma>/` com **os três binários** (`will-ia-setup`, `will-ia`, `will-ia-app`; `.exe` no Windows) mais `README.md`, `LICENSE` e `docs/`. O fluxo do usuário é: baixar, descompactar, abrir o instalador.

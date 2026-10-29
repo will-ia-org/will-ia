@@ -1,6 +1,7 @@
 //! will-platform — integrações de SO sem dependências de GUI: notificações,
 //! abrir pasta/URL, detecção de binários no PATH.
 
+pub mod icon;
 pub mod instance;
 pub mod process;
 

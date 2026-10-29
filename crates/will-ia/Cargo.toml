@@ -3,6 +3,7 @@ name = "will-ia"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
+build = "build.rs"
 description = "will-ia — servidor residente: Claude Code (cérebro) + Telegram + MCP + voz + agendamentos; bandeja quando há desktop"
 
 [[bin]]
@@ -46,7 +47,14 @@ assets = [
   ["../../packaging/linux/will-ia.desktop", "usr/share/applications/", "644"],
   ["../../packaging/systemd/will-ia.service", "usr/lib/systemd/user/", "644"],
   ["../../README.md", "usr/share/doc/will-ia/", "644"],
+  ["../../assets/icon/will-ia-48.png", "usr/share/icons/hicolor/48x48/apps/will-ia.png", "644"],
+  ["../../assets/icon/will-ia-128.png", "usr/share/icons/hicolor/128x128/apps/will-ia.png", "644"],
+  ["../../assets/icon/will-ia-256.png", "usr/share/icons/hicolor/256x256/apps/will-ia.png", "644"],
+  ["../../assets/icon/will-ia-512.png", "usr/share/icons/hicolor/512x512/apps/will-ia.png", "644"],
 ]
 
 [lints]
 workspace = true
+
+[target.'cfg(windows)'.build-dependencies]
+winresource = "0.1"

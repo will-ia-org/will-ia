@@ -48,7 +48,7 @@ mod linux {
                 .map(|&s| ksni::Icon {
                     width: s as i32,
                     height: s as i32,
-                    data: crate::icon::argb_network(s, false),
+                    data: crate::icon::argb_network(s),
                 })
                 .collect()
         }
@@ -143,14 +143,18 @@ mod other {
             tracing::warn!(error = %e, "menu da bandeja");
             return None;
         }
-        let icon = Icon::from_rgba(crate::icon::rgba(32, false), 32, 32).ok()?;
-        let tray = match TrayIconBuilder::new()
+        let (rgba, side) = crate::icon::tray_rgba()?;
+        let icon = Icon::from_rgba(rgba, side, side).ok()?;
+        let builder = TrayIconBuilder::new()
             .with_menu(Box::new(menu))
             .with_tooltip("will-ia")
-            .with_icon(icon)
-            .with_menu_on_left_click(false)
-            .build()
-        {
+            .with_menu_on_left_click(false);
+        // macOS: ícone "template" (só alfa) acompanha o tema claro/escuro da barra de menus.
+        #[cfg(target_os = "macos")]
+        let builder = builder.with_icon_templated(icon);
+        #[cfg(not(target_os = "macos"))]
+        let builder = builder.with_icon(icon);
+        let tray = match builder.build() {
             Ok(t) => t,
             Err(e) => {
                 tracing::warn!(error = %e, "bandeja indisponível");

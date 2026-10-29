@@ -981,7 +981,8 @@ pub fn run(plan: Plan, uninstall: bool) -> eframe::Result<()> {
                 "will-ia — remoção"
             } else {
                 "will-ia — instalação"
-            }),
+            })
+            .with_icon(window_icon()),
         centered: true,
         ..Default::default()
     };
@@ -993,4 +994,15 @@ pub fn run(plan: Plan, uninstall: bool) -> eframe::Result<()> {
             Ok(Box::new(SetupApp::new(plan, uninstall)))
         }),
     )
+}
+
+fn window_icon() -> Arc<egui::IconData> {
+    Arc::new(match will_platform::icon::app_rgba(256) {
+        Ok(i) => egui::IconData {
+            rgba: i.data,
+            width: i.width,
+            height: i.height,
+        },
+        Err(_) => egui::IconData::default(),
+    })
 }
