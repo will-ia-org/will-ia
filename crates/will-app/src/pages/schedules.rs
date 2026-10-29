@@ -14,7 +14,6 @@ use std::time::{Duration, Instant};
 use will_core::{Event, ThreadSummary};
 
 /// Acima disso a mensagem do cartão é cortada, com "mais…" para expandir.
-const MESSAGE_PREVIEW_CHARS: usize = 300;
 /// Espera depois da última tecla antes de pedir a prévia do cron ao serviço.
 const PREVIEW_DEBOUNCE: Duration = Duration::from_millis(600);
 /// Quantas ocorrências a prévia mostra.
@@ -388,7 +387,7 @@ impl SchedulesPage {
             ui.ctx().request_repaint_after(Duration::from_secs(30));
             for v in &rows {
                 self.card(ui, cx, v);
-                ui.add_space(6.0);
+                ui.add_space(4.0);
             }
         });
 
@@ -568,6 +567,8 @@ impl SchedulesPage {
 
     // ---------- cartão ----------
 
+    /// Linha fina por agendamento (estado, nome, quando, próximo disparo) com
+    /// chevron para expandir o resto (thread, último disparo, mensagem, ações).
     fn card(&mut self, ui: &mut egui::Ui, cx: &Cx, v: &Value) {
         let dark = ui.visuals().dark_mode;
         let p = ui::palette(dark);
@@ -577,9 +578,29 @@ impl SchedulesPage {
         let busy = self.actions.iter().any(|(_, t)| t.pending());
         let trigger = &v["trigger"];
         let is_cron = ui::s(trigger, "kind") == "cron";
+        let last_result = ui::s(v, "last_result");
+        let failed = !last_result.is_empty() && last_result != "ok";
+        let expanded = self.expanded.contains(&id);
+        let tone = if !enabled {
+            Tone::Neutral
+        } else if failed {
+            Tone::Danger
+        } else {
+            Tone::Success
+        };
+        let when = if is_cron {
+            let d = ui::s(v, "cron_description");
+            if d.is_empty() {
+                ui::s(trigger, "expr")
+            } else {
+                d
+            }
+        } else {
+            once_local(trigger)
+        };
 
         egui::Frame::new()
-            .fill(p.card_alt)
+            .fill(if expanded { p.card_alt } else { p.card })
             .stroke(egui::Stroke::new(
                 1.0,
                 if enabled {
@@ -589,65 +610,125 @@ impl SchedulesPage {
                 },
             ))
             .corner_radius(8.0)
-            .inner_margin(egui::Margin::symmetric(14, 12))
+            .inner_margin(egui::Margin::symmetric(12, 6))
             .show(ui, |ui| {
                 ui.set_width(ui.available_width());
 
-                // Linha 1: interruptor, nome, badges; à direita o gatilho.
-                ui.horizontal(|ui| {
+                // ---- linha resumida ----
+                let row = ui.horizontal(|ui| {
+                    ui.spacing_mut().item_spacing.x = 8.0;
                     let mut on = enabled;
                     if ui
                         .add_enabled_ui(!busy, |ui| ui::toggle(ui, &mut on))
                         .inner
+                        .on_hover_text(if enabled { tr("Pausar") } else { tr("Retomar") })
                         .changed()
                     {
                         self.update_enabled(cx, id.clone(), on);
                     }
-                    ui.label(RichText::new(&name).font(ui::medium(15.5)));
+                    ui::dot(ui, tone);
+                    let name_text = RichText::new(&name).font(ui::medium(14.0));
+                    ui.label(if enabled { name_text } else { name_text.weak() });
+                    if !is_cron {
+                        ui::badge(ui, tr("único"), Tone::Warning);
+                    }
+                    ui.label(RichText::new(&when).small().weak())
+                        .on_hover_text(if is_cron {
+                            format!(
+                                "{} · {}",
+                                ui::s(trigger, "expr"),
+                                ui::s(v, "timezone_label")
+                            )
+                        } else {
+                            ui::s(v, "timezone_label")
+                        });
+                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                        ui.spacing_mut().item_spacing.x = 8.0;
+                        let chevron = if expanded { "▾" } else { "▸" };
+                        if ui
+                            .add(egui::Button::new(RichText::new(chevron).size(14.0)).frame(false))
+                            .on_hover_text(if expanded {
+                                tr("recolher")
+                            } else {
+                                tr("detalhes")
+                            })
+                            .clicked()
+                        {
+                            if expanded {
+                                self.expanded.remove(&id);
+                            } else {
+                                self.expanded.insert(id.clone());
+                            }
+                        }
+                        if !enabled {
+                            let reason = ui::s(v, "paused_reason");
+                            let label = if reason.is_empty() {
+                                RichText::new(tr("pausado"))
+                                    .small()
+                                    .color(Tone::Neutral.color(dark))
+                            } else {
+                                RichText::new(trf("pausado · {}", &[&reason]))
+                                    .small()
+                                    .color(Tone::Warning.color(dark))
+                            };
+                            ui.label(label);
+                        } else {
+                            let in_ = ui::s(v, "next_run_in");
+                            let local = ui::s(v, "next_run_local");
+                            if !in_.is_empty() {
+                                ui.label(RichText::new(in_).small().font(ui::medium(12.5)))
+                                    .on_hover_text(local);
+                            } else if !local.is_empty() {
+                                ui.label(RichText::new(local).small());
+                            } else {
+                                ui.label(RichText::new("—").small().weak());
+                            }
+                            ui.label(RichText::new(tr("próximo")).small().weak());
+                        }
+                        if failed {
+                            ui::dot(ui, Tone::Danger);
+                        }
+                    });
+                });
+                // clique na linha (fora dos controles) também expande
+                let resp = row.response.interact(egui::Sense::click());
+                if resp.double_clicked() {
+                    if expanded {
+                        self.expanded.remove(&id);
+                    } else {
+                        self.expanded.insert(id.clone());
+                    }
+                }
+
+                if !expanded {
+                    return;
+                }
+
+                // ---- detalhes ----
+                ui.add_space(6.0);
+                ui.separator();
+                ui.add_space(4.0);
+                ui.horizontal_wrapped(|ui| {
+                    ui.label(RichText::new(tr("Gatilho:")).small().weak());
+                    if is_cron {
+                        ui.label(RichText::new(ui::s(trigger, "expr")).monospace().small());
+                        ui.label(RichText::new(&when).small());
+                    } else {
+                        ui.label(RichText::new(&when).monospace().small());
+                    }
+                    let tz = ui::s(v, "timezone_label");
+                    if !tz.is_empty() {
+                        ui.label(RichText::new(format!("· {tz}")).small().weak());
+                    }
                     if ui::s(v, "created_by") == "agent" {
                         ui::badge(ui, tr("agente"), Tone::Info);
                     } else {
                         ui::badge(ui, tr("você"), Tone::Neutral);
                     }
-                    if is_cron {
-                        ui::badge(ui, tr("recorrente"), Tone::Success);
-                    } else {
-                        ui::badge(ui, tr("único"), Tone::Warning);
-                    }
-                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                        if is_cron {
-                            let desc = ui::s(v, "cron_description");
-                            if !desc.is_empty() {
-                                ui.label(RichText::new(desc).small().weak());
-                            }
-                            ui.label(RichText::new(ui::s(trigger, "expr")).monospace())
-                                .on_hover_text(ui::s(v, "timezone_label"));
-                        } else {
-                            ui.label(RichText::new(once_local(trigger)).monospace())
-                                .on_hover_text(ui::s(v, "timezone_label"));
-                        }
-                    });
                 });
-
-                // Linha 2: próximo disparo (ou pausado / motivo).
-                ui.horizontal_wrapped(|ui| {
-                    ui.label(RichText::new(tr("Próximo:")).small().weak());
-                    let paused_reason = ui::s(v, "paused_reason");
-                    if !enabled {
-                        if paused_reason.is_empty() {
-                            ui.label(
-                                RichText::new(tr("pausado"))
-                                    .small()
-                                    .color(Tone::Neutral.color(dark)),
-                            );
-                        } else {
-                            ui.label(
-                                RichText::new(trf("pausado · {}", &[&paused_reason]))
-                                    .small()
-                                    .color(Tone::Warning.color(dark)),
-                            );
-                        }
-                    } else {
+                if enabled {
+                    ui.horizontal_wrapped(|ui| {
+                        ui.label(RichText::new(tr("Próximo:")).small().weak());
                         let local = ui::s(v, "next_run_local");
                         let in_ = ui::s(v, "next_run_in");
                         if local.is_empty() {
@@ -658,14 +739,8 @@ impl SchedulesPage {
                                 ui.label(RichText::new(format!("· {in_}")).small().weak());
                             }
                         }
-                        let tz = ui::s(v, "timezone_label");
-                        if !tz.is_empty() {
-                            ui.label(RichText::new(format!("· {tz}")).small().weak());
-                        }
-                    }
-                });
-
-                // Linha 3: thread dona.
+                    });
+                }
                 ui.horizontal_wrapped(|ui| {
                     ui.label(RichText::new(tr("Thread:")).small().weak());
                     if ui::b(v, "thread_exists") {
@@ -690,8 +765,6 @@ impl SchedulesPage {
                         ui::badge(ui, &origin_kind_label(&v["origin"]), Tone::Neutral);
                     }
                 });
-
-                // Linha 4: último disparo e contagem.
                 ui.horizontal_wrapped(|ui| {
                     ui.label(RichText::new(tr("Último:")).small().weak());
                     let last = ui::fmt_dt(&v["last_run_at"]);
@@ -699,23 +772,22 @@ impl SchedulesPage {
                         ui.label(RichText::new(tr("nunca")).small().weak());
                     } else {
                         ui.label(RichText::new(last).small());
-                        let result = ui::s(v, "last_result");
-                        if result == "ok" {
+                        if last_result == "ok" {
                             ui.label(
                                 RichText::new("· ok")
                                     .small()
                                     .color(Tone::Success.color(dark)),
                             );
-                        } else if !result.is_empty() {
+                        } else if failed {
                             ui.add(
                                 egui::Label::new(
-                                    RichText::new(format!("· {result}"))
+                                    RichText::new(format!("· {last_result}"))
                                         .small()
                                         .color(Tone::Danger.color(dark)),
                                 )
                                 .truncate(),
                             )
-                            .on_hover_text(result);
+                            .on_hover_text(&last_result);
                         }
                     }
                     ui.label(
@@ -725,16 +797,8 @@ impl SchedulesPage {
                     );
                 });
 
-                // Mensagem (cortada, com "mais…").
+                // Mensagem completa.
                 ui.add_space(4.0);
-                let message = ui::s(v, "message");
-                let expanded = self.expanded.contains(&id);
-                let long = message.chars().count() > MESSAGE_PREVIEW_CHARS;
-                let shown = if long && !expanded {
-                    ui::ellipsize(&message, MESSAGE_PREVIEW_CHARS)
-                } else {
-                    message.clone()
-                };
                 egui::Frame::new()
                     .fill(p.card)
                     .stroke(egui::Stroke::new(1.0, p.border))
@@ -742,17 +806,7 @@ impl SchedulesPage {
                     .inner_margin(egui::Margin::symmetric(10, 8))
                     .show(ui, |ui| {
                         ui.set_width(ui.available_width());
-                        ui::wrapped_text(ui, &shown);
-                        if long {
-                            let label = if expanded { tr("menos") } else { tr("mais…") };
-                            if ui.button(label).clicked() {
-                                if expanded {
-                                    self.expanded.remove(&id);
-                                } else {
-                                    self.expanded.insert(id.clone());
-                                }
-                            }
-                        }
+                        ui::wrapped_text(ui, &ui::s(v, "message"));
                     });
 
                 // Ações.

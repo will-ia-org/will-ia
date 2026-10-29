@@ -102,27 +102,40 @@ impl ApprovalsPage {
         let title = if pending_count == 0 {
             tr("Pendentes").to_string()
         } else {
-            trf("Pendentes ({})", &[&pending_count])
+            trf("Pendentes · {}", &[&pending_count])
         };
-        ui::section(ui, &title, |ui| {
-            ui.set_width(ui.available_width());
-            if snap.pending_approvals.is_empty() {
-                ui.label(RichText::new(tr("Nenhuma aprovação pendente.")).weak());
-                return;
-            }
-            // Contagem regressiva ao vivo.
-            ui.ctx()
-                .request_repaint_after(std::time::Duration::from_secs(1));
-            for a in &snap.pending_approvals {
-                self.pending_card(ui, cx, a);
-                ui.add_space(6.0);
-            }
-        });
-
-        ui::section(ui, tr("Histórico"), |ui| {
-            ui.set_width(ui.available_width());
-            self.history_ui(ui);
-        });
+        // Abas: a chegada de uma aprovação nova NÃO troca a aba sozinha (o
+        // contador e a bolinha amarela avisam); os deep-links (faixa, menu,
+        // notificação, `--nav approvals/pending`) selecionam "pending".
+        let tab = ui::tabs(
+            ui,
+            "approvals",
+            &[
+                ui::Tab::new("pending", title).tone((pending_count > 0).then_some(Tone::Warning)),
+                ui::Tab::new("history", tr("Histórico")),
+            ],
+        );
+        if tab == "pending" {
+            ui::section(ui, tr("Pendentes"), |ui| {
+                ui.set_width(ui.available_width());
+                if snap.pending_approvals.is_empty() {
+                    ui.label(RichText::new(tr("Nenhuma aprovação pendente.")).weak());
+                    return;
+                }
+                // Contagem regressiva ao vivo.
+                ui.ctx()
+                    .request_repaint_after(std::time::Duration::from_secs(1));
+                for a in &snap.pending_approvals {
+                    self.pending_card(ui, cx, a);
+                    ui.add_space(6.0);
+                }
+            });
+        } else {
+            ui::section(ui, tr("Histórico"), |ui| {
+                ui.set_width(ui.available_width());
+                self.history_ui(ui);
+            });
+        }
     }
 
     // ---------- pendentes ----------

@@ -800,6 +800,7 @@ impl eframe::App for WillApp {
                     ui::dot(ui, Tone::Warning);
                     ui.label(trf("{} aprovação(ões) pendente(s).", &[&n]));
                     if ui.button(tr("Ver")).clicked() {
+                        ui::select_tab(ui.ctx(), "approvals", "pending");
                         self.nav = Nav::Approvals;
                     }
                 });
