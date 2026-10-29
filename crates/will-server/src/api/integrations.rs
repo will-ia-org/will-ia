@@ -449,6 +449,22 @@ pub async fn google_accounts(State(state): State<App>) -> ApiResult<Value> {
 pub struct ConnectBody {
     pub scopes: Option<Vec<String>>,
     pub open_browser: Option<bool>,
+    /// Porta de loopback onde o cliente remoto escuta o callback. Quando
+    /// presente, o servidor só devolve `auth_url` + `state` e espera o `code`
+    /// em `POST /google/callback`.
+    pub callback_port: Option<u16>,
+}
+
+#[derive(serde::Deserialize, Default)]
+pub struct ReauthBody {
+    pub open_browser: Option<bool>,
+    pub callback_port: Option<u16>,
+}
+
+#[derive(serde::Deserialize)]
+pub struct GoogleCallbackBody {
+    pub state: String,
+    pub code: String,
 }
 
 pub async fn google_connect(
@@ -462,11 +478,14 @@ pub async fn google_connect(
         let scopes = b
             .scopes
             .unwrap_or_else(|| vec!["calendar".into(), "gmail".into()]);
-        let url = g
-            .start_connect(scopes, b.open_browser.unwrap_or(true))
+        let open = b.open_browser.unwrap_or(b.callback_port.is_none());
+        let start = g
+            .start_connect(scopes, open, b.callback_port)
             .await
             .map_err(bad)?;
-        Ok(Json(json!({ "auth_url": url })))
+        Ok(Json(
+            json!({ "auth_url": start.auth_url, "state": start.state }),
+        ))
     }
     #[cfg(not(feature = "google"))]
     {
@@ -478,16 +497,43 @@ pub async fn google_connect(
 pub async fn google_reauthorize(
     State(state): State<App>,
     Path(id): Path<String>,
+    body: Option<Json<ReauthBody>>,
 ) -> ApiResult<Value> {
     #[cfg(feature = "google")]
     {
         let g = google(&state)?;
-        let url = g.reauthorize(&id, true).await.map_err(bad)?;
-        Ok(Json(json!({ "auth_url": url })))
+        let b = body.map(|b| b.0).unwrap_or_default();
+        let open = b.open_browser.unwrap_or(b.callback_port.is_none());
+        let start = g
+            .reauthorize(&id, open, b.callback_port)
+            .await
+            .map_err(bad)?;
+        Ok(Json(
+            json!({ "auth_url": start.auth_url, "state": start.state }),
+        ))
     }
     #[cfg(not(feature = "google"))]
     {
-        let _ = (state, id);
+        let _ = (state, id, body);
+        Err(bad("módulo Google não compilado"))
+    }
+}
+
+/// Conclui o fluxo OAuth iniciado por um cliente remoto: o app repassa o
+/// `code` que recebeu no loopback dele e o servidor faz a troca pelo token.
+pub async fn google_callback(
+    State(state): State<App>,
+    Json(b): Json<GoogleCallbackBody>,
+) -> ApiResult<Value> {
+    #[cfg(feature = "google")]
+    {
+        let g = google(&state)?;
+        let email = g.complete_flow(&b.state, &b.code).await.map_err(bad)?;
+        Ok(Json(json!({ "email": email })))
+    }
+    #[cfg(not(feature = "google"))]
+    {
+        let _ = (state, b);
         Err(bad("módulo Google não compilado"))
     }
 }

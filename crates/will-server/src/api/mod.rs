@@ -140,6 +140,7 @@ pub fn is_admin_path(method: &axum::http::Method, path: &str) -> bool {
         || p == "/kb/scaffold"
         || p.starts_with("/browser/install/")
         || p.starts_with("/google/connect")
+        || p.starts_with("/google/callback")
         || p.starts_with("/google/accounts/")
         || p.starts_with("/google/calendars")
         || p.starts_with("/whatsapp/pair")
@@ -298,6 +299,7 @@ pub fn router(state: App) -> Router {
         )
         .route("/google/accounts", get(integrations::google_accounts))
         .route("/google/connect", post(integrations::google_connect))
+        .route("/google/callback", post(integrations::google_callback))
         .route(
             "/google/accounts/{id}/reauthorize",
             post(integrations::google_reauthorize),

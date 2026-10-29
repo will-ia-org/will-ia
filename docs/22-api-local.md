@@ -15,7 +15,7 @@ Sessão: token aleatório de 32 bytes (hex); o servidor guarda só o **sha256** 
 
 Primeira subida sem usuários (`bootstrap_admin`): cria `admin` ("Administrador", papel `admin`, `must_change_password = 1`) com senha aleatória de 16 caracteres gravada em `<data_dir>/admin-initial-password.txt` (0600; duas linhas: usuário e senha), avisa no log e em `/api/logs`; `will-ia info` imprime usuário e senha. O arquivo é apagado na primeira troca de senha.
 
-**Portão de administrador** (`admin_gate` / `is_admin_path`): com `Principal` de membro, estas rotas respondem **403** `{ "error": "só administradores" }`: `PUT /api/settings`, `/api/secrets*`, `/api/engine/tokens*`, `/api/mcp/script-token*`, `PUT /api/mcp/tools/{name}/policy`, `/api/mcp/external*`, `/api/users*`, `POST /api/kb/scaffold`, `POST /api/kb/open`, `GET /api/kb/browse`, `GET /api/diagnostics`, `/api/browser/install/*`, `POST /api/browser/launch`, `POST /api/browser/close`, `/api/google/connect`, `/api/google/accounts/*` (reautorizar, revogar), `/api/google/calendars*`, `/api/whatsapp/pair|unlink|reconnect`, `/api/whatsapp/accounts/*`, `GET /api/network/cert`. Tudo o mais (threads, mensagens, uploads, `files`, aprovações, agendamentos, voz, logs, custos, leitura de settings/status/health) é liberado a membros.
+**Portão de administrador** (`admin_gate` / `is_admin_path`): com `Principal` de membro, estas rotas respondem **403** `{ "error": "só administradores" }`: `PUT /api/settings`, `/api/secrets*`, `/api/engine/tokens*`, `/api/mcp/script-token*`, `PUT /api/mcp/tools/{name}/policy`, `/api/mcp/external*`, `/api/users*`, `POST /api/kb/scaffold`, `POST /api/kb/open`, `GET /api/kb/browse`, `GET /api/diagnostics`, `/api/browser/install/*`, `POST /api/browser/launch`, `POST /api/browser/close`, `/api/google/connect`, `/api/google/callback`, `/api/google/accounts/*` (reautorizar, revogar), `/api/google/calendars*`, `/api/whatsapp/pair|unlink|reconnect`, `/api/whatsapp/accounts/*`, `GET /api/network/cert`. Tudo o mais (threads, mensagens, uploads, `files`, aprovações, agendamentos, voz, logs, custos, leitura de settings/status/health) é liberado a membros.
 
 Códigos: **401** `token de sessão ausente` / `token de sessão inválido` (também para sessão expirada ou usuário desativado) / `usuário ou senha inválidos` / `senha atual incorreta`; **403** só administradores; **429** `muitas tentativas; aguarde alguns minutos` no login (`LoginLimiter`: **10 tentativas por IP em 15 min**, contador zerado no login bem-sucedido).
 
@@ -178,8 +178,9 @@ Eventos no WS `/api/events`: `Browser { state: listening | launched | browser_up
 | Método | Rota | Descrição |
 |---|---|---|
 | GET | `/api/google/accounts` | |
-| POST | `/api/google/connect` | `{ scopes: ["calendar","calendar_write","gmail","gmail_send","gmail_modify"] }` abre navegador; retorna `{ auth_url }` |
-| POST | `/api/google/accounts/{id}/reauthorize` | |
+| POST | `/api/google/connect` | `{ scopes: [...], callback_port?, open_browser? }`; retorna `{ auth_url, state }`. Com `callback_port`, o cliente escuta o callback e conclui em `/api/google/callback` (ver `docs/18`) |
+| POST | `/api/google/callback` | `{ state, code }` do loopback do cliente; o servidor troca pelo token; retorna `{ email }` |
+| POST | `/api/google/accounts/{id}/reauthorize` | `{ callback_port?, open_browser? }`; retorna `{ auth_url, state }` |
 | DELETE | `/api/google/accounts/{id}` | revoga |
 | GET | `/api/google/calendars` | lista com flags |
 | POST | `/api/google/calendars/refresh` | reconsulta |

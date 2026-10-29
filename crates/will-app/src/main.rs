@@ -16,6 +16,7 @@ mod help;
 mod hotkey;
 mod i18n;
 mod icon;
+mod oauth_cb;
 mod pages;
 mod profiles;
 mod service;

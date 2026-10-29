@@ -4,11 +4,13 @@
 use super::SettingsState;
 use crate::help;
 use crate::i18n::{tr, trf};
+use crate::oauth_cb;
 use crate::pages::Cx;
 use crate::service::{Loader, Task};
 use crate::ui::{self, SecretAction, SecretField, Tone};
 use serde_json::{json, Value};
 use std::collections::BTreeMap;
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
 use will_core::{Event, Module};
 
@@ -25,14 +27,23 @@ const SCOPE_OPTIONS: [(&str, &str); 5] = [
     ("gmail_modify", "Gmail (arquivar/marcar/rotular)"),
 ];
 
+/// Fluxo OAuth em andamento: o app escuta o callback no loopback local e
+/// repassa o `code` ao servidor. `reauth_id` distingue reautorizar de conectar.
+struct Flow {
+    task: Task<Value>,
+    url: Arc<Mutex<Option<String>>>,
+    reauth_id: Option<String>,
+}
+
 pub struct GooglePage {
     accounts: Loader<Value>,
     calendars: Loader<Value>,
     client_secret: SecretField,
     show_connect: bool,
     connect_scopes: [bool; 5],
-    connect_task: Option<Task<Value>>,
-    reauth_task: Option<(String, Task<Value>)>,
+    flow: Option<Flow>,
+    /// URL de autorização a abrir no navegador do cliente (uma vez).
+    open_url_once: Option<String>,
     disconnect_task: Option<Task<Value>>,
     confirm_disconnect: Option<(String, String)>,
     flags_task: Option<Task<Value>>,
@@ -48,8 +59,8 @@ impl Default for GooglePage {
             client_secret: SecretField::default(),
             show_connect: false,
             connect_scopes: [true, false, true, false, false],
-            connect_task: None,
-            reauth_task: None,
+            flow: None,
+            open_url_once: None,
             disconnect_task: None,
             confirm_disconnect: None,
             flags_task: None,
@@ -115,6 +126,65 @@ impl GooglePage {
         }));
     }
 
+    /// Inicia um fluxo OAuth: abre o listener local, pede ao servidor a URL de
+    /// autorização, abre o navegador e repassa o `code` ao concluir.
+    fn start_oauth(
+        &mut self,
+        cx: &Cx,
+        reauth_id: Option<String>,
+        scopes: Option<Vec<String>>,
+        fixed_port: Option<u16>,
+    ) {
+        let url = Arc::new(Mutex::new(None));
+        let url2 = url.clone();
+        let reauth = reauth_id.clone();
+        let task = cx.svc.call(move |c| async move {
+            let (listener, port) = oauth_cb::bind(fixed_port).await?;
+            let body = match &reauth {
+                Some(id) => {
+                    c.google_reauthorize(
+                        id,
+                        Some(json!({ "callback_port": port, "open_browser": false })),
+                    )
+                    .await?
+                }
+                None => {
+                    c.google_connect(Some(json!({
+                        "scopes": scopes,
+                        "callback_port": port,
+                        "open_browser": false,
+                    })))
+                    .await?
+                }
+            };
+            let auth_url = body
+                .get("auth_url")
+                .and_then(|x| x.as_str())
+                .unwrap_or_default()
+                .to_string();
+            let state = body
+                .get("state")
+                .and_then(|x| x.as_str())
+                .unwrap_or_default()
+                .to_string();
+            if auth_url.is_empty() || state.is_empty() {
+                return Err("servidor não devolveu auth_url/state do fluxo".into());
+            }
+            if let Ok(mut g) = url2.lock() {
+                *g = Some(auth_url.clone());
+            }
+            let code =
+                oauth_cb::wait_code(listener, &state, std::time::Duration::from_secs(300)).await?;
+            c.google_callback(&state, &code).await
+        });
+        self.flow = Some(Flow {
+            task,
+            url,
+            reauth_id,
+        });
+        self.auth_url = None;
+    }
+
     fn poll(&mut self, cx: &mut Cx) {
         if self.accounts.stale(Duration::from_secs(60)) {
             self.reload_accounts(cx);
@@ -128,31 +198,47 @@ impl GooglePage {
                 cx.toasts.error(trf("Agendas: {}", &[&e]));
             }
         }
-        if let Some(t) = &self.connect_task {
-            if let Some(r) = t.take() {
-                self.connect_task = None;
-                match r {
-                    Ok(v) => {
-                        self.auth_url = Some(ui::s(&v, "auth_url"));
-                        self.show_connect = false;
-                        cx.toasts.info(tr(
-                            "Autorize no navegador; a conta aparece aqui ao concluir.",
-                        ));
+        // Fluxo OAuth (conectar/reautorizar): o app publica a URL para abrir no
+        // navegador e, ao receber o code no loopback, o servidor conclui.
+        let mut new_url = None;
+        let mut finished = None;
+        if let Some(flow) = self.flow.as_ref() {
+            if self.auth_url.is_none() {
+                if let Ok(g) = flow.url.lock() {
+                    if let Some(u) = g.clone() {
+                        new_url = Some(u);
                     }
-                    Err(e) => cx.toasts.error(trf("Conectar: {}", &[&e])),
                 }
             }
+            if let Some(r) = flow.task.take() {
+                finished = Some(r);
+            }
         }
-        if let Some((_, t)) = &self.reauth_task {
-            if let Some(r) = t.take() {
-                self.reauth_task = None;
-                match r {
-                    Ok(v) => {
-                        self.auth_url = Some(ui::s(&v, "auth_url"));
-                        cx.toasts.info(tr("Autorize de novo no navegador."));
+        if let Some(u) = new_url {
+            self.auth_url = Some(u.clone());
+            self.open_url_once = Some(u);
+        }
+        if let Some(r) = finished {
+            self.flow = None;
+            match r {
+                Ok(v) => {
+                    let email = v
+                        .get("email")
+                        .and_then(|x| x.as_str())
+                        .unwrap_or_default()
+                        .to_string();
+                    if email.is_empty() {
+                        cx.toasts.success(tr("Conta Google conectada."));
+                    } else {
+                        cx.toasts
+                            .success(trf("Conta Google {} conectada.", &[&email]));
                     }
-                    Err(e) => cx.toasts.error(trf("Reautorizar: {}", &[&e])),
+                    self.auth_url = None;
+                    self.show_connect = false;
+                    self.reload_accounts(cx);
+                    self.reload_calendars(cx);
                 }
+                Err(e) => cx.toasts.error(trf("Autorização: {}", &[&e])),
             }
         }
         if let Some(t) = &self.disconnect_task {
@@ -184,6 +270,9 @@ impl GooglePage {
 
     pub fn ui(&mut self, ui: &mut egui::Ui, cx: &mut Cx, st: &mut SettingsState) {
         self.poll(cx);
+        if let Some(u) = self.open_url_once.take() {
+            ui.ctx().open_url(egui::OpenUrl::new_tab(&u));
+        }
         ui::heading(ui, tr("Google"), Some(tr("Agenda e Gmail com o OAuth Client do próprio usuário. Google não cria threads: e-mails e eventos são dados para as ferramentas calendar_* e gmail_*.")));
 
         // ---- status dos módulos ----
@@ -218,6 +307,7 @@ impl GooglePage {
             .filter(|k| !k.trim().is_empty())
             .unwrap_or_else(|| DEFAULT_SECRET_KEY.to_string());
         let secret_present = st.secret_present(&secret_key);
+        let redirect_port = st.saved.google.redirect_port;
         let client_id_saved = st
             .saved
             .google
@@ -342,25 +432,19 @@ impl GooglePage {
                                 ui.label(egui::RichText::new(format!("· id {id}")).weak().small());
                             });
                             ui.horizontal(|ui| {
-                                let reauthorizing =
-                                    self.reauth_task.as_ref().is_some_and(|(i, _)| i == &id);
+                                let reauthorizing = self
+                                    .flow
+                                    .as_ref()
+                                    .is_some_and(|f| f.reauth_id.as_deref() == Some(id.as_str()));
+                                let busy_flow = self.flow.is_some();
                                 if reauthorizing {
                                     ui.spinner();
                                 }
                                 if ui
-                                    .add_enabled(
-                                        !reauthorizing,
-                                        egui::Button::new(tr("Reautorizar")),
-                                    )
+                                    .add_enabled(!busy_flow, egui::Button::new(tr("Reautorizar")))
                                     .clicked()
                                 {
-                                    let id2 = id.clone();
-                                    self.reauth_task = Some((
-                                        id.clone(),
-                                        cx.svc.call(move |c| async move {
-                                            c.google_reauthorize(&id2).await
-                                        }),
-                                    ));
+                                    self.start_oauth(cx, Some(id.clone()), None, redirect_port);
                                 }
                                 if ui
                                     .add_enabled(
@@ -412,7 +496,7 @@ impl GooglePage {
                     }
                     ui.horizontal(|ui| {
                         let any = self.connect_scopes.iter().any(|b| *b);
-                        let connecting = self.connect_task.is_some();
+                        let connecting = self.flow.as_ref().is_some_and(|f| f.reauth_id.is_none());
                         if ui
                             .add_enabled(
                                 can_connect && any && !connecting,
@@ -426,13 +510,7 @@ impl GooglePage {
                                 .filter(|(_, on)| **on)
                                 .map(|((k, _), _)| k.to_string())
                                 .collect();
-                            self.connect_task = Some(cx.svc.call(move |c| async move {
-                                c.google_connect(Some(json!({
-                                    "scopes": scopes,
-                                    "open_browser": true,
-                                })))
-                                .await
-                            }));
+                            self.start_oauth(cx, None, Some(scopes), redirect_port);
                         }
                         if ui.button(tr("Cancelar")).clicked() {
                             self.show_connect = false;

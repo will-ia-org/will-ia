@@ -19,9 +19,10 @@ use oauth2::{
     TokenResponse,
 };
 use secrecy::SecretString;
+use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::{Arc, Weak};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 use tokio_util::sync::CancellationToken;
 use will_core::settings::{CalendarSettings, GmailSettings, GoogleSettings};
 use will_core::{Event, EventBus, Module, ModuleStatus, ToolProvider};
@@ -29,6 +30,31 @@ use will_storage::google::{GoogleAccount, GoogleCalendar};
 use will_storage::{SecretStore, Storage};
 
 const MODULE: &str = "google";
+
+/// Fluxo OAuth aguardando o `code` que o cliente vai repassar.
+struct PendingFlow {
+    verifier: PkceCodeVerifier,
+    redirect: RedirectUrl,
+    requested: Vec<String>,
+    existing: Option<GoogleAccount>,
+    created: Instant,
+}
+
+/// Início de um fluxo OAuth. `state` presente = fluxo dirigido pelo cliente
+/// (ele escuta o callback e chama `complete_flow`); ausente = o servidor
+/// conclui sozinho pelo loopback local.
+pub struct ConnectStart {
+    pub auth_url: String,
+    pub state: Option<String>,
+}
+
+/// Dados extraídos da resposta de token, sem expor o tipo do oauth2.
+struct ExchangeOut {
+    access: String,
+    refresh: Option<String>,
+    granted: Option<Vec<String>>,
+    ttl: Duration,
+}
 
 pub struct GoogleDeps {
     pub storage: Storage,
@@ -51,6 +77,9 @@ pub struct GoogleModule {
     cfg: parking_lot::RwLock<GoogleConfig>,
     pub(crate) kb_path: PathBuf,
     pending_flow: parking_lot::Mutex<Option<CancellationToken>>,
+    /// Fluxos OAuth iniciados pelo servidor e concluídos pelo cliente remoto
+    /// (ele escuta o callback de loopback e devolve o `code`), por `state`.
+    pending_flows: parking_lot::Mutex<HashMap<String, PendingFlow>>,
     pub(crate) calendars_cache: parking_lot::RwLock<Vec<GoogleCalendar>>,
     pub(crate) gmail_state: gmail::GmailState,
 }
@@ -69,6 +98,7 @@ impl GoogleModule {
             cfg: parking_lot::RwLock::new(cfg),
             kb_path: deps.kb_path,
             pending_flow: parking_lot::Mutex::new(None),
+            pending_flows: parking_lot::Mutex::new(HashMap::new()),
             calendars_cache: parking_lot::RwLock::new(Vec::new()),
             gmail_state: gmail::GmailState::new(),
         });
@@ -98,6 +128,7 @@ impl GoogleModule {
             cfg: parking_lot::RwLock::new(cfg),
             kb_path,
             pending_flow: parking_lot::Mutex::new(None),
+            pending_flows: parking_lot::Mutex::new(HashMap::new()),
             calendars_cache: parking_lot::RwLock::new(Vec::new()),
             gmail_state: gmail::GmailState::new(),
         })
@@ -238,9 +269,11 @@ impl GoogleModule {
         &self,
         scopes: Vec<String>,
         open_browser: bool,
-    ) -> Result<String, String> {
+        callback_port: Option<u16>,
+    ) -> Result<ConnectStart, String> {
         let urls = oauth::logical_to_scopes(&scopes).map_err(|e| e.to_string())?;
-        self.begin_flow(urls, None, open_browser).await
+        self.begin_flow(urls, None, open_browser, callback_port)
+            .await
     }
 
     /// Reautoriza uma conta existente (consentimento incremental: inclui os
@@ -249,7 +282,8 @@ impl GoogleModule {
         &self,
         account_id: &str,
         open_browser: bool,
-    ) -> Result<String, String> {
+        callback_port: Option<u16>,
+    ) -> Result<ConnectStart, String> {
         let account = self
             .client
             .find_account(account_id)
@@ -278,7 +312,8 @@ impl GoogleModule {
         }
         let urls = oauth::logical_to_scopes(&wanted).map_err(|e| e.to_string())?;
         let urls = oauth::merge_scopes(&urls, &account.scopes);
-        self.begin_flow(urls, Some(account), open_browser).await
+        self.begin_flow(urls, Some(account), open_browser, callback_port)
+            .await
     }
 
     async fn begin_flow(
@@ -286,24 +321,34 @@ impl GoogleModule {
         scopes: Vec<String>,
         existing: Option<GoogleAccount>,
         open_browser: bool,
-    ) -> Result<String, String> {
-        let me = self
-            .me
-            .upgrade()
-            .ok_or_else(|| "módulo encerrado".to_string())?;
+        callback_port: Option<u16>,
+    ) -> Result<ConnectStart, String> {
         let client = self
             .client
             .oauth_client()
             .await
             .map_err(|e| e.to_string())?;
         let fixed_port = self.config().google.redirect_port;
-        let (listener, port) = oauth::bind_loopback(fixed_port).await.map_err(|e| match fixed_port {
-            Some(p) => format!("não consegui abrir a porta fixa {p} do callback ({e}); feche o que a ocupa ou troque a porta em Configurações › Google"),
-            None => e.to_string(),
-        })?;
+        // Cliente remoto: ele mesmo escuta o callback na porta `callback_port` e
+        // devolve o `code` em `complete_flow`. Local: abrimos o loopback aqui.
+        let server_listener = match callback_port {
+            Some(_) => None,
+            None => {
+                let (listener, port) = oauth::bind_loopback(fixed_port).await.map_err(|e| match fixed_port {
+                    Some(p) => format!("não consegui abrir a porta fixa {p} do callback ({e}); feche o que a ocupa ou troque a porta em Configurações › Google"),
+                    None => e.to_string(),
+                })?;
+                Some((listener, port))
+            }
+        };
+        let port = match (callback_port, &server_listener) {
+            (Some(p), _) => p,
+            (None, Some((_, p))) => *p,
+            (None, None) => unreachable!("sem porta de callback"),
+        };
         let redirect = RedirectUrl::new(format!("http://127.0.0.1:{port}{}", oauth::CALLBACK_PATH))
             .map_err(|e| e.to_string())?;
-        let client = client.set_redirect_uri(redirect);
+        let client = client.set_redirect_uri(redirect.clone());
         let (challenge, verifier) = PkceCodeChallenge::new_random_sha256();
         let mut req = client
             .authorize_url(CsrfToken::new_random)
@@ -311,45 +356,125 @@ impl GoogleModule {
             .add_extra_param("access_type", "offline")
             .add_extra_param("prompt", "consent")
             .add_extra_param("include_granted_scopes", "true");
-        for s in &scopes {
-            req = req.add_scope(Scope::new(s.clone()));
+        for sc in &scopes {
+            req = req.add_scope(Scope::new(sc.clone()));
         }
         if let Some(acc) = &existing {
             req = req.add_extra_param("login_hint", acc.email.clone());
         }
         let (url, state) = req.url();
-
-        let cancel = CancellationToken::new();
-        if let Some(prev) = self.pending_flow.lock().replace(cancel.clone()) {
-            prev.cancel();
-        }
-        let bus = self.client.bus.clone();
-        tokio::spawn(async move {
-            let result = me
-                .finish_flow(listener, client, verifier, state, scopes, existing, cancel)
-                .await;
-            match result {
-                Ok(email) => bus.log("info", MODULE, format!("conta Google {email} conectada")),
-                Err(e) => bus.log(
-                    "error",
-                    MODULE,
-                    format!("falha ao conectar conta Google: {e}"),
-                ),
-            }
-            me.emit_status();
-        });
-
         let url_s = url.to_string();
-        if open_browser {
-            if let Err(e) = open::that_detached(&url_s) {
-                self.client.bus.log(
-                    "warn",
-                    MODULE,
-                    format!("não foi possível abrir o navegador: {e}"),
+
+        match server_listener {
+            // Modo local: o servidor escuta o loopback e conclui em segundo plano.
+            Some((listener, _)) => {
+                let me = self
+                    .me
+                    .upgrade()
+                    .ok_or_else(|| "módulo encerrado".to_string())?;
+                let cancel = CancellationToken::new();
+                if let Some(prev) = self.pending_flow.lock().replace(cancel.clone()) {
+                    prev.cancel();
+                }
+                let bus = self.client.bus.clone();
+                tokio::spawn(async move {
+                    let result = me
+                        .finish_flow(listener, client, verifier, state, scopes, existing, cancel)
+                        .await;
+                    match result {
+                        Ok(email) => {
+                            bus.log("info", MODULE, format!("conta Google {email} conectada"))
+                        }
+                        Err(e) => bus.log(
+                            "error",
+                            MODULE,
+                            format!("falha ao conectar conta Google: {e}"),
+                        ),
+                    }
+                    me.emit_status();
+                });
+                if open_browser {
+                    if let Err(e) = open::that_detached(&url_s) {
+                        self.client.bus.log(
+                            "warn",
+                            MODULE,
+                            format!("não foi possível abrir o navegador: {e}"),
+                        );
+                    }
+                }
+                Ok(ConnectStart {
+                    auth_url: url_s,
+                    state: None,
+                })
+            }
+            // Modo cliente remoto: guardamos o fluxo e esperamos o `code`.
+            None => {
+                self.prune_pending_flows();
+                self.pending_flows.lock().insert(
+                    state.secret().to_string(),
+                    PendingFlow {
+                        verifier,
+                        redirect,
+                        requested: scopes,
+                        existing,
+                        created: Instant::now(),
+                    },
                 );
+                if open_browser {
+                    let _ = open::that_detached(&url_s);
+                }
+                Ok(ConnectStart {
+                    auth_url: url_s,
+                    state: Some(state.secret().to_string()),
+                })
             }
         }
-        Ok(url_s)
+    }
+
+    /// Remove fluxos pendentes mais velhos que o timeout.
+    fn prune_pending_flows(&self) {
+        let mut g = self.pending_flows.lock();
+        g.retain(|_, f| f.created.elapsed() < oauth::FLOW_TIMEOUT);
+    }
+
+    /// Conclui um fluxo iniciado para cliente remoto: troca o `code` pelo token
+    /// e persiste a conta. Chamado pela rota `POST /api/google/callback`.
+    pub async fn complete_flow(&self, state: &str, code: &str) -> Result<String, String> {
+        self.prune_pending_flows();
+        let pf = self
+            .pending_flows
+            .lock()
+            .remove(state)
+            .ok_or_else(|| "fluxo de autorização expirado ou desconhecido".to_string())?;
+        let client = self
+            .client
+            .oauth_client()
+            .await
+            .map_err(|e| e.to_string())?;
+        let client = client.set_redirect_uri(pf.redirect);
+        let tr = client
+            .exchange_code(AuthorizationCode::new(code.to_string()))
+            .set_pkce_verifier(pf.verifier)
+            .request_async(self.client.oauth_http())
+            .await
+            .map_err(|e| format!("troca de código falhou: {e}"))?;
+        let out = ExchangeOut {
+            access: tr.access_token().secret().to_string(),
+            refresh: tr.refresh_token().map(|r| r.secret().to_string()),
+            granted: tr
+                .scopes()
+                .map(|s| s.iter().map(|x| x.to_string()).collect()),
+            ttl: tr.expires_in().unwrap_or(Duration::from_secs(3600)),
+        };
+        let email = self
+            .persist_exchange(out, pf.requested, pf.existing)
+            .await
+            .map_err(|e| e.to_string())?;
+        self.client
+            .bus
+            .log("info", MODULE, format!("conta Google {email} conectada"));
+        self.emit_status();
+        Ok(email)
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -371,10 +496,29 @@ impl GoogleModule {
             .request_async(self.client.oauth_http())
             .await
             .map_err(|e| GoogleError::OAuth(format!("troca de código falhou: {e}")))?;
-        let access = tr.access_token().secret().to_string();
-        let granted: Vec<String> = tr
-            .scopes()
-            .map(|s| s.iter().map(|x| x.to_string()).collect())
+        let out = ExchangeOut {
+            access: tr.access_token().secret().to_string(),
+            refresh: tr.refresh_token().map(|r| r.secret().to_string()),
+            granted: tr
+                .scopes()
+                .map(|s| s.iter().map(|x| x.to_string()).collect()),
+            ttl: tr.expires_in().unwrap_or(Duration::from_secs(3600)),
+        };
+        self.persist_exchange(out, requested, existing).await
+    }
+
+    /// Troca concluída (userinfo + persistência da conta e do refresh token).
+    /// Compartilhado pelo fluxo local (`finish_flow`) e pelo remoto
+    /// (`complete_flow`).
+    async fn persist_exchange(
+        &self,
+        out: ExchangeOut,
+        requested: Vec<String>,
+        existing: Option<GoogleAccount>,
+    ) -> Result<String, GoogleError> {
+        let access = out.access;
+        let granted: Vec<String> = out
+            .granted
             .filter(|v: &Vec<String>| !v.is_empty())
             .unwrap_or(requested);
         let info = oauth::fetch_userinfo(
@@ -397,10 +541,10 @@ impl GoogleModule {
             .map(|a| a.id.clone())
             .unwrap_or_else(|| uuid::Uuid::now_v7().to_string());
 
-        match tr.refresh_token() {
+        match &out.refresh {
             Some(rt) => {
                 self.client
-                    .store_refresh_token(&id, &SecretString::from(rt.secret().to_string()))
+                    .store_refresh_token(&id, &SecretString::from(rt.clone()))
                     .await?;
             }
             None => {
@@ -435,10 +579,7 @@ impl GoogleModule {
             last_used_at: None,
         };
         self.client.storage.upsert_google_account(&account).await?;
-        let ttl = tr
-            .expires_in()
-            .unwrap_or(Duration::from_secs(3600))
-            .saturating_sub(Duration::from_secs(60));
+        let ttl = out.ttl.saturating_sub(Duration::from_secs(60));
         self.client
             .seed_token(&id, &access, ttl.max(Duration::from_secs(30)));
         self.client.reload_accounts().await?;

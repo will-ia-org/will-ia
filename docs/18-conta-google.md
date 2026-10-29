@@ -19,6 +19,17 @@ A UI valida o formato do `client_id` (`*.apps.googleusercontent.com`) e testa a 
 ## Fluxo de autorização
 
 - **Authorization Code + PKCE** (crate `oauth2`), redirect em **loopback**: o serviço sobe um listener temporário em `http://127.0.0.1:<porta aleatória>/oauth/google/callback`, abre o navegador padrão (`will-platform::open_url`), recebe o `code`, troca por tokens, e responde ao navegador com uma página "Pode fechar esta aba".
+
+### Autorização com cliente remoto (app separado do servidor)
+
+Quando o app roda em outra máquina, o navegador que o usuário usa está no **cliente**, não no servidor. Se o servidor abrisse o listener de loopback nele mesmo, o Google redirecionaria para o `127.0.0.1` do cliente, onde nada escuta ("página não encontrada"), e a conta nunca conectaria.
+
+Por isso o fluxo tem dois modos, escolhidos pelo campo `callback_port` em `POST /api/google/connect` (e no corpo de `reauthorize`):
+
+- **Sem `callback_port`** (loopback local): comportamento clássico. O servidor abre o listener em `127.0.0.1`, abre o navegador e conclui sozinho em segundo plano. `auth_url` volta sem `state`.
+- **Com `callback_port`** (dirigido pelo cliente): o app abre um listener em `127.0.0.1:<callback_port>` na **própria máquina**, manda esse número ao servidor, recebe `{ auth_url, state }`, abre o navegador, captura o `code` no loopback dele e repassa ao servidor em `POST /api/google/callback { state, code }`. O servidor guarda o fluxo por `state` (verificador PKCE + redirect), faz a troca pelo token e persiste a conta. Fluxos pendentes expiram em 5 min.
+
+O app (`will-ia-app`) sempre usa o modo dirigido pelo cliente (`crates/will-app/src/oauth_cb.rs`), tanto remoto quanto em loopback, então é um caminho só. Como o redirect continua sendo `http://127.0.0.1:<porta>/oauth/google/callback`, o cliente OAuth **App para computador** segue valendo, sem TLS nem domínio público.
 - `access_type=offline` e `prompt=consent` para garantir refresh token.
 - Tokens no keyring: `google:<account_id>:refresh_token`. Access token só em memória, renovado sob demanda (`expires_in` − 60 s).
 - Várias contas Google podem ser anexadas (lista). Cada uma guarda `email`, escopos concedidos e data.

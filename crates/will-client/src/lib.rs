@@ -762,8 +762,15 @@ impl Client {
     pub async fn google_connect(&self, body: Option<Value>) -> ApiResult {
         self.post("google/connect", body).await
     }
-    pub async fn google_reauthorize(&self, account: &str) -> ApiResult {
-        self.post(&format!("google/accounts/{account}/reauthorize"), None)
+    pub async fn google_callback(&self, state: &str, code: &str) -> ApiResult {
+        self.post(
+            "google/callback",
+            Some(json!({ "state": state, "code": code })),
+        )
+        .await
+    }
+    pub async fn google_reauthorize(&self, account: &str, body: Option<Value>) -> ApiResult {
+        self.post(&format!("google/accounts/{account}/reauthorize"), body)
             .await
     }
     pub async fn google_disconnect(&self, account: &str) -> ApiResult {
