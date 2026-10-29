@@ -1,6 +1,6 @@
-# 18 — Conta Google (OAuth) — base de Agenda e Gmail
+# 18 — Conta Google (OAuth) — base de Agenda, Gmail e Drive
 
-Agenda ([19](19-google-agenda.md)) e Gmail ([20](20-gmail.md)) usam a mesma autorização. Este doc cobre o OAuth e a seção **Conta Google** da UI.
+Agenda ([19](19-google-agenda.md)), Gmail ([20](20-gmail.md)) e Drive ([28](28-google-drive.md)) usam a mesma autorização. Este doc cobre o OAuth e a seção **Conta Google** da UI.
 
 ## OAuth Client próprio do usuário
 
@@ -9,7 +9,7 @@ O will-ia **não embute** um client do Google. O usuário cria o seu (gratuito) 
 ### Passo a passo exibido na UI
 
 1. Acesse `console.cloud.google.com` → crie um projeto (ex.: `will-ia`).
-2. **APIs e serviços → Biblioteca**: ative **Google Calendar API** e **Gmail API**.
+2. **APIs e serviços → Biblioteca**: ative **Google Calendar API**, **Gmail API** e **Google Drive API**.
 3. **Tela de consentimento OAuth**: tipo **Externo**; preencha nome e e-mail; adicione os escopos (abaixo); adicione seu e-mail como **usuário de teste**.
 4. **Credenciais → Criar credenciais → ID do cliente OAuth → tipo "App para computador"**. Copie `client_id` e `client_secret` para o will-ia.
 5. **Importante:** em **Tela de consentimento → Status de publicação**, clique em **Publicar app**. Apps em modo *Teste* têm refresh tokens que **expiram em 7 dias**, o que obrigaria a reautorizar toda semana. Em *Produção* sem verificação, o Google mostra uma tela de "app não verificado" (clique em *Avançado → Acessar*), e o token não expira.
@@ -48,12 +48,14 @@ Solicitados de forma **incremental**, conforme o que o usuário habilita:
 | Gmail ler | `https://www.googleapis.com/auth/gmail.readonly` | módulo Gmail ligado |
 | Gmail enviar | `https://www.googleapis.com/auth/gmail.send` | `gmail_send` ligado |
 | Gmail modificar | `https://www.googleapis.com/auth/gmail.modify` | ferramentas de arquivar/marcar/rotular ligadas (opcional) |
+| Drive ler | `https://www.googleapis.com/auth/drive.readonly` | módulo Drive ligado (lógico `drive`) |
+| Drive escrever | `https://www.googleapis.com/auth/drive` | escrita/compartilhamento do Drive ligados (lógico `drive_write`) |
 
 Ligar um recurso que exige escopo novo dispara nova autorização (consentimento incremental, `include_granted_scopes=true`).
 
 ## Cliente HTTP
 
-REST direto com `reqwest` + `serde` (Calendar v3 e Gmail v1 são APIs JSON simples), em vez dos crates gerados `google-*` (pesados e com tipos difíceis). Um `GoogleClient` com: injeção de bearer, renovação automática, retry com backoff em 429/5xx respeitando `Retry-After`, e paginação por `pageToken`.
+REST direto com `reqwest` + `serde` (Calendar v3, Gmail v1 e Drive v3 são APIs JSON simples; o Drive usa ainda download em stream e upload multipart/resumable), em vez dos crates gerados `google-*` (pesados e com tipos difíceis). Um `GoogleClient` com: injeção de bearer, renovação automática, retry com backoff em 429/5xx respeitando `Retry-After`, e paginação por `pageToken`.
 
 ## Seção "Conta Google" na UI
 
@@ -72,7 +74,7 @@ REST direto com `reqwest` + `serde` (Calendar v3 e Gmail v1 são APIs JSON simpl
 ## Passo a passo no Google Cloud (como aparece na UI)
 
 1. **Projeto**: selecione ou crie um projeto.
-2. **APIs**: APIs e serviços › Biblioteca › ativar *Google Calendar API* e *Gmail API*.
+2. **APIs**: APIs e serviços › Biblioteca › ativar *Google Calendar API*, *Gmail API* e *Google Drive API*.
 3. **Tela de consentimento**: tipo Externo; adicione o próprio e-mail em usuários de teste.
 4. **Publicar o app**: evita a expiração do refresh token em 7 dias do modo Teste. Não exige verificação para uso pessoal (aviso "app não verificado" → Avançado › Acessar).
 5. **Credenciais › Criar credenciais › ID do cliente OAuth**, tipo **App para computador**.

@@ -1,12 +1,15 @@
-//! will-google — Conta Google (OAuth PKCE + loopback), Agenda e Gmail.
+//! will-google — Conta Google (OAuth PKCE + loopback), Agenda, Gmail e Drive.
 //!
-//! Ver `docs/18-conta-google.md`, `docs/19-google-agenda.md`, `docs/20-gmail.md`.
-//! O módulo não cria threads: só oferece ferramentas (`calendar_*`, `gmail_*`)
+//! Ver `docs/18-conta-google.md`, `docs/19-google-agenda.md`, `docs/20-gmail.md`,
+//! `docs/28-google-drive.md`.
+//! O módulo não cria threads: só oferece ferramentas (`calendar_*`, `gmail_*`, `drive_*`)
 //! via `ToolProvider` e uma API consumida pelo servidor local (contas, agendas).
 
 pub mod calendar;
 pub mod client;
+pub mod drive;
 pub mod error;
+pub(crate) mod fs;
 pub mod gmail;
 pub mod oauth;
 
@@ -24,7 +27,7 @@ use std::path::PathBuf;
 use std::sync::{Arc, Weak};
 use std::time::{Duration, Instant};
 use tokio_util::sync::CancellationToken;
-use will_core::settings::{CalendarSettings, GmailSettings, GoogleSettings};
+use will_core::settings::{CalendarSettings, DriveSettings, GmailSettings, GoogleSettings};
 use will_core::{Event, EventBus, Module, ModuleStatus, ToolProvider};
 use will_storage::google::{GoogleAccount, GoogleCalendar};
 use will_storage::{SecretStore, Storage};
@@ -69,6 +72,7 @@ pub struct GoogleConfig {
     pub google: GoogleSettings,
     pub calendar: CalendarSettings,
     pub gmail: GmailSettings,
+    pub drive: DriveSettings,
 }
 
 pub struct GoogleModule {
@@ -82,6 +86,8 @@ pub struct GoogleModule {
     pending_flows: parking_lot::Mutex<HashMap<String, PendingFlow>>,
     pub(crate) calendars_cache: parking_lot::RwLock<Vec<GoogleCalendar>>,
     pub(crate) gmail_state: gmail::GmailState,
+    /// Nomes de arquivos do Drive já vistos (id → nome), para resumos de aprovação.
+    pub(crate) drive_names: parking_lot::RwLock<HashMap<String, String>>,
 }
 
 impl GoogleModule {
@@ -101,6 +107,7 @@ impl GoogleModule {
             pending_flows: parking_lot::Mutex::new(HashMap::new()),
             calendars_cache: parking_lot::RwLock::new(Vec::new()),
             gmail_state: gmail::GmailState::new(),
+            drive_names: parking_lot::RwLock::new(HashMap::new()),
         });
         // Carrega contas/agendas em segundo plano (se houver runtime).
         if let Ok(handle) = tokio::runtime::Handle::try_current() {
@@ -131,6 +138,7 @@ impl GoogleModule {
             pending_flows: parking_lot::Mutex::new(HashMap::new()),
             calendars_cache: parking_lot::RwLock::new(Vec::new()),
             gmail_state: gmail::GmailState::new(),
+            drive_names: parking_lot::RwLock::new(HashMap::new()),
         })
     }
 
@@ -186,6 +194,15 @@ impl GoogleModule {
             return ModuleStatus::Disabled;
         }
         self.feature_status(self.gmail_accounts(), "/auth/gmail", "Gmail")
+    }
+
+    /// Estado do Drive: `Disabled` se desligado; senão `Running` quando há conta
+    /// ok (entre as permitidas em `drive.accounts`) com escopo do Drive.
+    pub fn drive_status(&self) -> ModuleStatus {
+        if !self.config().drive.enabled {
+            return ModuleStatus::Disabled;
+        }
+        self.feature_status(self.drive_accounts(), "/auth/drive", "Drive")
     }
 
     fn feature_status(
@@ -721,5 +738,66 @@ impl GoogleModule {
 
     pub fn gmail_provider(self: &Arc<Self>) -> Arc<dyn ToolProvider> {
         Arc::new(gmail::GmailProvider::new(self.clone()))
+    }
+
+    pub fn drive_provider(self: &Arc<Self>) -> Arc<dyn ToolProvider> {
+        Arc::new(drive::DriveProvider::new(self.clone()))
+    }
+
+    /// Contas conectadas restritas a uma lista (id ou e-mail); vazia = todas.
+    pub(crate) fn accounts_allowed(&self, allowed: &[String]) -> Vec<GoogleAccount> {
+        self.client
+            .cached_accounts()
+            .into_iter()
+            .filter(|a| {
+                allowed.is_empty()
+                    || allowed
+                        .iter()
+                        .any(|x| x == &a.id || x.eq_ignore_ascii_case(&a.email))
+            })
+            .collect()
+    }
+
+    /// Resolve `account` (id ou e-mail) entre `candidates`; opcional quando há
+    /// exatamente uma. `feature` entra nas mensagens ("Gmail", "Drive").
+    pub(crate) async fn resolve_account(
+        &self,
+        arg: Option<&str>,
+        candidates: Vec<GoogleAccount>,
+        feature: &str,
+    ) -> Result<GoogleAccount, will_core::ToolError> {
+        use will_core::ToolError;
+        let acc = match arg {
+            Some(a) => candidates
+                .into_iter()
+                .find(|c| c.id == a.trim() || c.email.eq_ignore_ascii_case(a.trim()))
+                .ok_or_else(|| {
+                    ToolError::InvalidArgs(format!(
+                        "conta Google '{a}' não encontrada ou não habilitada para o {feature}"
+                    ))
+                })?,
+            None => match candidates.len() {
+                0 => {
+                    return Err(ToolError::Unavailable(format!(
+                        "nenhuma conta Google habilitada para o {feature}"
+                    )))
+                }
+                1 => candidates
+                    .into_iter()
+                    .next()
+                    .ok_or_else(|| ToolError::Unavailable("sem conta".into()))?,
+                _ => {
+                    let emails: Vec<String> = candidates.iter().map(|c| c.email.clone()).collect();
+                    return Err(ToolError::InvalidArgs(format!(
+                        "várias contas disponíveis; informe `account` ({})",
+                        emails.join(", ")
+                    )));
+                }
+            },
+        };
+        if acc.status == STATUS_REAUTHORIZE {
+            return Err(GoogleError::Reauthorize(acc.email).into());
+        }
+        Ok(acc)
     }
 }

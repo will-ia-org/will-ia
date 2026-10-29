@@ -27,6 +27,8 @@ pub const DEFAULT_CLIENT_SECRET_KEY: &str = "google_client_secret";
 pub const STATUS_OK: &str = "ok";
 pub const STATUS_REAUTHORIZE: &str = "reauthorize";
 const MAX_ATTEMPTS: u32 = 4;
+/// Bloco do upload resumable (múltiplo de 256 KiB, como a Google exige).
+const RESUMABLE_CHUNK: u64 = 8 * 1024 * 1024;
 
 #[derive(Debug, Clone)]
 pub struct Endpoints {
@@ -386,19 +388,49 @@ impl GoogleClient {
         body: Option<&serde_json::Value>,
     ) -> Result<serde_json::Value> {
         let url = self.url_with_query(path, query)?;
+        let body = body.cloned();
+        let resp = self
+            .send_authed(account, |http, token| {
+                let mut req = http.request(method.clone(), url.clone()).bearer_auth(token);
+                if let Some(b) = &body {
+                    req = req.json(b);
+                }
+                req
+            })
+            .await?;
+        Self::json_body(resp).await
+    }
+
+    /// Corpo JSON de uma resposta 2xx (`Null` para 204/vazio).
+    async fn json_body(resp: reqwest::Response) -> Result<serde_json::Value> {
+        if resp.status() == reqwest::StatusCode::NO_CONTENT {
+            return Ok(serde_json::Value::Null);
+        }
+        let bytes = resp.bytes().await?;
+        if bytes.is_empty() {
+            return Ok(serde_json::Value::Null);
+        }
+        serde_json::from_slice(&bytes)
+            .map_err(|e| GoogleError::Http(format!("resposta JSON inválida: {e}")))
+    }
+
+    /// Laço comum: bearer da conta, retry em erro de rede/429/5xx (respeita
+    /// `Retry-After`), uma renovação de token em 401. Devolve só respostas 2xx;
+    /// `build` é chamado a cada tentativa (o corpo precisa ser reconstruível).
+    pub async fn send_authed<F>(
+        &self,
+        account: &GoogleAccount,
+        build: F,
+    ) -> Result<reqwest::Response>
+    where
+        F: Fn(&reqwest::Client, &str) -> reqwest::RequestBuilder,
+    {
         let mut attempt = 0u32;
         let mut refreshed_after_401 = false;
         loop {
             attempt += 1;
             let token = self.access_token(account).await?;
-            let mut req = self
-                .http
-                .request(method.clone(), url.clone())
-                .bearer_auth(&token);
-            if let Some(b) = body {
-                req = req.json(b);
-            }
-            let resp = match req.send().await {
+            let resp = match build(&self.http, &token).send().await {
                 Ok(r) => r,
                 Err(e) => {
                     if attempt < MAX_ATTEMPTS && (e.is_timeout() || e.is_connect()) {
@@ -410,15 +442,7 @@ impl GoogleClient {
             };
             let status = resp.status();
             if status.is_success() {
-                if status == reqwest::StatusCode::NO_CONTENT {
-                    return Ok(serde_json::Value::Null);
-                }
-                let bytes = resp.bytes().await?;
-                if bytes.is_empty() {
-                    return Ok(serde_json::Value::Null);
-                }
-                return serde_json::from_slice(&bytes)
-                    .map_err(|e| GoogleError::Http(format!("resposta JSON inválida: {e}")));
+                return Ok(resp);
             }
             if status == reqwest::StatusCode::UNAUTHORIZED && !refreshed_after_401 {
                 refreshed_after_401 = true;
@@ -434,6 +458,179 @@ impl GoogleClient {
             if (status.as_u16() == 429 || status.is_server_error()) && attempt < MAX_ATTEMPTS {
                 tokio::time::sleep(backoff(attempt, retry_after)).await;
                 continue;
+            }
+            let text = resp.text().await.unwrap_or_default();
+            return Err(parse_api_error(status.as_u16(), &text));
+        }
+    }
+
+    /// Baixa o corpo de `path` direto para `dest` em stream, recusando passar de
+    /// `max_bytes` (verifica `Content-Length` antes e o total durante). Devolve
+    /// `(bytes gravados, Content-Type)`. Em erro o arquivo parcial é removido.
+    pub async fn download_to_file(
+        &self,
+        account: &GoogleAccount,
+        path: &str,
+        query: &[(&str, String)],
+        dest: &std::path::Path,
+        max_bytes: u64,
+    ) -> Result<(u64, Option<String>)> {
+        use tokio::io::AsyncWriteExt;
+        let url = self.url_with_query(path, query)?;
+        let mut resp = self
+            .send_authed(account, |http, token| {
+                http.get(url.clone()).bearer_auth(token)
+            })
+            .await?;
+        if let Some(len) = resp.content_length() {
+            if len > max_bytes {
+                return Err(GoogleError::Invalid(format!(
+                    "arquivo de {len} bytes excede o limite de {} MB",
+                    max_bytes / (1024 * 1024)
+                )));
+            }
+        }
+        let ctype = resp
+            .headers()
+            .get(reqwest::header::CONTENT_TYPE)
+            .and_then(|v| v.to_str().ok())
+            .map(|s| s.to_string());
+        if let Some(parent) = dest.parent() {
+            tokio::fs::create_dir_all(parent).await?;
+        }
+        let mut file = tokio::fs::File::create(dest).await?;
+        let mut total = 0u64;
+        let result: Result<()> = async {
+            while let Some(chunk) = resp.chunk().await? {
+                total += chunk.len() as u64;
+                if total > max_bytes {
+                    return Err(GoogleError::Invalid(format!(
+                        "download excede o limite de {} MB",
+                        max_bytes / (1024 * 1024)
+                    )));
+                }
+                file.write_all(&chunk).await?;
+            }
+            file.flush().await?;
+            Ok(())
+        }
+        .await;
+        if let Err(e) = result {
+            drop(file);
+            let _ = tokio::fs::remove_file(dest).await;
+            return Err(e);
+        }
+        Ok((total, ctype))
+    }
+
+    /// Upload `multipart/related` (metadados JSON + conteúdo), para corpos pequenos
+    /// (Drive recomenda até 5 MB).
+    pub async fn upload_multipart(
+        &self,
+        account: &GoogleAccount,
+        req: &UploadRequest<'_>,
+        bytes: Vec<u8>,
+    ) -> Result<serde_json::Value> {
+        let url = self.url_with_query(req.path, req.query)?;
+        let boundary = format!("will_ia_{}", uuid::Uuid::new_v4().simple());
+        let body = multipart_related(&boundary, req.metadata, req.content_type, &bytes);
+        let ctype = format!("multipart/related; boundary={boundary}");
+        let resp = self
+            .send_authed(account, |http, token| {
+                http.request(req.method.clone(), url.clone())
+                    .bearer_auth(token)
+                    .header(reqwest::header::CONTENT_TYPE, ctype.clone())
+                    .body(body.clone())
+            })
+            .await?;
+        Self::json_body(resp).await
+    }
+
+    /// Upload **resumable**: abre a sessão (`uploadType=resumable`, metadados no
+    /// corpo) e manda o arquivo em blocos de `RESUMABLE_CHUNK` com `Content-Range`.
+    /// 308 = continua; 2xx = JSON final do arquivo.
+    pub async fn upload_resumable(
+        &self,
+        account: &GoogleAccount,
+        req: &UploadRequest<'_>,
+        file: &std::path::Path,
+    ) -> Result<serde_json::Value> {
+        use tokio::io::{AsyncReadExt, AsyncSeekExt};
+        let total = tokio::fs::metadata(file).await?.len();
+        let mut q: Vec<(&str, String)> = req
+            .query
+            .iter()
+            .filter(|(k, _)| *k != "uploadType")
+            .cloned()
+            .collect();
+        q.push(("uploadType", "resumable".into()));
+        let url = self.url_with_query(req.path, &q)?;
+        let meta = req.metadata.clone();
+        let ct = req.content_type.to_string();
+        let start = self
+            .send_authed(account, |http, token| {
+                http.request(req.method.clone(), url.clone())
+                    .bearer_auth(token)
+                    .header("X-Upload-Content-Type", ct.clone())
+                    .header("X-Upload-Content-Length", total.to_string())
+                    .json(&meta)
+            })
+            .await?;
+        let session = start
+            .headers()
+            .get(reqwest::header::LOCATION)
+            .and_then(|v| v.to_str().ok())
+            .map(|s| s.to_string())
+            .ok_or_else(|| GoogleError::Http("upload resumable sem Location".into()))?;
+        let mut f = tokio::fs::File::open(file).await?;
+        let mut offset = 0u64;
+        let mut buf = vec![0u8; RESUMABLE_CHUNK as usize];
+        loop {
+            let want = (total - offset).min(RESUMABLE_CHUNK) as usize;
+            f.seek(std::io::SeekFrom::Start(offset)).await?;
+            let mut read = 0usize;
+            while read < want {
+                let n = f.read(&mut buf[read..want]).await?;
+                if n == 0 {
+                    break;
+                }
+                read += n;
+            }
+            if read == 0 && total > 0 {
+                return Err(GoogleError::Io("arquivo encolheu durante o upload".into()));
+            }
+            let end = offset + read as u64;
+            let range = if total == 0 {
+                "bytes */0".to_string()
+            } else {
+                format!("bytes {}-{}/{}", offset, end.saturating_sub(1), total)
+            };
+            let chunk = buf[..read].to_vec();
+            let token = self.access_token(account).await?;
+            let resp = self
+                .http
+                .put(&session)
+                .bearer_auth(&token)
+                .header(reqwest::header::CONTENT_RANGE, range)
+                .header(reqwest::header::CONTENT_LENGTH, read.to_string())
+                .body(chunk)
+                .send()
+                .await?;
+            let status = resp.status();
+            if status.as_u16() == 308 {
+                // Servidor diz até onde chegou: `Range: bytes=0-N`.
+                offset = resp
+                    .headers()
+                    .get(reqwest::header::RANGE)
+                    .and_then(|v| v.to_str().ok())
+                    .and_then(|r| r.rsplit('-').next())
+                    .and_then(|n| n.trim().parse::<u64>().ok())
+                    .map(|n| n + 1)
+                    .unwrap_or(end);
+                continue;
+            }
+            if status.is_success() {
+                return Self::json_body(resp).await;
             }
             let text = resp.text().await.unwrap_or_default();
             return Err(parse_api_error(status.as_u16(), &text));
@@ -527,6 +724,34 @@ impl GoogleClient {
         }
         Ok(out)
     }
+}
+
+/// Parâmetros de um upload (multipart ou resumable): método (POST cria, PATCH
+/// substitui), caminho de upload, query, metadados JSON e tipo do conteúdo.
+pub struct UploadRequest<'a> {
+    pub method: reqwest::Method,
+    pub path: &'a str,
+    pub query: &'a [(&'a str, String)],
+    pub metadata: &'a serde_json::Value,
+    pub content_type: &'a str,
+}
+
+/// Corpo `multipart/related`: parte 1 = metadados JSON, parte 2 = conteúdo.
+pub fn multipart_related(
+    boundary: &str,
+    metadata: &serde_json::Value,
+    content_type: &str,
+    bytes: &[u8],
+) -> Vec<u8> {
+    let mut body = Vec::with_capacity(bytes.len() + 512);
+    body.extend_from_slice(format!("--{boundary}\r\n").as_bytes());
+    body.extend_from_slice(b"Content-Type: application/json; charset=UTF-8\r\n\r\n");
+    body.extend_from_slice(metadata.to_string().as_bytes());
+    body.extend_from_slice(format!("\r\n--{boundary}\r\n").as_bytes());
+    body.extend_from_slice(format!("Content-Type: {content_type}\r\n\r\n").as_bytes());
+    body.extend_from_slice(bytes);
+    body.extend_from_slice(format!("\r\n--{boundary}--\r\n").as_bytes());
+    body
 }
 
 fn backoff(attempt: u32, retry_after: Option<Duration>) -> Duration {

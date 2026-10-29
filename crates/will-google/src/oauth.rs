@@ -14,12 +14,14 @@ pub const SCOPE_CALENDAR_EVENTS: &str = "https://www.googleapis.com/auth/calenda
 pub const SCOPE_GMAIL_RO: &str = "https://www.googleapis.com/auth/gmail.readonly";
 pub const SCOPE_GMAIL_SEND: &str = "https://www.googleapis.com/auth/gmail.send";
 pub const SCOPE_GMAIL_MODIFY: &str = "https://www.googleapis.com/auth/gmail.modify";
+pub const SCOPE_DRIVE_RO: &str = "https://www.googleapis.com/auth/drive.readonly";
+pub const SCOPE_DRIVE_FULL: &str = "https://www.googleapis.com/auth/drive";
 
 pub const CALLBACK_PATH: &str = "/oauth/google/callback";
 pub const FLOW_TIMEOUT: Duration = Duration::from_secs(5 * 60);
 
 /// Converte escopos lógicos (`calendar`, `calendar_write`, `gmail`, `gmail_send`,
-/// `gmail_modify`) em URLs. URLs completas passam direto. `openid`+`email` sempre.
+/// `gmail_modify`, `drive`, `drive_write`) em URLs. URLs completas passam direto. `openid`+`email` sempre.
 pub fn logical_to_scopes(logical: &[String]) -> Result<Vec<String>, GoogleError> {
     let mut out: Vec<String> = vec![SCOPE_OPENID.to_string(), SCOPE_EMAIL.to_string()];
     for l in logical {
@@ -32,6 +34,8 @@ pub fn logical_to_scopes(logical: &[String]) -> Result<Vec<String>, GoogleError>
             "gmail" | "gmail_read" => &[SCOPE_GMAIL_RO],
             "gmail_send" => &[SCOPE_GMAIL_RO, SCOPE_GMAIL_SEND],
             "gmail_modify" => &[SCOPE_GMAIL_RO, SCOPE_GMAIL_MODIFY],
+            "drive" | "drive_read" => &[SCOPE_DRIVE_RO],
+            "drive_write" => &[SCOPE_DRIVE_FULL],
             other if other.starts_with("https://") => {
                 push_unique(&mut out, other);
                 continue;
@@ -301,7 +305,12 @@ mod tests {
         assert!(s.contains(&SCOPE_CALENDAR_RO.to_string()));
         assert!(s.contains(&SCOPE_CALENDAR_EVENTS.to_string()));
         assert!(s.contains(&SCOPE_GMAIL_MODIFY.to_string()));
-        assert!(logical_to_scopes(&["drive".into()]).is_err());
+        let d = logical_to_scopes(&["drive".into()]).unwrap();
+        assert!(d.contains(&SCOPE_DRIVE_RO.to_string()));
+        assert!(!d.contains(&SCOPE_DRIVE_FULL.to_string()));
+        let w = logical_to_scopes(&["drive_write".into()]).unwrap();
+        assert!(w.contains(&SCOPE_DRIVE_FULL.to_string()));
+        assert!(logical_to_scopes(&["dropbox".into()]).is_err());
     }
 
     #[test]

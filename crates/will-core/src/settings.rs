@@ -25,6 +25,7 @@ pub struct Settings {
     pub google: GoogleSettings,
     pub calendar: CalendarSettings,
     pub gmail: GmailSettings,
+    pub drive: DriveSettings,
     pub scheduler: SchedulerSettings,
     pub browser: BrowserSettings,
     pub network: NetworkSettings,
@@ -553,6 +554,50 @@ impl Default for GmailSettings {
             max_body_kb: 64,
             attachments_dir: "inbox/gmail".into(),
             max_attachment_mb: 25,
+        }
+    }
+}
+
+/// Google Drive (`docs/28`): arquivos da conta Google, mesmo OAuth da Agenda/Gmail.
+/// Escrita nasce ligada (as ferramentas pedem confirmação); compartilhar e excluir
+/// definitivamente nascem desligados.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default)]
+pub struct DriveSettings {
+    pub enabled: bool,
+    /// Contas (id ou e-mail) usadas pelo Drive; vazio = todas as conectadas.
+    pub accounts: Vec<String>,
+    /// Enviar, criar, renomear/mover, substituir conteúdo e mandar para a lixeira.
+    pub allow_write: bool,
+    /// Compartilhar / remover compartilhamento (dá acesso a terceiros).
+    pub allow_share: bool,
+    /// Exclusão definitiva (`drive_trash { permanent: true }`).
+    pub allow_delete: bool,
+    /// Pasta de downloads, relativa à base de conhecimento.
+    pub download_dir: String,
+    pub max_download_mb: u32,
+    pub max_upload_mb: u32,
+    /// Formato de exportação de Google Docs (`text/markdown`, `application/pdf`, docx…).
+    pub export_docs: String,
+    /// Formato de exportação de Planilhas (`text/csv` = só a primeira aba; xlsx = todas).
+    pub export_sheets: String,
+    /// Formato de exportação de Apresentações (`application/pdf`, pptx).
+    pub export_slides: String,
+}
+impl Default for DriveSettings {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            accounts: vec![],
+            allow_write: true,
+            allow_share: false,
+            allow_delete: false,
+            download_dir: "inbox/drive".into(),
+            max_download_mb: 100,
+            max_upload_mb: 100,
+            export_docs: "text/markdown".into(),
+            export_sheets: "text/csv".into(),
+            export_slides: "application/pdf".into(),
         }
     }
 }

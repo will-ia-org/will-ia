@@ -32,7 +32,7 @@ pub async fn start_all(state: &Arc<AppState>) {
 /// Mantém `AppState::module_status` em dia com os status que os módulos emitem
 /// direto no barramento (Google, voz, WhatsApp, Telegram), para que o snapshot
 /// inicial da UI e `/api/status` não fiquem defasados. Para o Google recalcula
-/// também Agenda e Gmail, que dependem das contas.
+/// também Agenda, Gmail e Drive, que dependem das contas.
 fn spawn_status_sync(state: &Arc<AppState>) {
     let state = state.clone();
     tokio::spawn(async move {
@@ -45,7 +45,10 @@ fn spawn_status_sync(state: &Arc<AppState>) {
             match ev {
                 Ok(will_core::Event::ModuleStatus { module, status }) => {
                     #[cfg(feature = "google")]
-                    if matches!(module, Module::Google | Module::Calendar | Module::Gmail) {
+                    if matches!(
+                        module,
+                        Module::Google | Module::Calendar | Module::Gmail | Module::Drive
+                    ) {
                         recompute_google_status(&state);
                         continue;
                     }
@@ -132,12 +135,17 @@ pub fn active_voice_sessions(state: &AppState) -> usize {
         .count()
 }
 
-/// Google, Agenda e Gmail a partir das contas conectadas no módulo.
+/// Google, Agenda, Gmail e Drive a partir das contas conectadas no módulo.
 #[cfg(feature = "google")]
 pub fn recompute_google_status(state: &Arc<AppState>) {
     let module = state.google.read().clone();
-    let (google, calendar, gmail) = match module {
-        Some(m) => (m.status(), m.calendar_status(), m.gmail_status()),
+    let (google, calendar, gmail, drive) = match module {
+        Some(m) => (
+            m.status(),
+            m.calendar_status(),
+            m.gmail_status(),
+            m.drive_status(),
+        ),
         None => {
             let s = state.settings.read();
             let off = |enabled: bool| {
@@ -151,12 +159,14 @@ pub fn recompute_google_status(state: &Arc<AppState>) {
                 ModuleStatus::Disabled,
                 off(s.calendar.enabled),
                 off(s.gmail.enabled),
+                off(s.drive.enabled),
             )
         }
     };
     state.set_module_status(Module::Google, google);
     state.set_module_status(Module::Calendar, calendar);
     state.set_module_status(Module::Gmail, gmail);
+    state.set_module_status(Module::Drive, drive);
 }
 
 pub async fn stop_all(state: &Arc<AppState>) {
@@ -474,6 +484,7 @@ pub async fn start_google(state: &Arc<AppState>) {
         google: s.google.clone(),
         calendar: s.calendar.clone(),
         gmail: s.gmail.clone(),
+        drive: s.drive.clone(),
     };
     let kb = state
         .kb_path()
@@ -500,8 +511,9 @@ pub async fn start_google(state: &Arc<AppState>) {
     };
     state.registry.add_provider(module.calendar_provider());
     state.registry.add_provider(module.gmail_provider());
+    state.registry.add_provider(module.drive_provider());
     // As contas carregam em segundo plano na primeira vez; quando terminarem o
-    // módulo emite `ModuleStatus` e `spawn_status_sync` recalcula os três.
+    // módulo emite `ModuleStatus` e `spawn_status_sync` recalcula os quatro.
     recompute_google_status(state);
 }
 
@@ -677,7 +689,7 @@ pub async fn apply_section(state: &Arc<AppState>, section: &str) {
         #[cfg(feature = "telegram")]
         "telegram" => start_telegram(state).await,
         #[cfg(feature = "google")]
-        "google" | "calendar" | "gmail" => start_google(state).await,
+        "google" | "calendar" | "gmail" | "drive" => start_google(state).await,
         #[cfg(feature = "whatsapp")]
         "whatsapp" => start_whatsapp(state).await,
         _ => {}

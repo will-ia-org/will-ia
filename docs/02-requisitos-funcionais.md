@@ -115,7 +115,7 @@ Convenção de identificação: `RF-<módulo>-<nº>`. Prioridade: **M** (Must, M
 | RF-MCP-06 | Cada ferramenta pode ser habilitada/desabilitada individualmente nas configurações; ferramentas desabilitadas não aparecem na listagem `tools/list`. | M |
 | RF-MCP-07 | Todas as chamadas de ferramenta são registradas (thread, ferramenta, argumentos resumidos, resultado, timestamp) e visíveis na seção Logs. | M |
 | RF-MCP-08 | Cada ferramenta tem política `auto` / `confirmar` / `desligada`. Em `confirmar`, a chamada aguarda aprovação do dono (UI, notificação e, se ativo, Telegram com botões) com timeout configurável (padrão 5 min → negada). Decisões são registradas. | M |
-| RF-MCP-09 | Ferramentas de efeito externo (`*_send*`, `calendar_create/update/delete_event`, `calendar_respond`, `gmail_modify`, `gmail_send_draft`, `gmail_delete_draft`, `gmail_forward`, `gmail_reply_all`) nascem com política `confirmar`. | M |
+| RF-MCP-09 | Ferramentas de efeito externo (`*_send*`, `calendar_create/update/delete_event`, `calendar_respond`, `gmail_modify`, `gmail_send_draft`, `gmail_delete_draft`, `gmail_forward`, `gmail_reply_all`, `drive_upload`, `drive_create_file`, `drive_update`, `drive_trash`, `drive_share`, `drive_unshare`) nascem com política `confirmar`. | M |
 | RF-MCPX-01 | Seção **MCPs externos**: adicionar/editar/remover/habilitar servidores dos tipos `stdio`, `http` e `sse`, com nome único, comando/args/env ou url/headers. | M |
 | RF-MCPX-02 | Valores de `env`/`headers` podem ser marcados como segredo: ficam no keyring e aparecem no arquivo como `${WILL_MCP_<NOME>_<CHAVE>}`; o serviço injeta as variáveis no ambiente de cada processo `claude`. | M |
 | RF-MCPX-03 | Botão **Testar** executa `initialize` + `tools/list` contra o servidor e exibe ferramentas e erros. | S |
@@ -167,6 +167,17 @@ Convenção de identificação: `RF-<módulo>-<nº>`. Prioridade: **M** (Must, M
 | RF-MAIL-05 | Sem IMAP: apenas contas Gmail/Workspace. | — |
 | RF-MAIL-06 | Rascunhos completos: listar, atualizar (substitui), apagar e enviar rascunho existente; o envio obedece ao toggle de envio, à política de destinatários conhecidos e ao rate limit. | S |
 | RF-MAIL-07 | Encaminhar (`gmail_forward`: cabeçalho "Mensagem encaminhada", corpo original, anexos até o limite configurado, comentário opcional) e responder a todos (`gmail_reply_all`: Para = Reply-To/From, Cc = Para+Cc originais menos a conta, mesma thread), ambos com política `confirmar`. | S |
+
+## RF-DRV — Google Drive
+
+| ID | Requisito | Prio |
+|---|---|---|
+| RF-DRV-01 | Submódulo do Google (mesmo OAuth) com escopos lógicos `drive` (`drive.readonly`) e `drive_write` (`drive`), seção própria de configuração e bolinha de status (`Module::Drive`). | S |
+| RF-DRV-02 | Leitura: listar pasta (raiz por padrão, drives compartilhados incluídos), buscar com a sintaxe `q` + atalhos (nome, conteúdo, tipo, data, pasta, dono, compartilhado comigo), metadados normalizados com permissões, listar drives compartilhados. | S |
+| RF-DRV-03 | Download em stream para `<kb>/inbox/drive/` com teto configurável (checado pelo tamanho antes e durante); arquivos Google exportados (Docs → markdown, Planilhas → csv, Apresentações → pdf por padrão; formato por chamada). | S |
+| RF-DRV-04 | Escrita (toggle `allow_write`, política `confirmar` nas de efeito externo): criar pasta, enviar arquivo da KB (multipart ≤ 5 MB, resumable acima, conversão para Docs/Sheets/Slides), criar arquivo a partir de texto, renomear/mover/descrever/substituir conteúdo, lixeira/restaurar; exclusão definitiva só com `allow_delete`. | S |
+| RF-DRV-05 | Compartilhamento (toggle `allow_share`, desligado por padrão, política `confirmar`): dar acesso a pessoa/grupo/domínio/qualquer um com o link como reader/commenter/writer, listar e remover permissões; transferir propriedade não é permitido. | S |
+| RF-DRV-06 | Uploads e substituições só a partir de arquivos **dentro** da KB; downloads nunca sobrescrevem (`nome (2).ext`); conteúdo do Drive é tratado como dado não confiável no `CLAUDE.md` da KB. | M |
 
 ## RF-SCH — Agendamentos (scheduler)
 

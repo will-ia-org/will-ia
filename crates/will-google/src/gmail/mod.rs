@@ -4,7 +4,7 @@
 pub mod mime;
 
 use crate::error::GoogleError;
-use crate::{GoogleModule, STATUS_REAUTHORIZE};
+use crate::GoogleModule;
 use futures::StreamExt;
 use mime::{
     all_headers, build_mime, cap_bytes, decode_b64url, encode_b64url, extract_body,
@@ -13,7 +13,7 @@ use mime::{
 };
 use serde_json::{json, Value};
 use std::collections::{HashSet, VecDeque};
-use std::path::{Component, Path, PathBuf};
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 use will_core::tools::{arg_opt_bool, arg_opt_str, arg_opt_u64, arg_str, truncate};
@@ -178,17 +178,7 @@ impl ToolProvider for GmailProvider {
 impl GoogleModule {
     /// Contas usáveis pelo Gmail (restritas a `gmail.accounts` se não vazio).
     pub(crate) fn gmail_accounts(&self) -> Vec<GoogleAccount> {
-        let allowed = self.config().gmail.accounts;
-        self.client
-            .cached_accounts()
-            .into_iter()
-            .filter(|a| {
-                allowed.is_empty()
-                    || allowed
-                        .iter()
-                        .any(|x| x == &a.id || x.eq_ignore_ascii_case(&a.email))
-            })
-            .collect()
+        self.accounts_allowed(&self.config().gmail.accounts)
     }
 
     /// Resolve `account` (id ou e-mail); opcional quando há exatamente uma.
@@ -199,39 +189,8 @@ impl GoogleModule {
         if self.client.cached_accounts().is_empty() {
             let _ = self.client.reload_accounts().await;
         }
-        let candidates = self.gmail_accounts();
-        let acc = match arg {
-            Some(a) => candidates
-                .into_iter()
-                .find(|c| c.id == a.trim() || c.email.eq_ignore_ascii_case(a.trim()))
-                .ok_or_else(|| {
-                    ToolError::InvalidArgs(format!(
-                        "conta Google '{a}' não encontrada ou não habilitada para o Gmail"
-                    ))
-                })?,
-            None => match candidates.len() {
-                0 => {
-                    return Err(ToolError::Unavailable(
-                        "nenhuma conta Google habilitada para o Gmail".into(),
-                    ))
-                }
-                1 => candidates
-                    .into_iter()
-                    .next()
-                    .ok_or_else(|| ToolError::Unavailable("sem conta".into()))?,
-                _ => {
-                    let emails: Vec<String> = candidates.iter().map(|c| c.email.clone()).collect();
-                    return Err(ToolError::InvalidArgs(format!(
-                        "várias contas disponíveis; informe `account` ({})",
-                        emails.join(", ")
-                    )));
-                }
-            },
-        };
-        if acc.status == STATUS_REAUTHORIZE {
-            return Err(GoogleError::Reauthorize(acc.email).into());
-        }
-        Ok(acc)
+        self.resolve_account(arg, self.gmail_accounts(), "Gmail")
+            .await
     }
 }
 
@@ -832,12 +791,7 @@ async fn get_thread(
 
 /// Pasta de anexos dentro da KB (rejeita caminhos absolutos ou com `..`).
 fn attachments_dir(kb: &Path, configured: &str) -> PathBuf {
-    let rel = Path::new(configured.trim());
-    let safe = !configured.trim().is_empty()
-        && rel
-            .components()
-            .all(|c| matches!(c, Component::Normal(_) | Component::CurDir));
-    kb.join(if safe { rel } else { Path::new("inbox/gmail") })
+    crate::fs::confined_dir(kb, configured, "inbox/gmail")
 }
 
 async fn download_attachment(
@@ -919,35 +873,6 @@ async fn download_attachment(
         "size": bytes.len(),
         "message_id": message_id,
     })))
-}
-
-/// Resolve um caminho de anexo garantindo que fica dentro da KB.
-fn resolve_in_kb(kb: &Path, p: &str) -> Result<PathBuf, ToolError> {
-    let candidate = {
-        let path = Path::new(p.trim());
-        if path.is_absolute() {
-            path.to_path_buf()
-        } else {
-            kb.join(path)
-        }
-    };
-    let kb_c = kb
-        .canonicalize()
-        .map_err(|e| ToolError::Failed(format!("base de conhecimento inacessível: {e}")))?;
-    let c = candidate
-        .canonicalize()
-        .map_err(|e| ToolError::InvalidArgs(format!("anexo '{p}' não encontrado: {e}")))?;
-    if !c.starts_with(&kb_c) {
-        return Err(ToolError::Forbidden(format!(
-            "anexo '{p}' fora da base de conhecimento"
-        )));
-    }
-    if !c.is_file() {
-        return Err(ToolError::InvalidArgs(format!(
-            "anexo '{p}' não é um arquivo"
-        )));
-    }
-    Ok(c)
 }
 
 struct Prepared {
@@ -1051,7 +976,7 @@ async fn prepare(
     let max_att = cfg.max_attachment_mb.max(1) as u64 * 1024 * 1024;
     let mut total = 0u64;
     for p in str_list(args, "attachments").unwrap_or_default() {
-        let path = resolve_in_kb(&m.kb_path, &p)?;
+        let path = crate::fs::resolve_in_kb(&m.kb_path, &p, "anexo")?;
         let bytes = tokio::fs::read(&path)
             .await
             .map_err(|e| ToolError::Failed(format!("ler anexo '{p}': {e}")))?;

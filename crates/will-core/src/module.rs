@@ -11,6 +11,7 @@ pub enum Module {
     Google,
     Calendar,
     Gmail,
+    Drive,
     Scheduler,
     Browser,
 }
@@ -26,6 +27,7 @@ impl Module {
             Module::Google => "google",
             Module::Calendar => "calendar",
             Module::Gmail => "gmail",
+            Module::Drive => "drive",
             Module::Scheduler => "scheduler",
             Module::Browser => "browser",
         }
@@ -40,6 +42,7 @@ impl Module {
             Module::Google,
             Module::Calendar,
             Module::Gmail,
+            Module::Drive,
             Module::Scheduler,
             Module::Browser,
         ]
@@ -58,7 +61,7 @@ impl std::fmt::Display for Module {
 /// - `Running` (verde) = **pronto**: habilitado, configurado e operacional, mesmo
 ///   ocioso. Motor: token ativo + KB ok (com ou sem processos vivos). Voz:
 ///   habilitada + chave da OpenAI (em sessão ou não). Google: pelo menos uma conta
-///   conectada com token válido. Agenda/Gmail: habilitado + uma conta ok com o
+///   conectada com token válido. Agenda/Gmail/Drive: habilitado + uma conta ok com o
 ///   escopo necessário. Telegram: polling no ar. WhatsApp: uma conta conectada.
 ///   MCP: servidor ouvindo.
 /// - `Starting` (azul) = iniciando / transição.

@@ -34,6 +34,7 @@ Cada módulo contribui com um `ToolProvider`:
 | will-whatsapp | `whatsapp_*` | [17](17-whatsapp.md) |
 | will-google (calendar) | `calendar_*` | [19](19-google-agenda.md) |
 | will-google (gmail) | `gmail_*` | [20](20-gmail.md) |
+| will-google (drive) | `drive_*` | [28](28-google-drive.md) |
 | will-scheduler | `schedule_*` (família `scheduler`) | [24](24-scheduler.md) |
 | will-core | `notify_user`, `list_threads`, `create_thread`, `send_to_thread`, `kb_info` | este doc |
 
@@ -47,7 +48,7 @@ Cada ferramenta tem uma política persistida em `tool_policies`:
 | `confirmar` | cria um `Approval` com resumo legível dos argumentos, notifica o dono (UI + notificação nativa + Telegram com botões ✅/❌ se ativo) e **bloqueia** a chamada até decisão ou timeout (padrão 5 min → `denied: timeout`) |
 | `desligada` | não aparece em `tools/list`; chamada direta retorna erro |
 
-Padrões: leitura → `auto`; efeito externo (`telegram_send_message` para fora do tópico de origem, `whatsapp_send_*`, `gmail_send`, `gmail_modify`, `calendar_create/update/delete_event`) → `confirmar`. O usuário pode alterar por ferramenta na seção MCP, com aviso ao baixar para `auto`.
+Padrões: leitura → `auto`; efeito externo (`telegram_send_message` para fora do tópico de origem, `whatsapp_send_*`, `gmail_send`, `gmail_modify`, `calendar_create/update/delete_event`, `drive_upload/create_file/update/trash/share/unshare`) → `confirmar`. O usuário pode alterar por ferramenta na seção MCP, com aviso ao baixar para `auto`.
 
 O resultado de uma chamada negada é um `ToolOutput` com `is_error: true` e texto "Ação não aprovada pelo usuário", para que o agente informe e não insista. Decisões ficam em `approvals` e aparecem na aba Logs. Ver [ADR-0013](adr/0013-politicas-de-aprovacao-mcp.md).
 
@@ -83,9 +84,9 @@ Regras:
 
 Permitem que um agente consulte threads existentes, crie uma nova com prompt inicial e envie mensagem a outra thread (delegação entre cérebros). Guardadas por toggle, desligadas por padrão.
 
-### Famílias `whatsapp_*`, `calendar_*`, `gmail_*`
+### Famílias `whatsapp_*`, `calendar_*`, `gmail_*`, `drive_*`
 
-Especificadas nos docs dos módulos ([17](17-whatsapp.md), [19](19-google-agenda.md), [20](20-gmail.md)). Compartilham as convenções: nomes `modulo_verbo_objeto`, paginação por token/cursor, limites de tamanho de saída, caminhos de arquivo sempre dentro da KB, erros com mensagem acionável (ex.: "conta Google precisa reautorizar").
+Especificadas nos docs dos módulos ([17](17-whatsapp.md), [19](19-google-agenda.md), [20](20-gmail.md), [28](28-google-drive.md)). Compartilham as convenções: nomes `modulo_verbo_objeto`, paginação por token/cursor, limites de tamanho de saída, caminhos de arquivo sempre dentro da KB, erros com mensagem acionável (ex.: "conta Google precisa reautorizar").
 
 ### Família `schedule_*` (scheduler)
 
