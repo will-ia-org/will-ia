@@ -154,6 +154,7 @@ pub static TABLE: &[(&str, &str)] = &[
     ("Segredo: {}", "Secret: {}"),
     ("Salvar", "Save"),
     ("Descartar", "Discard"),
+    ("parece igual ao token '{}' (o servidor recusa se for o mesmo)", "looks the same as token '{}' (the server refuses it if it is)"),
     ("Reautorizar / ampliar escopos", "Reauthorize / add scopes"),
     ("Renova o consentimento e permite acrescentar escopos (ex.: Drive) sem desconectar a conta.", "Renews the consent and lets you add scopes (e.g. Drive) without disconnecting the account."),
     ("faltam para os módulos ligados:", "missing for the enabled modules:"),

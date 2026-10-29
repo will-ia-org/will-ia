@@ -66,6 +66,8 @@ impl EnginePage {
                         self.show_add = false;
                         self.reload_tokens(cx);
                     }
+                    // 409 "token já cadastrado como '…'": o formulário fica aberto com o
+                    // token digitado para o usuário conferir/trocar.
                     Err(e) => cx.toasts.error(e),
                 }
             }
@@ -357,6 +359,18 @@ impl EnginePage {
                         ui::field(ui, tr("Token"), Some(tr("Saída de `claude setup-token` (sk-ant-oat01-…). Vai para o cofre de segredos, nunca para o banco.")), |ui| {
                     ui.add(egui::TextEdit::singleline(&mut self.new_token).password(true).desired_width(f32::INFINITY));
                 });
+                        // pré-aviso barato: mesmo sufixo de um token já listado (a verificação
+                        // real, por impressão digital, é do servidor: 409 se repetido).
+                        if let Some(label) = looks_like_existing(&self.new_token, &list) {
+                            ui.label(
+                                egui::RichText::new(trf(
+                                    "parece igual ao token '{}' (o servidor recusa se for o mesmo)",
+                                    &[&label],
+                                ))
+                                .small()
+                                .color(Tone::Warning.color(ui.visuals().dark_mode)),
+                            );
+                        }
                         ui.horizontal(|ui| {
                             let ok = self.new_token.trim().len() >= 20 && self.add_task.is_none();
                             if ui
@@ -674,6 +688,19 @@ impl EnginePage {
     }
 }
 
+/// Rótulo de um token já listado cujo sufixo mascarado ("…bgAA") coincide com o
+/// que está sendo digitado. Só aviso: a decisão é do servidor (409).
+fn looks_like_existing(new_token: &str, list: &[Value]) -> Option<String> {
+    let t = new_token.trim();
+    if t.len() < 20 {
+        return None;
+    }
+    let suffix = format!("…{}", &t[t.len() - 4..]);
+    list.iter()
+        .find(|x| ui::s(x, "masked") == suffix)
+        .map(|x| ui::s(x, "label"))
+}
+
 /// Limite de uso não é token morto: amarelo. Revogado/expirado/inválido: vermelho.
 fn error_tone(raw: &str) -> Tone {
     let l = raw.to_ascii_lowercase();
@@ -756,5 +783,19 @@ mod tests {
         assert!(matches!(t, Tone::Warning));
         assert!(matches!(error_tone("rate limit"), Tone::Warning));
         assert!(matches!(error_tone("invalid token"), Tone::Danger));
+    }
+
+    #[test]
+    fn looks_like_existing_by_masked_suffix() {
+        let list = vec![serde_json::json!({"label": "Manager", "masked": "…WwAA"})];
+        assert_eq!(
+            looks_like_existing("sk-ant-oat01-xxxxxxxxxxxxxxxxWwAA", &list),
+            Some("Manager".into())
+        );
+        assert_eq!(
+            looks_like_existing("sk-ant-oat01-xxxxxxxxxxxxxxxxZZZZ", &list),
+            None
+        );
+        assert_eq!(looks_like_existing("curto", &list), None);
     }
 }

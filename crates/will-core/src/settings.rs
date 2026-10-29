@@ -94,6 +94,9 @@ pub struct ClaudeTokenRef {
     pub verified_at: Option<chrono::DateTime<chrono::Utc>>,
     pub error: Option<String>,
     pub selected_at: Option<chrono::DateTime<chrono::Utc>>,
+    /// SHA-256 (16 bytes, hex) do token: detecta cadastro duplicado sem expor o
+    /// segredo. Entradas antigas não têm; o servidor preenche ao comparar.
+    pub fingerprint: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

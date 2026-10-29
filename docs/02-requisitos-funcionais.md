@@ -62,6 +62,7 @@ Convenção de identificação: `RF-<módulo>-<nº>`. Prioridade: **M** (Must, M
 | RF-ENG-07 | Erros de autenticação, rate limit e saída anormal do processo devem ser classificados e reportados com mensagem acionável na UI e no canal de origem. | M |
 | RF-ENG-08 | Deve ser possível passar `--max-budget-usd` e um timeout de parede por turno. | S |
 | RF-ENG-09 | O motor deve detectar a ausência do binário `claude` no PATH e orientar a instalação. Caminho do binário deve ser configurável. | M |
+| RF-ENG-11 | Cadastro de token duplicado é **recusado** (`POST /engine/tokens` → 409 com o rótulo do existente), comparando impressões digitais SHA-256 guardadas em `tokens[].fingerprint` — nunca o segredo; entradas antigas ganham a impressão ao serem comparadas. | S |
 
 ## RF-KB — Base de Conhecimento
 
