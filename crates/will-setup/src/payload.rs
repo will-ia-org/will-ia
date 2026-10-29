@@ -8,6 +8,7 @@ pub static APP: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/will-ia-app.pa
 pub const VERSION: &str = env!("CARGO_PKG_VERSION");
 
 /// Info.plist do `.app` do macOS (o mesmo do release), com a versão preenchida em runtime.
+#[cfg(target_os = "macos")]
 pub const MACOS_INFO_PLIST: &str = include_str!("../../../packaging/macos/Info.plist");
 
 pub fn available() -> bool {
