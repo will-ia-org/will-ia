@@ -83,7 +83,15 @@ impl Plan {
             .ok()
             .and_then(|s| serde_json::from_str(&s).ok());
         let existing = {
-            let server = server_path.is_file().then(|| server_path.clone());
+            let server = if server_path.is_file() {
+                Some(server_path.clone())
+            } else if cfg!(target_os = "macos") {
+                // instalação ≤ v0.1.7: servidor ao lado do app
+                let legacy = os::legacy_server_path(&install_dir);
+                legacy.is_file().then_some(legacy)
+            } else {
+                None
+            };
             let app = app_path.is_file().then(|| app_path.clone());
             if server.is_none() && app.is_none() {
                 None

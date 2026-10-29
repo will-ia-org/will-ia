@@ -137,7 +137,7 @@ em `identifier "dev.will.will-ia" and certificate leaf = H"…"`. O log do insta
 antes/depois. Conferir: `codesign -dr - ~/Applications/will-ia.app`.
 
 **Validar após instalar:** 1) na primeira abertura do app aparecem os diálogos de microfone e
-notificações; 2) `codesign -dr - ~/Applications/will-ia.app/Contents/MacOS/will-ia` mostra
+notificações; 2) `codesign -dr - "~/Applications/will-ia.app/Contents/Library/LoginItems/will-ia Server.app"` mostra
 `certificate leaf` (não `cdhash`); 3) `security find-identity -p codesigning
 "<data_dir>/signing/will-ia-signing.keychain-db"` lista "will-ia Local Signing"; 4) atualizar para a
 versão seguinte não deve pedir nada de novo; 5) `lsappinfo info -only type -app dev.will.will-ia`

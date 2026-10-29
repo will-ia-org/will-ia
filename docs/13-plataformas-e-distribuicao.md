@@ -25,7 +25,7 @@ Comportamento para o usuário: o mesmo de antes; a diferença visível é que na
 - **Linux com desktop**: `~/.config/autostart/will-ia-server.desktop` com `Exec=will-ia` (residente + bandeja; a entrada de menu `packaging/linux/will-ia.desktop` é do **app**: `Exec=will-ia-app --show`). Alternativa supervisionada: a user unit `packaging/systemd/will-ia.service` (`ExecStart=/usr/bin/will-ia serve`, sem bandeja; `systemctl --user enable --now will-ia`). "Iniciar com o sistema" em Geral grava a entrada de autostart do servidor.
 - **Linux sem tela (servidor)**: ver "Servidor headless" abaixo.
 - **Windows**: chave `Run` do registro (`will-platform`) apontando para `will-ia.exe`; o app é aberto pela bandeja. Agendador de Tarefas se quiser reinício automático.
-- **macOS**: Login Item (`will-platform`) ou `launchd` agent para `will-ia`; o `.app` distribuído tem `will-ia-app` como executável principal e `will-ia` ao lado em `Contents/MacOS/`, então a bandeja encontra o app na mesma pasta.
+- **macOS**: `launchd` agent para `will-ia`; o `.app` distribuído tem `will-ia-app` como executável principal e o servidor num **bundle auxiliar próprio** `Contents/Library/LoginItems/will-ia Server.app` (`dev.will.will-ia.server`, `LSUIElement`). Desde 2026-10-29: com os dois no mesmo bundle, o LaunchServices tratava o serviço como "o app já aberto" e `open -a will-ia.app` (bandeja, Finder, fim da instalação) não lançava o cliente. O servidor acha o app subindo até o bundle externo (`launcher::app_binary`).
 
 ### Servidor headless (Linux sem tela, equipe)
 
@@ -134,7 +134,7 @@ Desde 2026-10-29 a release publica **um pacote por SO (e por arquitetura no macO
 
 | SO | Arquivo | Conteúdo | Ferramenta |
 |---|---|---|---|
-| macOS aarch64 (Apple Silicon) | `will-ia-<versão>-macos-aarch64.zip` | `Instalar will-ia.app` (bundle do instalador: `packaging/macos/Setup-Info.plist`, executável `will-ia-setup`) + `will-ia.app` (`Contents/MacOS/will-ia-app` = `CFBundleExecutable` e `Contents/MacOS/will-ia` ao lado, `packaging/macos/Info.plist`) + `README.md`, `LICENSE`, `docs/` | `zip -r -y` na pasta de staging (preserva bits de execução e a estrutura dos bundles) |
+| macOS aarch64 (Apple Silicon) | `will-ia-<versão>-macos-aarch64.zip` | `Instalar will-ia.app` (bundle do instalador: `packaging/macos/Setup-Info.plist`, executável `will-ia-setup`) + `will-ia.app` (`Contents/MacOS/will-ia-app` = `CFBundleExecutable`, `packaging/macos/Info.plist`; servidor em `Contents/Library/LoginItems/will-ia Server.app/Contents/MacOS/will-ia`, `packaging/macos/Server-Info.plist`) + `README.md`, `LICENSE`, `docs/` | `zip -r -y` na pasta de staging (preserva bits de execução e a estrutura dos bundles) |
 | macOS x86_64 (Intel) | `will-ia-<versão>-macos-x86_64.zip` | idem (build separada, não universal) | idem |
 | Windows x86_64 | `will-ia-<versão>-windows-x86_64.zip` | `will-ia-setup.exe`, `will-ia.exe`, `will-ia-app.exe`, `README.md`, `LICENSE`, `docs/` | `7z a -tzip` |
 | Linux x86_64 | `will-ia-<versão>-linux-x86_64.tar.gz` | `will-ia-setup`, `will-ia`, `will-ia-app` (executáveis), `README.md`, `LICENSE`, `docs/`, `packaging/linux/` (`.desktop` do app), `packaging/systemd/` (user unit do servidor) | `tar -czf` |

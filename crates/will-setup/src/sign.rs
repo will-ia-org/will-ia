@@ -238,9 +238,16 @@ pub fn sign_install(plan: &Plan, log: &Log<'_>) -> Result<Signed, String> {
         }
     };
     let kc = keychain.as_deref();
-    // nested primeiro (o servidor fica ao lado do executável principal), depois o bundle,
-    // que reassina o executável principal com o id do Info.plist e sela os Resources.
-    codesign(&identity, kc, SERVER_ID, &plan.server_path)?;
+    // nested primeiro: o bundle auxiliar do servidor (`Contents/Library/LoginItems/
+    // will-ia Server.app`, id próprio), depois o app e o bundle externo, que sela os
+    // Resources e o nested já assinado.
+    let server_bundle = plan
+        .server_path
+        .ancestors()
+        .find(|p| p.extension().is_some_and(|e| e == "app"))
+        .map(std::path::Path::to_path_buf)
+        .unwrap_or_else(|| plan.server_path.clone());
+    codesign(&identity, kc, SERVER_ID, &server_bundle)?;
     codesign(&identity, kc, APP_ID, &plan.app_path)?;
     codesign(&identity, kc, APP_ID, &plan.install_dir)?;
     run(

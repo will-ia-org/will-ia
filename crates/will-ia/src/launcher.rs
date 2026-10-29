@@ -33,6 +33,19 @@ fn app_binary() -> Option<PathBuf> {
                 }
             }
         }
+        // macOS instalado: o servidor roda do bundle auxiliar
+        // `will-ia.app/Contents/Library/LoginItems/will-ia Server.app/Contents/MacOS/will-ia`;
+        // o app está no bundle externo, em `Contents/MacOS/will-ia-app`.
+        if cfg!(target_os = "macos") {
+            for anc in me.ancestors() {
+                if anc.extension().is_some_and(|e| e == "app") {
+                    let p = anc.join("Contents/MacOS").join(&names[0]);
+                    if p.is_file() {
+                        return Some(p);
+                    }
+                }
+            }
+        }
     }
     will_platform::which("will-ia-app")
 }

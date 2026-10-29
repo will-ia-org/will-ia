@@ -3,7 +3,7 @@
 //!
 //! | | macOS | Linux | Windows |
 //! |---|---|---|---|
-//! | binários | `~/Applications/will-ia.app/Contents/MacOS/` | `~/.local/bin/` | `%LOCALAPPDATA%\Programs\will-ia\` |
+//! | binários | `~/Applications/will-ia.app/Contents/MacOS/` (app) + `Contents/Library/LoginItems/will-ia Server.app` (servidor) | `~/.local/bin/` | `%LOCALAPPDATA%\Programs\will-ia\` |
 //! | serviço | LaunchAgent `dev.will.will-ia` | autostart `.desktop` (com tela) ou user unit systemd (sem tela) | valor `will-ia` em `HKCU\…\Run` |
 //! | atalho | symlink do `.app` na Mesa | `.desktop` no menu e na Área de Trabalho | `.lnk` na Área de Trabalho e no Menu Iniciar |
 //! | dados | `~/Library/Application Support/dev.will.will-ia` | `~/.local/share/will-ia` | `%APPDATA%\will\will-ia\data` |
@@ -65,13 +65,34 @@ pub fn default_install_dir() -> PathBuf {
     }
 }
 
+/// macOS: o servidor mora num bundle auxiliar **próprio** dentro do app
+/// (`will-ia.app/Contents/Library/LoginItems/will-ia Server.app`), com
+/// `CFBundleIdentifier` separado. Se ficasse em `Contents/MacOS/` ao lado do app,
+/// o LaunchServices tratava o serviço como "o will-ia já aberto" e `open -a`
+/// (bandeja, Finder, fim da instalação) só o ativava, sem lançar o cliente.
+pub const MACOS_SERVER_BUNDLE: &str = "Contents/Library/LoginItems/will-ia Server.app";
+
 pub fn binary_paths(install_dir: &Path) -> (PathBuf, PathBuf) {
-    let base = if cfg!(target_os = "macos") {
-        install_dir.join("Contents/MacOS")
+    if cfg!(target_os = "macos") {
+        (
+            install_dir
+                .join(MACOS_SERVER_BUNDLE)
+                .join("Contents/MacOS")
+                .join(SERVER_BIN),
+            install_dir.join("Contents/MacOS").join(APP_BIN),
+        )
     } else {
-        install_dir.to_path_buf()
-    };
-    (base.join(exe(SERVER_BIN)), base.join(exe(APP_BIN)))
+        (
+            install_dir.join(exe(SERVER_BIN)),
+            install_dir.join(exe(APP_BIN)),
+        )
+    }
+}
+
+/// Onde o servidor ficava até a v0.1.7 no macOS (ao lado do app). Removido na
+/// atualização para o LaunchServices não ver dois executáveis no mesmo bundle.
+pub fn legacy_server_path(install_dir: &Path) -> PathBuf {
+    install_dir.join("Contents/MacOS").join(SERVER_BIN)
 }
 
 // ---------------------------------------------------------------- utilitários
@@ -321,6 +342,27 @@ pub fn write_binaries(plan: &Plan, log: &Log<'_>) -> Result<(), String> {
             "bundle {} (Info.plist + ícone)",
             plan.install_dir.display()
         ));
+        // bundle auxiliar do servidor (identificador próprio, LSUIElement)
+        let server_contents = plan.install_dir.join(MACOS_SERVER_BUNDLE).join("Contents");
+        std::fs::create_dir_all(server_contents.join("MacOS")).map_err(|e| e.to_string())?;
+        std::fs::create_dir_all(server_contents.join("Resources")).map_err(|e| e.to_string())?;
+        let splist =
+            crate::payload::MACOS_SERVER_INFO_PLIST.replace("__VERSION__", crate::payload::VERSION);
+        std::fs::write(server_contents.join("Info.plist"), splist).map_err(|e| e.to_string())?;
+        std::fs::write(
+            server_contents.join("Resources/will-ia.icns"),
+            crate::payload::MACOS_ICNS,
+        )
+        .map_err(|e| e.to_string())?;
+        let legacy = legacy_server_path(&plan.install_dir);
+        if legacy.is_file() {
+            std::fs::remove_file(&legacy).map_err(|e| format!("{}: {e}", legacy.display()))?;
+            log(&format!(
+                "removido servidor antigo em {} (agora em {})",
+                legacy.display(),
+                MACOS_SERVER_BUNDLE
+            ));
+        }
     }
     log(&format!(
         "gravando {} ({})",

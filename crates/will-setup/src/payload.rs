@@ -10,6 +10,9 @@ pub const VERSION: &str = env!("CARGO_PKG_VERSION");
 /// Info.plist do `.app` do macOS (o mesmo do release), com a versão preenchida em runtime.
 #[cfg(target_os = "macos")]
 pub const MACOS_INFO_PLIST: &str = include_str!("../../../packaging/macos/Info.plist");
+/// Info.plist do bundle auxiliar do servidor (`Contents/Library/LoginItems/will-ia Server.app`).
+pub const MACOS_SERVER_INFO_PLIST: &str =
+    include_str!("../../../packaging/macos/Server-Info.plist");
 
 pub fn available() -> bool {
     cfg!(payload) && !SERVER.is_empty() && !APP.is_empty()

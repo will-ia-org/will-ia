@@ -49,3 +49,17 @@ bundle, servidor sob LaunchAgent) o Will via dois problemas:
 - Não foi preciso separar o servidor em outro bundle; se um dia a ambiguidade de bundle id causar
   problema, a saída é um helper bundle `LSUIElement` dentro de `Contents/Library/`.
 - Notificações nativas (`notify-rust`) não lançam nem ativam o app; seguem como estão.
+
+## Adendo (2026-10-29, mesmo dia): servidor em bundle auxiliar próprio
+
+Instalado, `open -a will-ia.app` **não lançava o cliente**: o servidor rodava de
+`will-ia.app/Contents/MacOS/will-ia`, logo o LaunchServices via um processo do bundle
+`dev.will.will-ia` (o serviço, mesmo como acessório) e só o "ativava". Reproduzido com
+`lsappinfo` (um único processo do bundle, `type="UIElement"`) e `open -a` sem efeito;
+`open -n -a` (nova instância) subia o app. Decisão: o instalador grava o servidor em
+`Contents/Library/LoginItems/will-ia Server.app` (padrão de helper do macOS), com
+`CFBundleIdentifier dev.will.will-ia.server`, `LSUIElement=true` e ícone; o LaunchAgent
+aponta para ele; a atualização apaga o binário antigo em `Contents/MacOS/`; a assinatura
+cobre o bundle aninhado antes do externo; o `release.yml` monta o `.app` igual. O servidor
+localiza o app subindo pelos ancestrais até o bundle externo (`launcher::app_binary`).
+

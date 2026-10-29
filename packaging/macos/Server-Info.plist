@@ -1,0 +1,22 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <!-- Bundle auxiliar do SERVIDOR, aninhado em will-ia.app/Contents/Library/LoginItems/.
+       Identificador próprio: o LaunchServices nunca confunde o serviço residente com o app
+       (com os dois no mesmo bundle, `open -a will-ia.app` "ativava" o servidor e não lançava
+       o cliente). LSUIElement: sem ícone no Dock, só a bandeja. -->
+  <key>CFBundleName</key><string>will-ia Server</string>
+  <key>CFBundleDisplayName</key><string>will-ia Server</string>
+  <key>CFBundleIdentifier</key><string>dev.will.will-ia.server</string>
+  <key>CFBundleVersion</key><string>__VERSION__</string>
+  <key>CFBundleShortVersionString</key><string>__VERSION__</string>
+  <key>CFBundleExecutable</key><string>will-ia</string>
+  <key>CFBundlePackageType</key><string>APPL</string>
+  <key>CFBundleIconFile</key><string>will-ia</string>
+  <key>LSMinimumSystemVersion</key><string>12.0</string>
+  <key>NSHighResolutionCapable</key><true/>
+  <key>LSUIElement</key><true/>
+  <key>NSMicrophoneUsageDescription</key><string>O will-ia usa o microfone para a conversa por voz.</string>
+</dict>
+</plist>

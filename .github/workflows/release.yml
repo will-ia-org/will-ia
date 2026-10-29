@@ -135,21 +135,25 @@ jobs:
 
           case "${{ runner.os }}" in
             macOS)
-              # will-ia.app: executável principal = o app; o servidor fica ao lado em Contents/MacOS/
-              # (o app o encontra e o servidor acha o app na mesma pasta ao lançá-lo pela bandeja)
+              # will-ia.app: executável principal = o app; o servidor fica num bundle auxiliar PRÓPRIO
+              # (Contents/Library/LoginItems/will-ia Server.app, id dev.will.will-ia.server, LSUIElement)
+              # para o LaunchServices não confundir o serviço com o app (ADR-0022).
               app="$stage/${NAME}.app"
-              mkdir -p "$app/Contents/MacOS" "$app/Contents/Resources"
+              srv="$app/Contents/Library/LoginItems/will-ia Server.app"
+              mkdir -p "$app/Contents/MacOS" "$app/Contents/Resources" "$srv/Contents/MacOS" "$srv/Contents/Resources"
               cp "$rel/will-ia-app" "$app/Contents/MacOS/will-ia-app"
-              cp "$rel/will-ia"     "$app/Contents/MacOS/will-ia"
+              cp "$rel/will-ia"     "$srv/Contents/MacOS/will-ia"
               sed "s/__VERSION__/${VERSION}/g" packaging/macos/Info.plist > "$app/Contents/Info.plist"
+              sed "s/__VERSION__/${VERSION}/g" packaging/macos/Server-Info.plist > "$srv/Contents/Info.plist"
               cp assets/icon/will-ia.icns "$app/Contents/Resources/will-ia.icns"
+              cp assets/icon/will-ia.icns "$srv/Contents/Resources/will-ia.icns"
               # "Instalar will-ia.app": duplo clique abre o assistente (payload dentro do binário)
               setup="$stage/Instalar will-ia.app"
               mkdir -p "$setup/Contents/MacOS" "$setup/Contents/Resources"
               cp "$rel/${SETUP}" "$setup/Contents/MacOS/${SETUP}"
               sed "s/__VERSION__/${VERSION}/g" packaging/macos/Setup-Info.plist > "$setup/Contents/Info.plist"
               cp assets/icon/will-ia.icns "$setup/Contents/Resources/will-ia.icns"
-              chmod +x "$app/Contents/MacOS/"* "$setup/Contents/MacOS/"*
+              chmod +x "$app/Contents/MacOS/"* "$srv/Contents/MacOS/"* "$setup/Contents/MacOS/"*
               # não assinado/notarizado: o usuário remove a quarentena (xattr -dr com.apple.quarantine)
               # ou libera em Privacidade e Segurança › "Abrir Mesmo Assim" (docs/13).
               # `zip -y` preserva symlinks e os bits de execução; a pasta de staging vira a raiz do zip.
