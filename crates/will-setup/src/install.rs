@@ -136,10 +136,16 @@ pub fn install(plan: &Plan, opts: &Options, progress: Progress) -> Outcome {
                         }
                     }
                 }
-                Err(e) => log(&format!(
-                    "aviso: servidor não respondeu a tempo ({e}); veja os logs em {}",
-                    plan.data_dir.join("logs").display()
-                )),
+                Err(e) => {
+                    log(&format!(
+                        "aviso: servidor não respondeu a tempo ({e}); veja os logs em {}",
+                        plan.data_dir.join("logs").display()
+                    ));
+                    let tail = os::server_log_tail(&plan.data_dir, 12);
+                    if !tail.is_empty() {
+                        log(&format!("últimas linhas dos logs do servidor:\n{tail}"));
+                    }
+                }
             },
             Err(e) => log(&format!("aviso: não consegui iniciar o servidor: {e}")),
         }

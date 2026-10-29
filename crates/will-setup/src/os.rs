@@ -913,12 +913,37 @@ pub fn remove_shortcuts(plan: &Plan, log: &Log<'_>) {
 
 // ---------------------------------------------------------------- subir / saúde
 
+// No macOS o app é aberto pelo LaunchServices; o spawn direto só vale nos outros SOs.
+#[cfg_attr(target_os = "macos", allow(dead_code))]
 fn spawn_detached(path: &Path, args: &[&str]) -> Result<(), String> {
+    spawn_detached_logged(path, args, None)
+}
+
+/// Como `spawn_detached`, mas com stdout/stderr anexados a `logs/<nome>.out.log`
+/// e `logs/<nome>.err.log` (append): é o único jeito de ver por que o servidor
+/// morreu no start quando ele roda sem console (Windows/Linux sem systemd).
+fn spawn_detached_logged(
+    path: &Path,
+    args: &[&str],
+    logs: Option<(&Path, &str)>,
+) -> Result<(), String> {
+    let (out, err) = match logs {
+        Some((dir, name)) => {
+            let _ = std::fs::create_dir_all(dir);
+            let open = |suffix: &str| {
+                std::fs::OpenOptions::new()
+                    .create(true)
+                    .append(true)
+                    .open(dir.join(format!("{name}.{suffix}.log")))
+                    .map(Stdio::from)
+                    .unwrap_or_else(|_| Stdio::null())
+            };
+            (open("out"), open("err"))
+        }
+        None => (Stdio::null(), Stdio::null()),
+    };
     let mut c = Command::new(path);
-    c.args(args)
-        .stdin(Stdio::null())
-        .stdout(Stdio::null())
-        .stderr(Stdio::null());
+    c.args(args).stdin(Stdio::null()).stdout(out).stderr(err);
     #[cfg(unix)]
     {
         use std::os::unix::process::CommandExt;
@@ -965,11 +990,56 @@ pub fn start_server(plan: &Plan, service_enabled: bool, log: &Log<'_>) -> Result
             Ok(())
         }
         _ => {
-            spawn_detached(&plan.server_path, &[])?;
-            log("servidor iniciado");
+            let logs = plan.data_dir.join("logs");
+            spawn_detached_logged(&plan.server_path, &[], Some((&logs, "service")))?;
+            log(&format!(
+                "servidor iniciado (saída em {})",
+                logs.join("service.err.log").display()
+            ));
             Ok(())
         }
     }
+}
+
+/// Últimas linhas dos logs do servidor, para explicar uma falha de start.
+pub fn server_log_tail(data_dir: &Path, lines: usize) -> String {
+    let logs = data_dir.join("logs");
+    let mut out = String::new();
+    let mut candidates: Vec<PathBuf> = vec![
+        logs.join("will-ia-fatal.log"),
+        logs.join("service.err.log"),
+        logs.join("launchd.err.log"),
+    ];
+    if let Ok(rd) = std::fs::read_dir(&logs) {
+        let mut daily: Vec<PathBuf> = rd
+            .filter_map(|e| e.ok().map(|e| e.path()))
+            .filter(|p| {
+                p.file_name()
+                    .and_then(|n| n.to_str())
+                    .is_some_and(|n| n.starts_with("will-ia.log"))
+            })
+            .collect();
+        daily.sort();
+        if let Some(last) = daily.pop() {
+            candidates.push(last);
+        }
+    }
+    for p in candidates {
+        if let Ok(text) = std::fs::read_to_string(&p) {
+            let tail: Vec<&str> = text
+                .lines()
+                .rev()
+                .take(lines)
+                .collect::<Vec<_>>()
+                .into_iter()
+                .rev()
+                .collect();
+            if !tail.is_empty() {
+                out.push_str(&format!("--- {} ---\n{}\n", p.display(), tail.join("\n")));
+            }
+        }
+    }
+    out
 }
 
 /// Espera `<data_dir>/api-port` responder em `/api/health`.

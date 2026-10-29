@@ -66,6 +66,60 @@ enum Cmd {
 }
 
 fn main() -> anyhow::Result<()> {
+    // Windows (`windows_subsystem = "windows"`): sem isto nada aparece quando o
+    // binário é rodado num terminal (`will-ia serve` para diagnóstico).
+    will_platform::attach_parent_console();
+    install_fatal_hooks();
+    let r = real_main();
+    if let Err(e) = &r {
+        log_fatal(&format!("erro fatal: {e:#}"));
+    }
+    r
+}
+
+/// `<logs_dir>/will-ia-fatal.log`: erros de start e panics, mesmo quando não há
+/// console (serviço no login) e o `tracing` ainda não subiu. Também vai para o
+/// `will-ia.log` quando o `tracing` já existe.
+fn log_fatal(msg: &str) {
+    tracing::error!("{msg}");
+    eprintln!("{msg}");
+    let paths = will_core::AppPaths::resolve();
+    let _ = std::fs::create_dir_all(&paths.logs_dir);
+    if let Ok(mut f) = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(paths.logs_dir.join("will-ia-fatal.log"))
+    {
+        use std::io::Write;
+        let _ = writeln!(
+            f,
+            "{} {} v{}: {msg}",
+            chrono::Local::now().format("%Y-%m-%dT%H:%M:%S%z"),
+            std::env::consts::OS,
+            env!("CARGO_PKG_VERSION")
+        );
+    }
+}
+
+fn install_fatal_hooks() {
+    let prev = std::panic::take_hook();
+    std::panic::set_hook(Box::new(move |info| {
+        let loc = info
+            .location()
+            .map(|l| format!("{}:{}", l.file(), l.line()))
+            .unwrap_or_default();
+        let msg = info
+            .payload()
+            .downcast_ref::<&str>()
+            .map(|s| s.to_string())
+            .or_else(|| info.payload().downcast_ref::<String>().cloned())
+            .unwrap_or_else(|| "panic sem mensagem".into());
+        log_fatal(&format!("panic em {loc}: {msg}"));
+        prev(info);
+    }));
+}
+
+fn real_main() -> anyhow::Result<()> {
     let cli = Cli::parse();
     if let Some(d) = &cli.data_dir {
         std::env::set_var("WILL_IA_DATA_DIR", d);
