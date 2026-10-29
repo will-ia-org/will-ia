@@ -18,6 +18,11 @@ pub struct Profile {
     /// token local da API.
     #[serde(default)]
     pub username: Option<String>,
+    /// Senha da conta, guardada para o botão "Conectar" reautenticar sozinho
+    /// (o token de sessão expira e some no logoff). Fica em claro no
+    /// `profiles.json` do cliente; é uma troca consciente por comodidade.
+    #[serde(default)]
+    pub password: Option<String>,
     /// Certificado do servidor (PEM) fixado para `https://` (TOFU: o usuário
     /// confere a impressão digital em `/api/health` e cola o PEM aqui).
     #[serde(default)]
@@ -41,6 +46,7 @@ impl Profile {
             url: "http://127.0.0.1:0".into(),
             token: String::new(),
             username: None,
+            password: None,
             ca_pem: None,
             insecure: false,
         }
@@ -129,6 +135,7 @@ pub fn local_profile() -> Option<Profile> {
         url: format!("http://127.0.0.1:{port}"),
         token,
         username: None,
+        password: None,
         ca_pem: None,
         insecure: false,
     })
@@ -144,6 +151,7 @@ pub fn pick(url: Option<&str>, token: Option<&str>, name: Option<&str>) -> Optio
             url: u.trim_end_matches('/').to_string(),
             token: token.unwrap_or_default().to_string(),
             username: None,
+            password: None,
             ca_pem: None,
             insecure: false,
         });

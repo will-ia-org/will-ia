@@ -233,8 +233,9 @@ impl WillApp {
         if profile.id != Profile::LOCAL_ID {
             let mut pf = crate::profiles::load();
             if let Some(saved) = pf.profiles.iter_mut().find(|x| x.id == profile.id) {
+                // Só o token de sessão (morto após o logout) é apagado; usuário e
+                // senha ficam para o botão "Conectar" reautenticar sozinho.
                 saved.token.clear();
-                saved.username = None;
                 if let Err(e) = crate::profiles::save(&pf) {
                     self.toasts.error(e);
                 }

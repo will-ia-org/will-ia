@@ -62,6 +62,9 @@ pub struct ConnectPage {
     /// Aceitar qualquer certificado (inseguro).
     insecure: bool,
     login_task: Option<Task<Value>>,
+    /// Quando o login foi disparado por "Conectar" (autologin), o perfil a
+    /// atualizar e conectar ao receber o token; `None` = login pelo formulário.
+    login_profile: Option<Profile>,
     /// `GET /api/health` do servidor do formulário (Buscar do servidor).
     health_task: Option<Task<Value>>,
     fetched: Option<FetchedHealth>,
@@ -92,6 +95,7 @@ impl Default for ConnectPage {
             ca_pem: String::new(),
             insecure: false,
             login_task: None,
+            login_profile: None,
             health_task: None,
             fetched: None,
             pw_new: String::new(),
@@ -199,7 +203,13 @@ impl ConnectPage {
     }
 
     /// Perfil montado a partir do formulário (id novo ou o que está em edição).
-    fn form_profile(&self, url: String, token: String, username: Option<String>) -> Profile {
+    fn form_profile(
+        &self,
+        url: String,
+        token: String,
+        username: Option<String>,
+        password: Option<String>,
+    ) -> Profile {
         let name = if self.name.trim().is_empty() {
             url.clone()
         } else {
@@ -216,9 +226,23 @@ impl ConnectPage {
             url,
             token,
             username,
+            password,
             ca_pem: tls.ca_pem,
             insecure: tls.insecure,
         }
+    }
+
+    /// Senha a preservar no perfil: a digitada agora, ou a já guardada (edição
+    /// sem retypar a senha).
+    fn kept_password(&self) -> Option<String> {
+        let typed = self.password.trim();
+        if !typed.is_empty() {
+            return Some(typed.to_string());
+        }
+        self.edit_id
+            .as_ref()
+            .and_then(|id| self.file.profiles.iter().find(|x| &x.id == id))
+            .and_then(|p| p.password.clone())
     }
 
     fn store(&mut self, p: &Profile) -> Result<(), String> {
@@ -230,7 +254,8 @@ impl ConnectPage {
     fn save_form(&mut self) -> Result<(), String> {
         let url = self.form_url()?;
         let username = Some(self.username.trim().to_string()).filter(|u| !u.is_empty());
-        let p = self.form_profile(url, self.token.trim().to_string(), username);
+        let pw = self.kept_password();
+        let p = self.form_profile(url, self.token.trim().to_string(), username, pw);
         self.store(&p)?;
         self.clear_form();
         Ok(())
@@ -311,7 +336,8 @@ impl ConnectPage {
                 return;
             }
         };
-        let p = self.form_profile(url, token, Some(username.clone()));
+        let password = Some(self.password.clone()).filter(|p| !p.is_empty());
+        let p = self.form_profile(url, token, Some(username.clone()), password);
         if let Err(e) = self.store(&p) {
             cx.toasts.error(e);
             return;
@@ -330,6 +356,72 @@ impl ConnectPage {
                 "https:// sem certificado fixado: a conexão só funciona se o sistema confiar no certificado do servidor. Cole o PEM em \"TLS (https)\" ou marque o modo inseguro.",
             ));
         }
+        // Sem token de sessão (logoff ou perfil recém-criado sem entrar): se há
+        // usuário e senha guardados, reautentica sozinho e conecta; senão, abre
+        // o formulário para o usuário digitar a senha.
+        if p.token.trim().is_empty() {
+            let user = p.username.clone().unwrap_or_default();
+            let pass = p.password.clone().unwrap_or_default();
+            if !user.is_empty() && !pass.is_empty() {
+                self.start_login_for(cx, p);
+            } else {
+                self.open_login(&p);
+            }
+            return;
+        }
+        self.last_error = None;
+        self.tab = LandingTab::Profiles;
+        profiles::remember_last(&p.id);
+        cx.svc.send_cmd(UiCommand::Connect(p));
+    }
+
+    /// Autologin a partir de um perfil guardado (botão "Conectar"): usa
+    /// usuário/senha/TLS do próprio perfil.
+    fn start_login_for(&mut self, cx: &mut Cx, p: Profile) {
+        let url = p.url.clone();
+        let user = p.username.clone().unwrap_or_default();
+        let pass = p.password.clone().unwrap_or_default();
+        let tls = TlsOptions {
+            ca_pem: p.ca_pem.clone(),
+            insecure: p.insecure,
+        };
+        let custom_tls = p.is_https() && (tls.insecure || tls.ca_pem.is_some());
+        self.last_error = None;
+        self.login_profile = Some(p);
+        self.login_task = Some(cx.svc.call(move |_c| async move {
+            if custom_tls {
+                Client::with_tls(&url, "", &tls)
+                    .post(
+                        "auth/login",
+                        Some(json!({ "login": user, "password": pass, "client": CLIENT_NAME })),
+                    )
+                    .await
+            } else {
+                Client::login(&url, &user, &pass, Some(CLIENT_NAME)).await
+            }
+        }));
+    }
+
+    /// Autologin respondeu: grava o novo token no perfil guardado e conecta.
+    fn finish_login_profile(&mut self, cx: &mut Cx, mut p: Profile, v: Value) {
+        let token = ui::s(&v, "token");
+        if token.is_empty() {
+            cx.toasts
+                .error(tr("O servidor não devolveu um token de sessão."));
+            return;
+        }
+        p.token = token;
+        if let Some(u) = v
+            .get("user")
+            .map(|u| ui::s(u, "username"))
+            .filter(|u| !u.is_empty())
+        {
+            p.username = Some(u);
+        }
+        if let Err(e) = self.store(&p) {
+            cx.toasts.error(e);
+            return;
+        }
         self.last_error = None;
         self.tab = LandingTab::Profiles;
         profiles::remember_last(&p.id);
@@ -340,8 +432,12 @@ impl ConnectPage {
         if let Some(t) = &self.login_task {
             if let Some(r) = t.take() {
                 self.login_task = None;
+                let lp = self.login_profile.take();
                 match r {
-                    Ok(v) => self.finish_login(cx, v),
+                    Ok(v) => match lp {
+                        Some(p) => self.finish_login_profile(cx, p, v),
+                        None => self.finish_login(cx, v),
+                    },
                     Err(e) => cx.toasts.error(trf("Não entrou: {}", &[&e])),
                 }
             }
@@ -635,10 +731,7 @@ impl ConnectPage {
                                     connect = Some(p.clone());
                                 }
                             });
-                            if ui.button(tr("Editar")).clicked() {
-                                edit_local = Some(p.clone());
-                            }
-                            if ui.button(tr("Entrar")).on_hover_text(tr("Entrar com usuário e senha neste servidor; vira um perfil salvo.")).clicked() {
+                            if ui.button(tr("Editar")).on_hover_text(tr("Entrar com usuário e senha neste servidor; vira um perfil salvo.")).clicked() {
                                 edit_local = Some(p.clone());
                             }
                         });
@@ -678,11 +771,15 @@ impl ConnectPage {
                             if let Some(u) = &p.username {
                                 ui.label(egui::RichText::new(u).weak().small());
                             }
-                            if p.token.is_empty() {
+                            let no_pass =
+                                p.password.as_deref().map(|s| s.is_empty()).unwrap_or(true);
+                            if p.token.is_empty() && no_pass {
                                 ui.label(
-                                    egui::RichText::new(tr("sem token: entre com usuário e senha"))
-                                        .weak()
-                                        .small(),
+                                    egui::RichText::new(tr(
+                                        "sem senha guardada: Conectar pede login",
+                                    ))
+                                    .weak()
+                                    .small(),
                                 );
                             }
                         });
@@ -694,19 +791,13 @@ impl ConnectPage {
                         if ui.button(tr("Editar")).clicked() {
                             edit = Some(p.clone());
                         }
-                        if p.token.is_empty() {
-                            // Sem token (nunca entrou ou saiu do perfil): abre o
-                            // formulário para digitar a senha.
-                            if ui::primary_button(ui, tr("Entrar")).clicked() {
-                                edit = Some(p.clone());
+                        // "Conectar" sempre: se não há token guardado mas há
+                        // usuário e senha, reautentica sozinho (ver connect_to).
+                        ui.add_enabled_ui(current.id != p.id, |ui| {
+                            if ui::primary_button(ui, tr("Conectar")).clicked() {
+                                connect = Some(p.clone());
                             }
-                        } else {
-                            ui.add_enabled_ui(current.id != p.id, |ui| {
-                                if ui::primary_button(ui, tr("Conectar")).clicked() {
-                                    connect = Some(p.clone());
-                                }
-                            });
-                        }
+                        });
                     });
                 });
             }
@@ -759,7 +850,7 @@ impl ConnectPage {
                 ui::field(
                     ui,
                     tr("Senha"),
-                    Some(tr("Não é guardada: Entrar troca por um token de sessão.")),
+                    Some(tr("Guardada no perfil para reconectar sem digitar de novo (fica em claro no profiles.json do cliente).")),
                     |ui| {
                         let r = ui.add(
                             egui::TextEdit::singleline(&mut self.password)
