@@ -2444,7 +2444,7 @@ dependencies = [
 
 [[package]]
 name = "fake-claude"
-version = "0.1.6"
+version = "0.1.7"
 dependencies = [
  "serde_json",
  "tokio",
@@ -8825,7 +8825,7 @@ checksum = "626c4bac6755d76ffc12cb01b2eac751db1996b9e0041de9aa02c8c211ddc82c"
 
 [[package]]
 name = "will-app"
-version = "0.1.6"
+version = "0.1.7"
 dependencies = [
  "anyhow",
  "auto-launch",
@@ -8855,7 +8855,7 @@ dependencies = [
 
 [[package]]
 name = "will-browser"
-version = "0.1.6"
+version = "0.1.7"
 dependencies = [
  "axum",
  "chrono",
@@ -8877,7 +8877,7 @@ dependencies = [
 
 [[package]]
 name = "will-client"
-version = "0.1.6"
+version = "0.1.7"
 dependencies = [
  "bytes",
  "futures",
@@ -8897,7 +8897,7 @@ dependencies = [
 
 [[package]]
 name = "will-core"
-version = "0.1.6"
+version = "0.1.7"
 dependencies = [
  "async-trait",
  "chrono",
@@ -8915,7 +8915,7 @@ dependencies = [
 
 [[package]]
 name = "will-engine"
-version = "0.1.6"
+version = "0.1.7"
 dependencies = [
  "async-trait",
  "chrono",
@@ -8939,7 +8939,7 @@ dependencies = [
 
 [[package]]
 name = "will-google"
-version = "0.1.6"
+version = "0.1.7"
 dependencies = [
  "async-trait",
  "base64 0.23.1",
@@ -8970,7 +8970,7 @@ dependencies = [
 
 [[package]]
 name = "will-ia"
-version = "0.1.6"
+version = "0.1.7"
 dependencies = [
  "anyhow",
  "clap",
@@ -8987,7 +8987,7 @@ dependencies = [
 
 [[package]]
 name = "will-mcp"
-version = "0.1.6"
+version = "0.1.7"
 dependencies = [
  "async-trait",
  "axum",
@@ -9014,7 +9014,7 @@ dependencies = [
 
 [[package]]
 name = "will-platform"
-version = "0.1.6"
+version = "0.1.7"
 dependencies = [
  "directories",
  "nix",
@@ -9030,7 +9030,7 @@ dependencies = [
 
 [[package]]
 name = "will-realtime"
-version = "0.1.6"
+version = "0.1.7"
 dependencies = [
  "async-trait",
  "base64 0.23.1",
@@ -9055,7 +9055,7 @@ dependencies = [
 
 [[package]]
 name = "will-scheduler"
-version = "0.1.6"
+version = "0.1.7"
 dependencies = [
  "async-trait",
  "chrono",
@@ -9075,7 +9075,7 @@ dependencies = [
 
 [[package]]
 name = "will-server"
-version = "0.1.6"
+version = "0.1.7"
 dependencies = [
  "anyhow",
  "argon2",
@@ -9124,7 +9124,7 @@ dependencies = [
 
 [[package]]
 name = "will-setup"
-version = "0.1.6"
+version = "0.1.7"
 dependencies = [
  "anyhow",
  "chrono",
@@ -9140,7 +9140,7 @@ dependencies = [
 
 [[package]]
 name = "will-storage"
-version = "0.1.6"
+version = "0.1.7"
 dependencies = [
  "async-trait",
  "chrono",
@@ -9160,7 +9160,7 @@ dependencies = [
 
 [[package]]
 name = "will-telegram"
-version = "0.1.6"
+version = "0.1.7"
 dependencies = [
  "async-trait",
  "chrono",
@@ -9185,7 +9185,7 @@ dependencies = [
 
 [[package]]
 name = "will-whatsapp"
-version = "0.1.6"
+version = "0.1.7"
 dependencies = [
  "async-trait",
  "base64 0.23.1",
