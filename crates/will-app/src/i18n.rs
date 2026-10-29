@@ -1632,6 +1632,13 @@ pub static TABLE: &[(&str, &str)] = &[
     ("Só depois de um turno concluído com resposta; turnos com erro não contam nem entram no resumo. Threads antigas ganham resumo no próximo turno que fechar a janela.", "Only after a completed turn with a reply; failed turns neither count nor go into the summary. Older threads get a summary at the next turn that closes the window."),
     ("Ver inteiro", "See it whole"),
     ("Na lista, o resumo completo aparece no tooltip da thread; no cabeçalho, ao passar o mouse.", "In the list, the full summary shows in the thread tooltip; in the header, on hover."),
+    // ---------- "i" da thread ----------
+    ("origem", "origin"),
+    ("processo", "process"),
+    ("pendentes", "pending"),
+    ("criada", "created"),
+    ("atividade", "activity"),
+    ("id", "id"),
 ];
 
 #[cfg(test)]

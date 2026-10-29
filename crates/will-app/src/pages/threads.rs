@@ -153,9 +153,68 @@ fn when_label(ui: &mut egui::Ui, pal: &ui::Palette, dt: Option<&chrono::DateTime
     }
 }
 
-/// Cor de texto fraca da paleta corrente (para trechos fora do escopo de `pal`).
-fn pal_text_weak(ui: &egui::Ui) -> egui::Color32 {
-    ui::palette(ui.visuals().dark_mode).text_weak
+/// Conteúdo do "i" do cabeçalho: origem, status, custo, sessão, atividade.
+fn thread_info_body(ui: &mut egui::Ui, pal: &ui::Palette, t: &ThreadSummary) {
+    ui.set_min_width(260.0);
+    let row = |ui: &mut egui::Ui, k: &str, v: String| {
+        ui.horizontal(|ui| {
+            ui.label(egui::RichText::new(k).small().color(pal.text_weak));
+            ui.add(egui::Label::new(egui::RichText::new(v).small()).wrap());
+        });
+    };
+    ui.horizontal(|ui| {
+        ui::dot(ui, status_tone(t));
+        ui.label(egui::RichText::new(t.status.as_str()).small().strong());
+    });
+    row(ui, tr("origem"), origin_label(t));
+    row(ui, tr("custo"), ui::fmt_usd(t.total_cost_usd));
+    if let Some(sid) = &t.claude_session_id {
+        row(ui, tr("sessão"), sid.clone());
+    }
+    row(
+        ui,
+        tr("processo"),
+        if t.alive {
+            tr("vivo").into()
+        } else {
+            tr("dormente").into()
+        },
+    );
+    if t.pending > 0 {
+        row(ui, tr("pendentes"), t.pending.to_string());
+    }
+    row(ui, tr("criada"), fmt_exact(&t.created_at));
+    row(ui, tr("atividade"), fmt_exact(&t.last_activity_at));
+    row(ui, tr("id"), t.id.to_string());
+}
+
+/// Texto que quebra em até `max_rows` linhas e trunca o resto com "…"
+/// (resumos na lista e no cabeçalho). `max_width` = largura disponível.
+fn wrapped_label(
+    ui: &mut egui::Ui,
+    text: &str,
+    font_id: egui::FontId,
+    color: egui::Color32,
+    italics: bool,
+    max_rows: usize,
+    max_width: f32,
+) -> egui::Response {
+    let mut job = egui::text::LayoutJob::single_section(
+        text.to_string(),
+        egui::TextFormat {
+            font_id,
+            color,
+            italics,
+            ..Default::default()
+        },
+    );
+    job.wrap = egui::text::TextWrapping {
+        max_width: max_width.max(24.0),
+        max_rows,
+        break_anywhere: false,
+        overflow_character: Some('…'),
+    };
+    ui.add(egui::Label::new(job))
 }
 
 /// Botão pequeno "copiar" com área de clique real (moldura só no hover).
@@ -690,31 +749,16 @@ impl ThreadsPage {
                                 ui::dot(ui, status_tone(t));
                                 ui.add(egui::Label::new(egui::RichText::new(title_of(t)).font(ui::medium(13.0))).truncate());
                             });
-                            // 2ª linha: resumo da conversa (itálico, truncado) à esquerda,
-                            // sem empurrar o tempo relativo, que fica fixo à direita.
-                            ui.horizontal(|ui| {
-                                let when_text = time_ago(&t.last_activity_at);
-                                let when_w = ui
-                                    .fonts_mut(|f| f.layout_no_wrap(when_text.clone(), egui::FontId::proportional(10.5), pal.text_weak))
-                                    .size()
-                                    .x
-                                    + 8.0;
-                                let when = egui::RichText::new(when_text).size(10.5).color(pal.text_weak);
-                                if let Some(sm) = t.summary.as_deref().filter(|x| !x.trim().is_empty()) {
+                            // resumo da conversa: até 3 linhas, itálico, truncado com "…"
+                            if let Some(sm) = t.summary.as_deref().filter(|x| !x.trim().is_empty()) {
+                                ui.horizontal(|ui| {
                                     ui.add_space(14.0);
-                                    ui.scope(|ui| {
-                                        ui.set_max_width((ui.available_width() - when_w).max(24.0));
-                                        ui.add(
-                                            egui::Label::new(
-                                                egui::RichText::new(sm).size(10.5).italics().color(pal.text_weak),
-                                            )
-                                            .truncate(),
-                                        );
-                                    });
-                                }
-                                ui.with_layout(egui::Layout::right_to_left(egui::Align::Min), |ui| {
-                                    ui.label(when);
+                                    let w = ui.available_width() - 2.0;
+                                    wrapped_label(ui, sm, egui::FontId::proportional(10.5), pal.text_weak, true, 3, w);
                                 });
+                            }
+                            ui.with_layout(egui::Layout::right_to_left(egui::Align::Min), |ui| {
+                                ui.label(egui::RichText::new(time_ago(&t.last_activity_at)).size(10.5).color(pal.text_weak));
                             });
                         });
                         // Detalhes saem da linha e vão para o tooltip.
@@ -808,7 +852,8 @@ impl ThreadsPage {
     }
 
     fn chat_ui(&mut self, ui: &mut egui::Ui, cx: &mut Cx, t: &ThreadSummary) {
-        // cabeçalho
+        let pal = ui::palette(ui.visuals().dark_mode);
+        // cabeçalho: título + "i" (detalhes) à esquerda; ações à direita
         ui.horizontal(|ui| {
             match &mut self.rename_buf {
                 Some(buf) => {
@@ -828,9 +873,9 @@ impl ThreadsPage {
                     }
                 }
                 None => {
-                    // Título truncado: um nome longo não pode empurrar "renomear"
-                    // para cima dos botões alinhados à direita.
-                    let w = (ui.available_width() - 460.0).max(160.0);
+                    // Título truncado: um nome longo não pode empurrar o "i" nem
+                    // invadir os botões alinhados à direita.
+                    let w = (ui.available_width() - 470.0).max(160.0);
                     ui.scope(|ui| {
                         ui.set_max_width(w);
                         ui.add(
@@ -838,8 +883,14 @@ impl ThreadsPage {
                         )
                         .on_hover_text(title_of(t));
                     });
-                    if ui.button(tr("renomear")).clicked() {
-                        self.rename_buf = Some(title_of(t));
+                    // "i": origem, status, custo, sessão… (popover no clique, igual
+                    // ao "i" das respostas)
+                    let info = info_icon(ui, pal).on_hover_cursor(egui::CursorIcon::PointingHand);
+                    let opened = egui::containers::Popup::menu(&info)
+                        .close_behavior(egui::PopupCloseBehavior::CloseOnClickOutside)
+                        .show(|ui| thread_info_body(ui, pal, t));
+                    if opened.is_none() {
+                        info.on_hover_ui(|ui| thread_info_body(ui, pal, t));
                     }
                 }
             }
@@ -867,48 +918,32 @@ impl ThreadsPage {
                 {
                     self.action(cx, t.id, "Interromper");
                 }
+                if self.rename_buf.is_none() && ui.button(tr("renomear")).clicked() {
+                    self.rename_buf = Some(title_of(t));
+                }
             });
         });
-        ui.horizontal(|ui| {
-            ui::dot(ui, status_tone(t));
-            ui.label(
-                egui::RichText::new(format!(
-                    "{} · {} · {}",
-                    origin_label(t),
-                    t.status.as_str(),
-                    ui::fmt_usd(t.total_cost_usd)
-                ))
-                .small()
-                .weak(),
+        // resumo da conversa: linha inteira à esquerda, até 2 linhas (inteiro no hover)
+        if let Some(sm) = t.summary.as_deref().filter(|x| !x.trim().is_empty()) {
+            let w = ui.available_width() - 4.0;
+            wrapped_label(
+                ui,
+                sm,
+                egui::FontId::proportional(12.0),
+                pal.text_weak,
+                true,
+                2,
+                w,
+            )
+            .on_hover_text(sm);
+        }
+        if t.session_expired {
+            ui::badge(
+                ui,
+                tr("sessão expirada no disco; vai recomeçar"),
+                Tone::Warning,
             );
-            if let Some(sid) = &t.claude_session_id {
-                ui.label(
-                    egui::RichText::new(trf("sessão {}", &[&&sid[..sid.len().min(8)]]))
-                        .small()
-                        .weak(),
-                );
-            }
-            if let Some(sm) = t.summary.as_deref().filter(|x| !x.trim().is_empty()) {
-                ui.add_space(4.0);
-                ui.add(
-                    egui::Label::new(
-                        egui::RichText::new(sm)
-                            .small()
-                            .italics()
-                            .color(pal_text_weak(ui)),
-                    )
-                    .truncate(),
-                )
-                .on_hover_text(sm);
-            }
-            if t.session_expired {
-                ui::badge(
-                    ui,
-                    tr("sessão expirada no disco; vai recomeçar"),
-                    Tone::Warning,
-                );
-            }
-        });
+        }
         ui.separator();
 
         // histórico + ao vivo: usa exatamente o que sobra acima da caixa de
