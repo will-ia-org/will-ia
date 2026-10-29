@@ -120,6 +120,186 @@ impl EnginePage {
         }
     }
 
+    /// Faixa de resumo: quantos ok / com erro / não testados e qual está ativo.
+    fn tokens_summary(&self, ui: &mut egui::Ui, list: &[Value]) {
+        let ok = list.iter().filter(|t| ui::s(t, "status") == "ok").count();
+        let bad = list
+            .iter()
+            .filter(|t| ui::s(t, "status") == "error")
+            .count();
+        let untested = list.len() - ok - bad;
+        let active = list
+            .iter()
+            .find(|t| ui::b(t, "active"))
+            .map(|t| ui::s(t, "label"));
+        ui.horizontal_wrapped(|ui| {
+            ui.spacing_mut().item_spacing.x = 10.0;
+            ui::dot(ui, Tone::Success);
+            ui.label(egui::RichText::new(trf("{} ok", &[&ok])).small());
+            if bad > 0 {
+                ui::dot(ui, Tone::Danger);
+                ui.label(egui::RichText::new(trf("{} com erro", &[&bad])).small());
+            }
+            if untested > 0 {
+                ui::dot(ui, Tone::Neutral);
+                ui.label(egui::RichText::new(trf("{} não testado(s)", &[&untested])).small());
+            }
+            ui.label(egui::RichText::new("·").weak());
+            match active {
+                Some(a) => {
+                    ui.label(egui::RichText::new(tr("ativo:")).small().weak());
+                    ui.label(egui::RichText::new(a).small().strong());
+                }
+                None => {
+                    ui.label(
+                        egui::RichText::new(tr("nenhum token ativo"))
+                            .small()
+                            .color(Tone::Warning.color(ui.visuals().dark_mode)),
+                    );
+                }
+            }
+        });
+    }
+
+    /// Card de um token: nome + sufixo + estado na 1ª linha, ações à direita;
+    /// erro/última verificação em linha própria, quebrando o texto (nada de
+    /// estourar colunas).
+    fn token_card(&mut self, ui: &mut egui::Ui, cx: &mut Cx, t: &Value) {
+        let id = ui::s(t, "id");
+        let active = ui::b(t, "active");
+        let status = ui::s(t, "status");
+        let raw_error = t.get("error").and_then(|e| e.as_str()).unwrap_or("").trim();
+        let dark = ui.visuals().dark_mode;
+        let p = ui::palette(dark);
+        let (tone, state_label) = match status.as_str() {
+            "ok" => (Tone::Success, tr("ok")),
+            "error" => (error_tone(raw_error), tr("erro")),
+            _ => (Tone::Neutral, tr("não testado")),
+        };
+        let testing = self.test_task.as_ref().is_some_and(|(i, _)| i == &id);
+        let activating = self.activate_task.as_ref().is_some_and(|(i, _)| i == &id);
+        let busy = testing || activating;
+
+        let frame = egui::Frame::new()
+            .fill(if active { p.card_alt } else { p.card })
+            .stroke(egui::Stroke::new(
+                1.0,
+                if active {
+                    p.accent.linear_multiply(0.6)
+                } else {
+                    p.border
+                },
+            ))
+            .corner_radius(8.0)
+            .inner_margin(egui::Margin::symmetric(14, 10));
+        let resp = frame.show(ui, |ui| {
+            ui.set_width(ui.available_width());
+            // ---- linha 1: identidade + ações ----
+            ui.horizontal(|ui| {
+                ui.spacing_mut().item_spacing.x = 8.0;
+                ui::dot(ui, tone);
+                ui.label(egui::RichText::new(ui::s(t, "label")).font(ui::semibold(14.0)));
+                ui.label(egui::RichText::new(ui::s(t, "masked")).monospace().weak().small());
+                if active {
+                    ui::badge(ui, tr("ativo"), Tone::Success);
+                }
+                ui::badge(ui, state_label, tone);
+                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    ui.spacing_mut().item_spacing.x = 6.0;
+                    if ui
+                        .add_enabled(
+                            !busy,
+                            egui::Button::new(egui::RichText::new(tr("remover")).small().weak()).frame(false),
+                        )
+                        .on_hover_text(tr("Remover este token"))
+                        .clicked()
+                    {
+                        self.confirm_delete = Some((id.clone(), ui::s(t, "label")));
+                    }
+                    if !active {
+                        let r = ui.add_enabled(
+                            !busy,
+                            egui::Button::new(egui::RichText::new(tr("Ativar")).color(egui::Color32::WHITE))
+                                .fill(p.accent),
+                        );
+                        if r.clicked() {
+                            let id2 = id.clone();
+                            self.activate_task = Some((
+                                id.clone(),
+                                cx.svc.call(move |c| async move { c.activate_engine_token(&id2).await }),
+                            ));
+                        }
+                    }
+                    if ui
+                        .add_enabled(!busy, egui::Button::new(tr("Testar")))
+                        .on_hover_text(tr("Roda um `claude -p` descartável com este token (sem ferramentas) e confere a resposta."))
+                        .clicked()
+                    {
+                        let id2 = id.clone();
+                        self.test_task = Some((
+                            id.clone(),
+                            cx.svc.call(move |c| async move { c.test_engine_token(&id2).await }),
+                        ));
+                    }
+                    if busy {
+                        ui.spinner();
+                        ui.label(
+                            egui::RichText::new(if testing { tr("testando…") } else { tr("ativando…") })
+                                .small()
+                                .weak(),
+                        );
+                    }
+                });
+            });
+            // ---- linha 2: verificação + erro (quebra de linha, largura total) ----
+            let verified = t
+                .get("verified_at")
+                .and_then(|v| v.as_str())
+                .and_then(|v| chrono::DateTime::parse_from_rfc3339(v).ok())
+                .map(|d| d.with_timezone(&chrono::Utc));
+            let has_error = status == "error" && !raw_error.is_empty();
+            if verified.is_some() || has_error {
+                ui.add_space(4.0);
+                ui.horizontal_wrapped(|ui| {
+                    ui.spacing_mut().item_spacing.x = 6.0;
+                    ui.add_space(18.0);
+                    if let Some(d) = verified {
+                        ui.label(
+                            egui::RichText::new(trf("testado há {}", &[&ui::fmt_relative(&d)]))
+                                .small()
+                                .weak(),
+                        );
+                    }
+                    if has_error {
+                        if verified.is_some() {
+                            ui.label(egui::RichText::new("·").small().weak());
+                        }
+                        let (msg, _) = friendly_error(raw_error);
+                        ui.add(
+                            egui::Label::new(egui::RichText::new(msg).small().color(tone.color(dark)))
+                                .wrap(),
+                        )
+                        .on_hover_text(raw_error);
+                    }
+                });
+            }
+        });
+        if active {
+            // barra de destaque à esquerda do card ativo
+            let r = resp.response.rect;
+            ui.painter().rect_filled(
+                egui::Rect::from_min_max(r.left_top(), egui::pos2(r.left() + 3.0, r.bottom())),
+                egui::CornerRadius {
+                    nw: 8,
+                    sw: 8,
+                    ne: 0,
+                    se: 0,
+                },
+                p.accent,
+            );
+        }
+    }
+
     pub fn ui(&mut self, ui: &mut egui::Ui, cx: &mut Cx, st: &mut SettingsState) {
         self.poll(cx);
         ui::heading(ui, tr("Motor Claude"), Some(tr("Processos `claude -p` headless, um por thread, rodando sobre a base de conhecimento. Nenhuma chamada direta à API da Anthropic.")));
@@ -154,80 +334,14 @@ impl EnginePage {
                     if list.is_empty() && !self.tokens.loading() {
                         ui.label(egui::RichText::new(tr("Nenhum token cadastrado. Gere um com `claude setup-token` no terminal e cole abaixo.")).weak());
                     }
-                    egui::Grid::new("tokens-grid")
-                        .num_columns(5)
-                        .striped(true)
-                        .spacing([14.0, 6.0])
-                        .show(ui, |ui| {
-                            for t in &list {
-                                let id = ui::s(t, "id");
-                                let active = ui::b(t, "active");
-                                ui.horizontal(|ui| {
-                                    if active {
-                                        ui::badge(ui, tr("ativo"), Tone::Success);
-                                    }
-                                    ui.label(egui::RichText::new(ui::s(t, "label")).strong());
-                                });
-                                ui.monospace(ui::s(t, "masked"));
-                                let status = ui::s(t, "status");
-                                match status.as_str() {
-                                    "ok" => ui::badge(ui, tr("ok"), Tone::Success),
-                                    "error" => ui::badge(ui, tr("erro"), Tone::Danger),
-                                    _ => ui::badge(ui, tr("não testado"), Tone::Neutral),
-                                }
-                                ui.label(
-                                    egui::RichText::new(
-                                        t.get("error").and_then(|e| e.as_str()).unwrap_or(""),
-                                    )
-                                    .small()
-                                    .weak(),
-                                );
-                                ui.horizontal(|ui| {
-                                    let testing =
-                                        self.test_task.as_ref().is_some_and(|(i, _)| i == &id);
-                                    let activating =
-                                        self.activate_task.as_ref().is_some_and(|(i, _)| i == &id);
-                                    if testing || activating {
-                                        ui.spinner();
-                                    }
-                                    if ui
-                                        .add_enabled(
-                                            !testing && !activating,
-                                            egui::Button::new(tr("Testar")),
-                                        )
-                                        .clicked()
-                                    {
-                                        let id2 = id.clone();
-                                        self.test_task = Some((
-                                            id.clone(),
-                                            cx.svc.call(move |c| async move {
-                                                c.test_engine_token(&id2).await
-                                            }),
-                                        ));
-                                    }
-                                    if !active
-                                        && ui
-                                            .add_enabled(
-                                                !testing && !activating,
-                                                egui::Button::new(tr("Ativar")),
-                                            )
-                                            .clicked()
-                                    {
-                                        let id2 = id.clone();
-                                        self.activate_task = Some((
-                                            id.clone(),
-                                            cx.svc.call(move |c| async move {
-                                                c.activate_engine_token(&id2).await
-                                            }),
-                                        ));
-                                    }
-                                    if ui.button(tr("remover")).clicked() {
-                                        self.confirm_delete = Some((id.clone(), ui::s(t, "label")));
-                                    }
-                                });
-                                ui.end_row();
-                            }
-                        });
+                    if !list.is_empty() {
+                        self.tokens_summary(ui, &list);
+                        ui.add_space(6.0);
+                    }
+                    for t in &list {
+                        self.token_card(ui, cx, t);
+                        ui.add_space(6.0);
+                    }
                     if let Some(out) = &self.last_test_output {
                         ui.collapsing(tr("Saída do último teste"), |ui| ui::mono(ui, out));
                     }
@@ -557,5 +671,90 @@ impl EnginePage {
                 }
             }
         }
+    }
+}
+
+/// Limite de uso não é token morto: amarelo. Revogado/expirado/inválido: vermelho.
+fn error_tone(raw: &str) -> Tone {
+    let l = raw.to_ascii_lowercase();
+    if l.contains("limit") || l.contains("quota") || l.contains("rate") {
+        Tone::Warning
+    } else {
+        Tone::Danger
+    }
+}
+
+/// Traduz a mensagem crua do `claude` para algo curto e acionável; devolve
+/// também o tom. O texto original fica no tooltip.
+fn friendly_error(raw: &str) -> (String, Tone) {
+    let l = raw.to_ascii_lowercase();
+    if l.contains("revoked") {
+        return (
+            tr("Token revogado: gere outro com `claude setup-token` e cadastre de novo.").into(),
+            Tone::Danger,
+        );
+    }
+    if l.contains("expired") {
+        return (
+            tr("Token expirado: gere outro com `claude setup-token`.").into(),
+            Tone::Danger,
+        );
+    }
+    if l.contains("hit your") && l.contains("limit") {
+        // "You've hit your 5-hour limit · resets 7:40pm (America/Sao_Paulo)"
+        let when = l
+            .split("resets")
+            .nth(1)
+            .map(|w| w.trim().trim_end_matches('.').to_string())
+            .filter(|w| !w.is_empty());
+        return match when {
+            Some(w) => (
+                trf("Limite de uso atingido · libera {}", &[&w]),
+                Tone::Warning,
+            ),
+            None => (tr("Limite de uso atingido.").into(), Tone::Warning),
+        };
+    }
+    if l.contains("rate limit") || l.contains("quota") {
+        return (tr("Limite de uso atingido.").into(), Tone::Warning);
+    }
+    if l.contains("not logged in")
+        || l.contains("unauthor")
+        || l.contains("authentication")
+        || l.contains("401")
+    {
+        return (
+            trf(
+                "Autenticação recusada: {}",
+                &[&will_core::tools::truncate(raw, 120)],
+            ),
+            Tone::Danger,
+        );
+    }
+    if l.contains("tempo esgotado") || l.contains("timed out") {
+        return (
+            tr("Tempo esgotado: o `claude` não respondeu em 90 s.").into(),
+            Tone::Warning,
+        );
+    }
+    (will_core::tools::truncate(raw, 160), Tone::Danger)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn friendly_errors() {
+        let (m, t) =
+            friendly_error("Failed to authenticate: OAuth token revoked. Please log in again");
+        assert!(m.contains("revogado"));
+        assert!(!matches!(t, Tone::Warning));
+        let (m, t) =
+            friendly_error("You've hit your 5-hour limit · resets 7:40pm (America/Sao_Paulo)");
+        assert!(m.contains("7:40pm"));
+        assert!(matches!(t, Tone::Warning));
+        assert!(matches!(error_tone("rate limit"), Tone::Warning));
+        assert!(matches!(error_tone("invalid token"), Tone::Danger));
     }
 }
