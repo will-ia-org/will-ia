@@ -472,6 +472,17 @@ impl GoogleClient {
             .await
     }
 
+    pub async fn put(
+        &self,
+        account: &GoogleAccount,
+        path: &str,
+        query: &[(&str, String)],
+        body: &serde_json::Value,
+    ) -> Result<serde_json::Value> {
+        self.request(account, reqwest::Method::PUT, path, query, Some(body))
+            .await
+    }
+
     pub async fn delete(
         &self,
         account: &GoogleAccount,

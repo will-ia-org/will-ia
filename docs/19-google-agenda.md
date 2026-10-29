@@ -31,10 +31,13 @@ Prefixo `calendar_`. `account` é opcional quando há uma só conta.
 | `calendar_create_event` | `calendar_id?` (padrão), `summary`, `start`, `end` **ou** `date` (dia inteiro), `description?`, `location?`, `attendees?[]`, `reminders?`, `recurrence?`, `conference?: bool` | evento criado (id, link) | **confirmar** |
 | `calendar_update_event` | `calendar_id`, `event_id`, campos parciais | evento atualizado | **confirmar** |
 | `calendar_delete_event` | `calendar_id`, `event_id` | ok | **confirmar** (toggle off por padrão) |
+| `calendar_respond` | `event_id`, `calendar_id?` (padrão), `response: accepted\|declined\|tentative`, `comment?`, `notify?` (padrão = `send_updates`) | evento normalizado + `my_response`, `notified_organizer` | **confirmar** (requer toggle de criar/editar) |
 
 Normalização: datas sempre com fuso explícito; `start`/`end` aceitam `YYYY-MM-DDTHH:MM` e assumem o fuso padrão; conflitos de horário são detectados antes de criar e retornados como aviso (`conflicts: [...]`) sem bloquear.
 
 Convites a participantes (`attendees`) só são enviados se `send_updates` estiver ligado nas configurações; caso contrário, cria sem notificar.
+
+`calendar_respond` responde a um convite **recebido**: localiza a conta entre os `attendees` (`self: true` ou e-mail igual), troca só o `responseStatus`/`comment` dela e faz `PATCH` da lista inteira com `sendUpdates=all|none`. Se a conta é a organizadora (não convidada) ou não está na lista, devolve erro orientando `calendar_update_event`/`calendar_delete_event`.
 
 ## Implementação
 

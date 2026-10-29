@@ -115,7 +115,7 @@ Convenção de identificação: `RF-<módulo>-<nº>`. Prioridade: **M** (Must, M
 | RF-MCP-06 | Cada ferramenta pode ser habilitada/desabilitada individualmente nas configurações; ferramentas desabilitadas não aparecem na listagem `tools/list`. | M |
 | RF-MCP-07 | Todas as chamadas de ferramenta são registradas (thread, ferramenta, argumentos resumidos, resultado, timestamp) e visíveis na seção Logs. | M |
 | RF-MCP-08 | Cada ferramenta tem política `auto` / `confirmar` / `desligada`. Em `confirmar`, a chamada aguarda aprovação do dono (UI, notificação e, se ativo, Telegram com botões) com timeout configurável (padrão 5 min → negada). Decisões são registradas. | M |
-| RF-MCP-09 | Ferramentas de efeito externo (`*_send*`, `calendar_create/update/delete_event`, `gmail_modify`) nascem com política `confirmar`. | M |
+| RF-MCP-09 | Ferramentas de efeito externo (`*_send*`, `calendar_create/update/delete_event`, `calendar_respond`, `gmail_modify`, `gmail_send_draft`, `gmail_delete_draft`, `gmail_forward`, `gmail_reply_all`) nascem com política `confirmar`. | M |
 | RF-MCPX-01 | Seção **MCPs externos**: adicionar/editar/remover/habilitar servidores dos tipos `stdio`, `http` e `sse`, com nome único, comando/args/env ou url/headers. | M |
 | RF-MCPX-02 | Valores de `env`/`headers` podem ser marcados como segredo: ficam no keyring e aparecem no arquivo como `${WILL_MCP_<NOME>_<CHAVE>}`; o serviço injeta as variáveis no ambiente de cada processo `claude`. | M |
 | RF-MCPX-03 | Botão **Testar** executa `initialize` + `tools/list` contra o servidor e exibe ferramentas e erros. | S |
@@ -154,6 +154,7 @@ Convenção de identificação: `RF-<módulo>-<nº>`. Prioridade: **M** (Must, M
 | RF-CAL-02 | Ferramentas: listar agendas habilitadas, listar eventos por janela/consulta, obter evento, consultar livre/ocupado. | S |
 | RF-CAL-03 | Ferramentas de escrita (criar, atualizar, excluir), cada uma com toggle; política `confirmar`; excluir desligado por padrão. | S |
 | RF-CAL-04 | Datas sempre com fuso explícito; criação detecta e informa conflitos sem bloquear. | S |
+| RF-CAL-05 | Responder a convite recebido (`calendar_respond`: aceitar/recusar/talvez + comentário, notificando ou não o organizador) alterando só o próprio participante; política `confirmar`, requer o toggle de criar/editar. | S |
 
 ## RF-MAIL — Gmail
 
@@ -164,6 +165,8 @@ Convenção de identificação: `RF-<módulo>-<nº>`. Prioridade: **M** (Must, M
 | RF-MAIL-03 | Envio habilitado (`gmail_send`, com resposta em thread e anexos) e rascunhos; envio com política `confirmar` e rate limit. | S |
 | RF-MAIL-04 | Modificação (marcar lida, arquivar, rotular, lixeira) opcional, desligada por padrão, exige escopo adicional. | C |
 | RF-MAIL-05 | Sem IMAP: apenas contas Gmail/Workspace. | — |
+| RF-MAIL-06 | Rascunhos completos: listar, atualizar (substitui), apagar e enviar rascunho existente; o envio obedece ao toggle de envio, à política de destinatários conhecidos e ao rate limit. | S |
+| RF-MAIL-07 | Encaminhar (`gmail_forward`: cabeçalho "Mensagem encaminhada", corpo original, anexos até o limite configurado, comentário opcional) e responder a todos (`gmail_reply_all`: Para = Reply-To/From, Cc = Para+Cc originais menos a conta, mesma thread), ambos com política `confirmar`. | S |
 
 ## RF-SCH — Agendamentos (scheduler)
 

@@ -35,12 +35,21 @@ Prefixo `gmail_`. `account` opcional quando há uma só.
 | `gmail_send` | `to[]`, `subject`, `body_text`, `body_html?`, `cc?[]`, `bcc?[]`, `reply_to_message_id?` (responde na thread com `In-Reply-To`/`References`), `attachments?[]` (paths na KB) | `message_id`, `thread_id` | **confirmar** |
 | `gmail_create_draft` | mesmos campos de `gmail_send` | `draft_id` | auto |
 | `gmail_modify` | `ids[]`, `add_labels?[]`, `remove_labels?[]`, atalhos `mark_read`, `archive`, `trash` | ok | **confirmar** (requer toggle de modificar) |
+| `gmail_list_drafts` | `max_results?` (≤50), `page_token?` | rascunhos resumidos (`draft_id`, assunto, para/cc/bcc, data, snippet); `next_page_token` | auto |
+| `gmail_send_draft` | `draft_id` | `message_id`, `thread_id`, destinatários (lidos do próprio rascunho) | **confirmar** (requer toggle de envio; mesmas regras de destinatário/rate limit do `gmail_send`) |
+| `gmail_update_draft` | `draft_id` + mesmos campos de `gmail_create_draft` (substitui o conteúdo inteiro) | `draft_id`, `message_id` | auto |
+| `gmail_delete_draft` | `draft_id` | ok | **confirmar** |
+| `gmail_forward` | `message_id`, `to[]`, `cc?[]`, `bcc?[]`, `note?` (comentário acima), `include_attachments?` (padrão true; respeita `max_attachment_mb` no total) | `message_id`, `thread_id`, `attachments_included`, `attachments_skipped` | **confirmar** (toggle de envio) |
+| `gmail_reply_all` | `message_id`, `body_text`, `body_html?`, `extra_to?[]`, `extra_cc?[]`, `attachments?[]` | `message_id`, `thread_id`, `to`, `cc` calculados | **confirmar** (toggle de envio) |
 
 Regras:
 - Corpo: preferir `text/plain`; na ausência, converter `text/html` com `html2text`, remover assinaturas/citações longas opcionalmente (`strip_quotes`).
 - `gmail_send` monta MIME (`lettre::message` ou `mail-builder`), codifica base64url e chama `users.messages.send`. Respostas preservam assunto com `Re:` e a thread.
 - Destinatários: opção "só para contatos já presentes em e-mails anteriores" (off por padrão) para reduzir risco de envio errado induzido por prompt injection.
-- Rate limit de envio (padrão 30/hora).
+- Rate limit de envio (padrão 30/hora) — vale para `gmail_send`, `gmail_send_draft`, `gmail_forward` e `gmail_reply_all`.
+- `gmail_forward`: assunto `Fwd: …` (não duplica `Fwd:`/`Fw:`/`Enc:`), bloco "Mensagem encaminhada" (De/Data/Assunto/Para/Cc) + corpo original (texto e, se houver, HTML citado) + anexos não inline baixados via `attachments.get`; nova mensagem, fora da thread original.
+- `gmail_reply_all`: Para = `Reply-To` ou `From` (se o remetente é a própria conta, Para = os Para originais); Cc = Para + Cc originais menos a conta e menos quem já está em Para; reutiliza o caminho de resposta do `gmail_send` (`In-Reply-To`/`References`, `Re:`, mesma thread). Erro se não sobra ninguém.
+- Rascunhos: `drafts.update` substitui a mensagem inteira (não é patch); `gmail_send_draft` lê os destinatários do rascunho para aplicar a política "só contatos já vistos" e recusa rascunho sem destinatário.
 - Conteúdo de e-mail é **dado não confiável**: o `CLAUDE.md` da KB instrui o agente a não seguir instruções embutidas em e-mails, e a política `confirmar` em `gmail_send` protege contra envio induzido.
 
 ## Implementação

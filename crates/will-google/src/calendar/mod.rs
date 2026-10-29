@@ -28,10 +28,11 @@ enum Kind {
     CreateEvent,
     UpdateEvent,
     DeleteEvent,
+    Respond,
 }
 
 impl Kind {
-    const ALL: [Kind; 7] = [
+    const ALL: [Kind; 8] = [
         Kind::ListCalendars,
         Kind::ListEvents,
         Kind::GetEvent,
@@ -39,6 +40,7 @@ impl Kind {
         Kind::CreateEvent,
         Kind::UpdateEvent,
         Kind::DeleteEvent,
+        Kind::Respond,
     ];
     fn name(self) -> &'static str {
         match self {
@@ -49,6 +51,7 @@ impl Kind {
             Kind::CreateEvent => "calendar_create_event",
             Kind::UpdateEvent => "calendar_update_event",
             Kind::DeleteEvent => "calendar_delete_event",
+            Kind::Respond => "calendar_respond",
         }
     }
 }
@@ -170,6 +173,17 @@ impl WillTool for CalendarTool {
                 }, "required": ["calendar_id", "event_id"]}),
                 ToolPolicy::Confirm,
             ),
+            Kind::Respond => (
+                "Responde a um convite recebido: aceitar, recusar ou talvez (como participante). Só use com pedido explícito do usuário.",
+                json!({"type": "object", "properties": {
+                    "calendar_id": {"type": "string", "description": "Agenda onde o convite está (padrão: agenda padrão)"},
+                    "event_id": {"type": "string"},
+                    "response": {"type": "string", "enum": ["accepted", "declined", "tentative"], "description": "aceitar | recusar | talvez"},
+                    "comment": {"type": "string", "description": "Mensagem ao organizador (opcional)"},
+                    "notify": {"type": "boolean", "description": "Avisar o organizador (padrão: configuração 'enviar atualizações')"}
+                }, "required": ["event_id", "response"]}),
+                ToolPolicy::Confirm,
+            ),
         };
         ToolSpec {
             name: self.kind.name().to_string(),
@@ -242,6 +256,17 @@ impl WillTool for CalendarTool {
                 arg_opt_str(args, "event_id").unwrap_or("?"),
                 cal_name(arg_opt_str(args, "calendar_id"))
             ),
+            Kind::Respond => format!(
+                "{} o convite {} em {}",
+                match arg_opt_str(args, "response") {
+                    Some("accepted") => "Aceitar",
+                    Some("declined") => "Recusar",
+                    Some("tentative") => "Responder 'talvez' a",
+                    _ => "Responder a",
+                },
+                arg_opt_str(args, "event_id").unwrap_or("?"),
+                cal_name(arg_opt_str(args, "calendar_id"))
+            ),
             _ => format!("{} {}", self.kind.name(), truncate(&args.to_string(), 200)),
         }
     }
@@ -259,6 +284,7 @@ impl WillTool for CalendarTool {
             Kind::CreateEvent => create_event(m, &args).await,
             Kind::UpdateEvent => update_event(m, &args).await,
             Kind::DeleteEvent => delete_event(m, &args).await,
+            Kind::Respond => respond(m, &args).await,
         }
     }
 }
@@ -876,9 +902,137 @@ async fn delete_event(m: &GoogleModule, args: &Value) -> Result<ToolOutput, Tool
     ))
 }
 
+/// Aplica `response` (e `comment`) ao participante `me` na lista de `attendees`
+/// do evento; `Ok(None)` se eu não estou entre os convidados.
+fn respond_attendees(
+    attendees: &[Value],
+    me: &str,
+    response: &str,
+    comment: Option<&str>,
+) -> Option<Vec<Value>> {
+    let me_l = me.trim().to_ascii_lowercase();
+    let mut found = false;
+    let out: Vec<Value> = attendees
+        .iter()
+        .map(|a| {
+            let is_me = a.get("self").and_then(|v| v.as_bool()).unwrap_or(false)
+                || a.get("email")
+                    .and_then(|e| e.as_str())
+                    .is_some_and(|e| e.trim().to_ascii_lowercase() == me_l);
+            if !is_me {
+                return a.clone();
+            }
+            found = true;
+            let mut b = a.clone();
+            b["responseStatus"] = json!(response);
+            match comment.map(str::trim).filter(|c| !c.is_empty()) {
+                Some(c) => b["comment"] = json!(c),
+                None => {
+                    if let Some(o) = b.as_object_mut() {
+                        o.remove("comment");
+                    }
+                }
+            }
+            b
+        })
+        .collect();
+    found.then_some(out)
+}
+
+async fn respond(m: &GoogleModule, args: &Value) -> Result<ToolOutput, ToolError> {
+    let cfg = m.config().calendar;
+    if !cfg.allow_write {
+        return Err(ToolError::Unavailable(
+            "edição de eventos desligada (Configurações → Agenda → Permitir criar/editar)".into(),
+        ));
+    }
+    let response = arg_str(args, "response")?;
+    if !["accepted", "declined", "tentative"].contains(&response) {
+        return Err(ToolError::InvalidArgs(
+            "response deve ser accepted, declined ou tentative".into(),
+        ));
+    }
+    let event_id = arg_str(args, "event_id")?;
+    let cal = match arg_opt_str(args, "calendar_id") {
+        Some(id) => find_enabled(m, id).await?,
+        None => default_calendar(m).await?,
+    };
+    let acc = m.account_ready(&cal.account_id).await?;
+    let path = format!(
+        "calendar/v3/calendars/{}/events/{}",
+        enc(&cal.calendar_id),
+        enc(event_id)
+    );
+    let ev = m.client.get(&acc, &path, &[]).await?;
+    let attendees = ev
+        .get("attendees")
+        .and_then(|a| a.as_array())
+        .cloned()
+        .unwrap_or_default();
+    let organizer_is_me = ev
+        .get("organizer")
+        .and_then(|o| o.get("self"))
+        .and_then(|v| v.as_bool())
+        .unwrap_or(false);
+    let Some(updated) = respond_attendees(
+        &attendees,
+        &acc.email,
+        response,
+        arg_opt_str(args, "comment"),
+    ) else {
+        return Err(ToolError::Forbidden(if organizer_is_me {
+            "você é o organizador deste evento, não um convidado; use calendar_update_event/calendar_delete_event".into()
+        } else {
+            format!(
+                "{} não está entre os convidados do evento {}",
+                acc.email, event_id
+            )
+        }));
+    };
+    let notify = arg_opt_bool(args, "notify").unwrap_or(cfg.send_updates);
+    let q = vec![(
+        "sendUpdates",
+        if notify {
+            "all".to_string()
+        } else {
+            "none".to_string()
+        },
+    )];
+    let patched = m
+        .client
+        .patch(&acc, &path, &q, &json!({"attendees": updated}))
+        .await?;
+    let (mut out, _) = normalize_event(&patched, &cal);
+    out["my_response"] = json!(response);
+    out["notified_organizer"] = json!(notify);
+    Ok(ToolOutput::json(&out))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn respond_attendees_marks_only_me() {
+        let att = vec![
+            json!({"email": "org@x.com", "organizer": true, "responseStatus": "accepted"}),
+            json!({"email": "ME@x.com", "responseStatus": "needsAction", "comment": "velho"}),
+        ];
+        let out = respond_attendees(&att, "me@x.com", "declined", Some("não posso")).unwrap();
+        assert_eq!(out[0]["responseStatus"], "accepted");
+        assert_eq!(out[1]["responseStatus"], "declined");
+        assert_eq!(out[1]["comment"], "não posso");
+        let out = respond_attendees(&att, "me@x.com", "accepted", None).unwrap();
+        assert!(out[1].get("comment").is_none());
+        assert!(respond_attendees(&att, "outro@x.com", "accepted", None).is_none());
+        let by_self =
+            vec![json!({"email": "x@y.com", "self": true, "responseStatus": "needsAction"})];
+        assert_eq!(
+            respond_attendees(&by_self, "me@x.com", "tentative", None).unwrap()[0]
+                ["responseStatus"],
+            "tentative"
+        );
+    }
 
     fn cal() -> GoogleCalendar {
         GoogleCalendar {

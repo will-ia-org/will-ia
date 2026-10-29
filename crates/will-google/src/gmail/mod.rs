@@ -25,6 +25,7 @@ use will_storage::google::GoogleAccount;
 const FAMILY: &str = "gmail";
 const BASE: &str = "gmail/v1/users/me";
 const MAX_SEARCH: u64 = 100;
+const MAX_DRAFTS: u64 = 50;
 const DETAIL_CONCURRENCY: usize = 8;
 const META_HEADERS: [&str; 7] = [
     "From",
@@ -94,10 +95,16 @@ enum Kind {
     Send,
     CreateDraft,
     Modify,
+    ListDrafts,
+    SendDraft,
+    UpdateDraft,
+    DeleteDraft,
+    Forward,
+    ReplyAll,
 }
 
 impl Kind {
-    const ALL: [Kind; 8] = [
+    const ALL: [Kind; 14] = [
         Kind::ListLabels,
         Kind::Search,
         Kind::GetMessage,
@@ -106,6 +113,12 @@ impl Kind {
         Kind::Send,
         Kind::CreateDraft,
         Kind::Modify,
+        Kind::ListDrafts,
+        Kind::SendDraft,
+        Kind::UpdateDraft,
+        Kind::DeleteDraft,
+        Kind::Forward,
+        Kind::ReplyAll,
     ];
     fn name(self) -> &'static str {
         match self {
@@ -117,6 +130,12 @@ impl Kind {
             Kind::Send => "gmail_send",
             Kind::CreateDraft => "gmail_create_draft",
             Kind::Modify => "gmail_modify",
+            Kind::ListDrafts => "gmail_list_drafts",
+            Kind::SendDraft => "gmail_send_draft",
+            Kind::UpdateDraft => "gmail_update_draft",
+            Kind::DeleteDraft => "gmail_delete_draft",
+            Kind::Forward => "gmail_forward",
+            Kind::ReplyAll => "gmail_reply_all",
         }
     }
 }
@@ -312,6 +331,64 @@ impl WillTool for GmailTool {
                 }, "required": ["ids"]}),
                 ToolPolicy::Confirm,
             ),
+            Kind::ListDrafts => (
+                "Lista os rascunhos (id do rascunho, assunto, destinatários, data, snippet).",
+                json!({"type": "object", "properties": {
+                    "account": account_prop(),
+                    "max_results": {"type": "integer", "minimum": 1, "maximum": MAX_DRAFTS, "default": 20},
+                    "page_token": {"type": "string"}
+                }}),
+                ToolPolicy::Auto,
+            ),
+            Kind::SendDraft => (
+                "Envia um rascunho existente (já revisado). Só use com pedido explícito do usuário.",
+                json!({"type": "object", "properties": {
+                    "account": account_prop(), "draft_id": {"type": "string", "description": "Id do rascunho (gmail_list_drafts/gmail_create_draft)"}
+                }, "required": ["draft_id"]}),
+                ToolPolicy::Confirm,
+            ),
+            Kind::UpdateDraft => {
+                let mut props = compose_props();
+                props["draft_id"] = json!({"type": "string", "description": "Id do rascunho a substituir"});
+                (
+                    "Substitui o conteúdo de um rascunho (destinatários, assunto, corpo, anexos). Não envia.",
+                    json!({"type": "object", "properties": props, "required": ["draft_id", "subject"]}),
+                    ToolPolicy::Auto,
+                )
+            }
+            Kind::DeleteDraft => (
+                "Apaga um rascunho (definitivo).",
+                json!({"type": "object", "properties": {
+                    "account": account_prop(), "draft_id": {"type": "string"}
+                }, "required": ["draft_id"]}),
+                ToolPolicy::Confirm,
+            ),
+            Kind::Forward => (
+                "Encaminha um e-mail (cabeçalho 'Mensagem encaminhada' + corpo original + anexos) para novos destinatários, com um comentário opcional antes. Só use com pedido explícito do usuário.",
+                json!({"type": "object", "properties": {
+                    "account": account_prop(),
+                    "message_id": {"type": "string", "description": "Id da mensagem a encaminhar"},
+                    "to": {"type": "array", "items": {"type": "string"}, "description": "Destinatários"},
+                    "cc": {"type": "array", "items": {"type": "string"}},
+                    "bcc": {"type": "array", "items": {"type": "string"}},
+                    "note": {"type": "string", "description": "Comentário acima da mensagem encaminhada (opcional)"},
+                    "include_attachments": {"type": "boolean", "default": true}
+                }, "required": ["message_id", "to"]}),
+                ToolPolicy::Confirm,
+            ),
+            Kind::ReplyAll => (
+                "Responde a todos: remetente (ou Reply-To) + todos os Para/Cc originais, menos você; mantém a thread e o 'Re:'. Só use com pedido explícito do usuário.",
+                json!({"type": "object", "properties": {
+                    "account": account_prop(),
+                    "message_id": {"type": "string", "description": "Id da mensagem a responder"},
+                    "body_text": {"type": "string", "description": "Corpo em texto puro"},
+                    "body_html": {"type": "string", "description": "Corpo HTML (opcional, além do texto)"},
+                    "extra_to": {"type": "array", "items": {"type": "string"}, "description": "Destinatários a acrescentar em Para"},
+                    "extra_cc": {"type": "array", "items": {"type": "string"}, "description": "Destinatários a acrescentar em Cc"},
+                    "attachments": {"type": "array", "items": {"type": "string"}, "description": "Caminhos de arquivos dentro da base de conhecimento"}
+                }, "required": ["message_id", "body_text"]}),
+                ToolPolicy::Confirm,
+            ),
         };
         ToolSpec {
             name: self.kind.name().to_string(),
@@ -373,6 +450,24 @@ impl WillTool for GmailTool {
                     }
                 )
             }
+            Kind::SendDraft => format!(
+                "Enviar o rascunho {}",
+                arg_opt_str(args, "draft_id").unwrap_or("?")
+            ),
+            Kind::DeleteDraft => format!(
+                "Apagar o rascunho {}",
+                arg_opt_str(args, "draft_id").unwrap_or("?")
+            ),
+            Kind::Forward => format!(
+                "Encaminhar e-mail {} para {}",
+                arg_opt_str(args, "message_id").unwrap_or("?"),
+                truncate(&str_list(args, "to").unwrap_or_default().join(", "), 120)
+            ),
+            Kind::ReplyAll => format!(
+                "Responder a todos no e-mail {}: {}",
+                arg_opt_str(args, "message_id").unwrap_or("?"),
+                truncate(arg_opt_str(args, "body_text").unwrap_or(""), 120)
+            ),
             _ => format!("{} {}", self.kind.name(), truncate(&args.to_string(), 200)),
         }
     }
@@ -395,6 +490,12 @@ impl WillTool for GmailTool {
             Kind::Send => send(m, &acc, &args).await,
             Kind::CreateDraft => create_draft(m, &acc, &args).await,
             Kind::Modify => modify(m, &acc, &args).await,
+            Kind::ListDrafts => list_drafts(m, &acc, &args).await,
+            Kind::SendDraft => send_draft(m, &acc, &args).await,
+            Kind::UpdateDraft => update_draft(m, &acc, &args).await,
+            Kind::DeleteDraft => delete_draft(m, &acc, &args).await,
+            Kind::Forward => forward(m, &acc, &args).await,
+            Kind::ReplyAll => reply_all(m, &acc, &args).await,
         }
     }
 }
@@ -1000,23 +1101,17 @@ async fn send(
         ));
     }
     let p = prepare(m, acc, args, true).await?;
-    if cfg.only_known_recipients {
-        let unknown: Vec<&String> = p
-            .recipients
-            .iter()
-            .filter(|r| !m.gmail_state.is_known(r))
-            .collect();
-        if !unknown.is_empty() {
-            return Err(ToolError::Forbidden(format!(
-                "destinatários desconhecidos (opção 'só contatos já vistos' ativa): {}",
-                unknown
-                    .iter()
-                    .map(|s| s.as_str())
-                    .collect::<Vec<_>>()
-                    .join(", ")
-            )));
-        }
-    }
+    deliver(m, acc, p).await
+}
+
+/// Políticas de envio (destinatários conhecidos, rate limit) e o `messages.send`.
+async fn deliver(
+    m: &GoogleModule,
+    acc: &GoogleAccount,
+    p: Prepared,
+) -> Result<ToolOutput, ToolError> {
+    let cfg = m.config().gmail;
+    check_recipients(m, &p.recipients)?;
     m.gmail_state
         .try_acquire_send(cfg.send_rate_limit_per_hour)?;
     let mut body = json!({"raw": p.raw});
@@ -1036,6 +1131,494 @@ async fn send(
         "to": p.recipients,
         "account": acc.email,
     })))
+}
+
+/// Opção "só contatos já vistos".
+fn check_recipients(m: &GoogleModule, recipients: &[String]) -> Result<(), ToolError> {
+    if !m.config().gmail.only_known_recipients {
+        return Ok(());
+    }
+    let unknown: Vec<&String> = recipients
+        .iter()
+        .filter(|r| !m.gmail_state.is_known(r))
+        .collect();
+    if unknown.is_empty() {
+        return Ok(());
+    }
+    Err(ToolError::Forbidden(format!(
+        "destinatários desconhecidos (opção 'só contatos já vistos' ativa): {}",
+        unknown
+            .iter()
+            .map(|s| s.as_str())
+            .collect::<Vec<_>>()
+            .join(", ")
+    )))
+}
+
+// ----- rascunhos, encaminhar, responder a todos (2026-10-29) -----
+
+fn draft_meta_query() -> Vec<(&'static str, String)> {
+    let mut q = vec![("format", "metadata".to_string())];
+    for h in ["To", "Cc", "Bcc", "Subject", "Date", "From"] {
+        q.push(("metadataHeaders", h.to_string()));
+    }
+    q
+}
+
+fn draft_json(draft: &Value) -> Value {
+    let msg = draft.get("message").cloned().unwrap_or(Value::Null);
+    let payload = msg.get("payload").cloned().unwrap_or(Value::Null);
+    let mut out = summarize(&msg);
+    out["draft_id"] = draft.get("id").cloned().unwrap_or(Value::Null);
+    out["bcc"] = json!(header(&payload, "Bcc"));
+    out
+}
+
+async fn list_drafts(
+    m: &GoogleModule,
+    acc: &GoogleAccount,
+    args: &Value,
+) -> Result<ToolOutput, ToolError> {
+    let max = arg_opt_u64(args, "max_results")
+        .unwrap_or(20)
+        .clamp(1, MAX_DRAFTS);
+    let mut q = vec![("maxResults", max.to_string())];
+    if let Some(t) = arg_opt_str(args, "page_token") {
+        q.push(("pageToken", t.to_string()));
+    }
+    let list = m.client.get(acc, &format!("{BASE}/drafts"), &q).await?;
+    let ids: Vec<String> = list
+        .get("drafts")
+        .and_then(|d| d.as_array())
+        .map(|a| {
+            a.iter()
+                .filter_map(|d| d.get("id").and_then(|i| i.as_str()).map(str::to_string))
+                .collect()
+        })
+        .unwrap_or_default();
+    let meta = draft_meta_query();
+    let details: Vec<Result<Value, GoogleError>> = futures::stream::iter(ids.iter().cloned())
+        .map(|id| {
+            let meta = meta.clone();
+            async move {
+                m.client
+                    .get(
+                        acc,
+                        &format!("{BASE}/drafts/{}", crate::calendar::enc(&id)),
+                        &meta,
+                    )
+                    .await
+            }
+        })
+        .buffered(DETAIL_CONCURRENCY)
+        .collect()
+        .await;
+    let mut items = Vec::with_capacity(ids.len());
+    let mut warnings = Vec::new();
+    for (id, r) in ids.iter().zip(details) {
+        match r {
+            Ok(d) => items.push(draft_json(&d)),
+            Err(e) => warnings.push(format!("{id}: {}", ToolError::from(e))),
+        }
+    }
+    Ok(ToolOutput::json(&json!({
+        "count": items.len(),
+        "drafts": items,
+        "next_page_token": list.get("nextPageToken"),
+        "warnings": warnings,
+        "account": acc.email,
+    })))
+}
+
+async fn send_draft(
+    m: &GoogleModule,
+    acc: &GoogleAccount,
+    args: &Value,
+) -> Result<ToolOutput, ToolError> {
+    let cfg = m.config().gmail;
+    if !cfg.allow_send {
+        return Err(ToolError::Unavailable(
+            "envio de e-mail desligado (Configurações → Gmail → Permitir envio)".into(),
+        ));
+    }
+    let draft_id = arg_str(args, "draft_id")?;
+    let draft = m
+        .client
+        .get(
+            acc,
+            &format!("{BASE}/drafts/{}", crate::calendar::enc(draft_id)),
+            &draft_meta_query(),
+        )
+        .await?;
+    let payload = draft
+        .get("message")
+        .and_then(|x| x.get("payload"))
+        .cloned()
+        .unwrap_or(Value::Null);
+    let recipients: Vec<String> = ["To", "Cc", "Bcc"]
+        .iter()
+        .filter_map(|h| header(&payload, h))
+        .flat_map(|v| parse_addresses(&v))
+        .collect();
+    if recipients.is_empty() {
+        return Err(ToolError::InvalidArgs(
+            "o rascunho não tem destinatário; use gmail_update_draft antes".into(),
+        ));
+    }
+    check_recipients(m, &recipients)?;
+    m.gmail_state
+        .try_acquire_send(cfg.send_rate_limit_per_hour)?;
+    let sent = m
+        .client
+        .post(
+            acc,
+            &format!("{BASE}/drafts/send"),
+            &[],
+            &json!({"id": draft_id}),
+        )
+        .await?;
+    m.gmail_state.remember(recipients.clone());
+    Ok(ToolOutput::json(&json!({
+        "message_id": sent.get("id"),
+        "thread_id": sent.get("threadId"),
+        "labels": sent.get("labelIds"),
+        "subject": header(&payload, "Subject"),
+        "to": recipients,
+        "draft_id": draft_id,
+        "account": acc.email,
+    })))
+}
+
+async fn update_draft(
+    m: &GoogleModule,
+    acc: &GoogleAccount,
+    args: &Value,
+) -> Result<ToolOutput, ToolError> {
+    let draft_id = arg_str(args, "draft_id")?;
+    let p = prepare(m, acc, args, false).await?;
+    let mut message = json!({"raw": p.raw});
+    if let Some(t) = &p.thread_id {
+        message["threadId"] = json!(t);
+    }
+    let draft = m
+        .client
+        .put(
+            acc,
+            &format!("{BASE}/drafts/{}", crate::calendar::enc(draft_id)),
+            &[],
+            &json!({"id": draft_id, "message": message}),
+        )
+        .await?;
+    Ok(ToolOutput::json(&json!({
+        "draft_id": draft.get("id").cloned().unwrap_or_else(|| json!(draft_id)),
+        "message_id": draft.get("message").and_then(|x| x.get("id")),
+        "thread_id": draft.get("message").and_then(|x| x.get("threadId")),
+        "subject": p.subject,
+        "to": p.recipients,
+        "account": acc.email,
+    })))
+}
+
+async fn delete_draft(
+    m: &GoogleModule,
+    acc: &GoogleAccount,
+    args: &Value,
+) -> Result<ToolOutput, ToolError> {
+    let draft_id = arg_str(args, "draft_id")?;
+    m.client
+        .delete(
+            acc,
+            &format!("{BASE}/drafts/{}", crate::calendar::enc(draft_id)),
+            &[],
+        )
+        .await?;
+    Ok(ToolOutput::json(
+        &json!({"ok": true, "draft_id": draft_id, "account": acc.email}),
+    ))
+}
+
+/// `Fwd: assunto` (sem duplicar quando já é encaminhado).
+fn forward_subject(original: &str) -> String {
+    let t = original.trim();
+    let l = t.to_ascii_lowercase();
+    if l.starts_with("fwd:") || l.starts_with("fw:") || l.starts_with("enc:") {
+        t.to_string()
+    } else {
+        format!("Fwd: {t}")
+    }
+}
+
+/// Cabeçalho da mensagem encaminhada, como o Gmail monta.
+fn forward_intro(from: &str, date: &str, subject: &str, to: &str, cc: Option<&str>) -> String {
+    let mut s = String::from("---------- Mensagem encaminhada ----------\n");
+    s.push_str(&format!(
+        "De: {from}\nData: {date}\nAssunto: {subject}\nPara: {to}\n"
+    ));
+    if let Some(c) = cc.filter(|c| !c.trim().is_empty()) {
+        s.push_str(&format!("Cc: {c}\n"));
+    }
+    s
+}
+
+fn html_escape(s: &str) -> String {
+    s.replace('&', "&amp;")
+        .replace('<', "&lt;")
+        .replace('>', "&gt;")
+        .replace('\n', "<br>")
+}
+
+async fn forward(
+    m: &GoogleModule,
+    acc: &GoogleAccount,
+    args: &Value,
+) -> Result<ToolOutput, ToolError> {
+    let cfg = m.config().gmail;
+    if !cfg.allow_send {
+        return Err(ToolError::Unavailable(
+            "envio de e-mail desligado (Configurações → Gmail → Permitir envio)".into(),
+        ));
+    }
+    let message_id = arg_str(args, "message_id")?;
+    let to = str_list(args, "to").unwrap_or_default();
+    if to.is_empty() {
+        return Err(ToolError::InvalidArgs(
+            "campo obrigatório ausente: to".into(),
+        ));
+    }
+    let cc = str_list(args, "cc").unwrap_or_default();
+    let bcc = str_list(args, "bcc").unwrap_or_default();
+    for a in to.iter().chain(cc.iter()).chain(bcc.iter()) {
+        if parse_addresses(a).is_empty() {
+            return Err(ToolError::InvalidArgs(format!("endereço inválido: {a}")));
+        }
+    }
+    let note = arg_opt_str(args, "note").unwrap_or("").trim().to_string();
+    let include_attachments = arg_opt_bool(args, "include_attachments").unwrap_or(true);
+
+    let orig = fetch_message(m, acc, message_id, true).await?;
+    let payload = orig.get("payload").cloned().unwrap_or(Value::Null);
+    let h = |n: &str| header(&payload, n).unwrap_or_default();
+    let body = extract_body(&payload);
+    let subject = forward_subject(&h("Subject"));
+    let intro = forward_intro(
+        &h("From"),
+        &h("Date"),
+        &h("Subject"),
+        &h("To"),
+        header(&payload, "Cc").as_deref(),
+    );
+    let orig_text = body
+        .text
+        .clone()
+        .or_else(|| body.html.as_deref().map(html_to_text))
+        .unwrap_or_default();
+    let mut text = String::new();
+    if !note.is_empty() {
+        text.push_str(&note);
+        text.push_str("\n\n");
+    }
+    text.push_str(&intro);
+    text.push('\n');
+    text.push_str(&orig_text);
+    let html = body.html.as_ref().map(|orig_html| {
+        let mut h = String::new();
+        if !note.is_empty() {
+            h.push_str(&format!("<div>{}</div><br>", html_escape(&note)));
+        }
+        h.push_str(&format!(
+            "<div style=\"color:#555\">{}</div><blockquote style=\"margin:0 0 0 .8ex;border-left:1px solid #ccc;padding-left:1ex\">{}</blockquote>",
+            html_escape(&intro),
+            orig_html
+        ));
+        h
+    });
+
+    let mut mail = OutgoingMail {
+        from: acc.email.clone(),
+        to,
+        cc,
+        bcc,
+        subject: subject.clone(),
+        text,
+        html,
+        in_reply_to: None,
+        references: Vec::new(),
+        attachments: Vec::new(),
+    };
+    let mut skipped = Vec::new();
+    if include_attachments {
+        let max_bytes = cfg.max_attachment_mb.max(1) as u64 * 1024 * 1024;
+        let mut total = 0u64;
+        for a in body.attachments.iter().filter(|a| !a.inline) {
+            let Some(att_id) = a.attachment_id.as_deref() else {
+                continue;
+            };
+            if total + a.size > max_bytes {
+                skipped.push(a.filename.clone());
+                continue;
+            }
+            let att = m
+                .client
+                .get(
+                    acc,
+                    &format!(
+                        "{BASE}/messages/{}/attachments/{}",
+                        crate::calendar::enc(message_id),
+                        crate::calendar::enc(att_id)
+                    ),
+                    &[],
+                )
+                .await?;
+            let bytes = att
+                .get("data")
+                .and_then(|d| d.as_str())
+                .map(decode_b64url)
+                .transpose()
+                .map_err(ToolError::Failed)?
+                .unwrap_or_default();
+            total += bytes.len() as u64;
+            if total > max_bytes {
+                skipped.push(a.filename.clone());
+                continue;
+            }
+            mail.attachments
+                .push((a.mime.clone(), a.filename.clone(), bytes));
+        }
+    }
+    let recipients: Vec<String> = mail
+        .to
+        .iter()
+        .chain(mail.cc.iter())
+        .chain(mail.bcc.iter())
+        .flat_map(|a| parse_addresses(a))
+        .collect();
+    let bytes = build_mime(&mail).map_err(ToolError::Failed)?;
+    let p = Prepared {
+        raw: encode_b64url(&bytes),
+        thread_id: None,
+        recipients,
+        subject,
+    };
+    let attached = mail.attachments.len();
+    let out = deliver(m, acc, p).await?;
+    let mut v = out.structured.unwrap_or(Value::Null);
+    v["forwarded_message_id"] = json!(message_id);
+    v["attachments_included"] = json!(attached);
+    v["attachments_skipped"] = json!(skipped);
+    Ok(ToolOutput::json(&v))
+}
+
+/// Destinatários de "responder a todos": Para = Reply-To ou From (se o remetente
+/// sou eu, Para = os Para originais); Cc = Para + Cc originais, menos eu e menos
+/// quem já está em Para. Tudo em minúsculas, sem duplicatas, na ordem original.
+fn reply_all_recipients(
+    me: &str,
+    from: &str,
+    reply_to: Option<&str>,
+    to: &str,
+    cc: &str,
+) -> (Vec<String>, Vec<String>) {
+    let me = me.trim().to_ascii_lowercase();
+    let norm = |v: &str| -> Vec<String> {
+        parse_addresses(v)
+            .into_iter()
+            .map(|a| a.to_ascii_lowercase())
+            .collect()
+    };
+    let from_list = norm(from);
+    let orig_to = norm(to);
+    let orig_cc = norm(cc);
+    let from_me = from_list.contains(&me);
+    let mut to_out: Vec<String> = match reply_to.map(norm).filter(|v| !v.is_empty()) {
+        Some(r) => r,
+        None if from_me => orig_to.clone(),
+        None => from_list.clone(),
+    };
+    to_out.retain(|a| *a != me);
+    to_out.dedup();
+    if to_out.is_empty() {
+        to_out = from_list.into_iter().filter(|a| *a != me).collect();
+    }
+    let mut cc_out: Vec<String> = Vec::new();
+    for a in orig_to.into_iter().chain(orig_cc) {
+        if a != me && !to_out.contains(&a) && !cc_out.contains(&a) {
+            cc_out.push(a);
+        }
+    }
+    (to_out, cc_out)
+}
+
+async fn reply_all(
+    m: &GoogleModule,
+    acc: &GoogleAccount,
+    args: &Value,
+) -> Result<ToolOutput, ToolError> {
+    let cfg = m.config().gmail;
+    if !cfg.allow_send {
+        return Err(ToolError::Unavailable(
+            "envio de e-mail desligado (Configurações → Gmail → Permitir envio)".into(),
+        ));
+    }
+    let message_id = arg_str(args, "message_id")?;
+    let body_text = arg_str(args, "body_text")?;
+    let q = vec![
+        ("format", "metadata".to_string()),
+        ("metadataHeaders", "From".to_string()),
+        ("metadataHeaders", "Reply-To".to_string()),
+        ("metadataHeaders", "To".to_string()),
+        ("metadataHeaders", "Cc".to_string()),
+    ];
+    let orig = m
+        .client
+        .get(
+            acc,
+            &format!("{BASE}/messages/{}", crate::calendar::enc(message_id)),
+            &q,
+        )
+        .await?;
+    let payload = orig.get("payload").cloned().unwrap_or(Value::Null);
+    let h = |n: &str| header(&payload, n).unwrap_or_default();
+    let (mut to, mut cc) = reply_all_recipients(
+        &acc.email,
+        &h("From"),
+        header(&payload, "Reply-To").as_deref(),
+        &h("To"),
+        &h("Cc"),
+    );
+    for a in str_list(args, "extra_to").unwrap_or_default() {
+        if !to.contains(&a) {
+            to.push(a);
+        }
+    }
+    for a in str_list(args, "extra_cc").unwrap_or_default() {
+        if !to.contains(&a) && !cc.contains(&a) {
+            cc.push(a);
+        }
+    }
+    if to.is_empty() {
+        return Err(ToolError::InvalidArgs(
+            "não há a quem responder (a mensagem só tem você como destinatário)".into(),
+        ));
+    }
+    let mut compose = json!({
+        "to": to,
+        "cc": cc,
+        "body_text": body_text,
+        "reply_to_message_id": message_id,
+    });
+    if let Some(h) = arg_opt_str(args, "body_html") {
+        compose["body_html"] = json!(h);
+    }
+    if let Some(a) = args.get("attachments") {
+        compose["attachments"] = a.clone();
+    }
+    // `prepare` resolve In-Reply-To/References, "Re:" e o threadId pela mensagem original.
+    let p = prepare(m, acc, &compose, true).await?;
+    let out = deliver(m, acc, p).await?;
+    let mut v = out.structured.unwrap_or(Value::Null);
+    v["in_reply_to_message_id"] = json!(message_id);
+    v["cc"] = compose["cc"].clone();
+    Ok(ToolOutput::json(&v))
 }
 
 async fn create_draft(
@@ -1212,6 +1795,62 @@ mod tests {
             attachments_dir(kb, "/abs"),
             PathBuf::from("/kb/inbox/gmail")
         );
+    }
+
+    #[test]
+    fn reply_all_recipients_rules() {
+        // outro remetente: Para = From; Cc = Para+Cc originais menos eu
+        let (to, cc) = reply_all_recipients(
+            "me@x.com",
+            "Ana <ana@x.com>",
+            None,
+            "me@x.com, Bob <bob@x.com>",
+            "carol@x.com, ANA@x.com",
+        );
+        assert_eq!(to, vec!["ana@x.com"]);
+        assert_eq!(cc, vec!["bob@x.com", "carol@x.com"]);
+        // Reply-To manda
+        let (to, _) =
+            reply_all_recipients("me@x.com", "ana@x.com", Some("lista@x.com"), "me@x.com", "");
+        assert_eq!(to, vec!["lista@x.com"]);
+        // respondendo a um e-mail meu: Para = os Para originais
+        let (to, cc) = reply_all_recipients(
+            "me@x.com",
+            "me@x.com",
+            None,
+            "ana@x.com, bob@x.com",
+            "carol@x.com",
+        );
+        assert_eq!(to, vec!["ana@x.com", "bob@x.com"]);
+        assert_eq!(cc, vec!["carol@x.com"]);
+        // só eu: nada a responder
+        let (to, cc) = reply_all_recipients("me@x.com", "me@x.com", None, "me@x.com", "");
+        assert!(to.is_empty() && cc.is_empty());
+    }
+
+    #[test]
+    fn forward_subject_and_intro() {
+        assert_eq!(forward_subject("Olá"), "Fwd: Olá");
+        assert_eq!(forward_subject("Fwd: Olá"), "Fwd: Olá");
+        assert_eq!(forward_subject("ENC: x"), "ENC: x");
+        let i = forward_intro(
+            "Ana <ana@x.com>",
+            "Mon, 1 Jan",
+            "Olá",
+            "me@x.com",
+            Some("bob@x.com"),
+        );
+        assert!(i.starts_with("---------- Mensagem encaminhada ----------\n"));
+        assert!(i.contains("De: Ana <ana@x.com>\n") && i.contains("Cc: bob@x.com\n"));
+        assert!(!forward_intro("a", "b", "c", "d", None).contains("Cc:"));
+        assert_eq!(html_escape("a<b>\n&"), "a&lt;b&gt;<br>&amp;");
+        let d = draft_json(
+            &json!({"id": "r1", "message": {"id": "m1", "threadId": "t1", "payload": {"headers": [
+            {"name": "Subject", "value": "Rascunho"}, {"name": "Bcc", "value": "x@y.com"}]}}}),
+        );
+        assert_eq!(d["draft_id"], "r1");
+        assert_eq!(d["subject"], "Rascunho");
+        assert_eq!(d["bcc"], "x@y.com");
     }
 
     #[test]
