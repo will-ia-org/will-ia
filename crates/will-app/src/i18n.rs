@@ -1613,6 +1613,25 @@ pub static TABLE: &[(&str, &str)] = &[
     ("Trocar de modelo", "Switching models"),
     ("Pode usar gpt-5-nano, gpt-4.1-mini, tts-1 etc. O servidor ajusta os parâmetros por família (temperatura, esforço de raciocínio, instruções do TTS) e, se a OpenAI recusar algum, remove e repete sozinho.", "You can use gpt-5-nano, gpt-4.1-mini, tts-1 etc. The server adjusts parameters per family (temperature, reasoning effort, TTS instructions) and, if OpenAI rejects one, drops it and retries on its own."),
     ("OpenAI: text to speech", "OpenAI: text to speech"),
+    // ---------- resumo das threads ----------
+    ("Resumo das threads", "Thread summaries"),
+    ("A cada N turnos concluídos, um modelo de chat da OpenAI resume o que está sendo conversado em uma ou duas frases, mostradas sob o título na lista de threads e no cabeçalho. Usa a chave da OpenAI do módulo de voz.", "Every N completed turns, an OpenAI chat model summarizes what is being discussed in one or two sentences, shown under the title in the thread list and header. Uses the voice module's OpenAI key."),
+    ("A cada quantos turnos", "Every how many turns"),
+    ("Turnos concluídos entre um resumo e o próximo; os mesmos N turnos entram no resumo.", "Completed turns between one summary and the next; the same N turns go into the summary."),
+    ("Instruções de sistema; os últimos turnos vão como mensagem do usuário no formato Usuário:/Assistente:.", "System instructions; the latest turns go as the user message in the User:/Assistant: format."),
+    ("Tamanho máximo (caracteres)", "Maximum length (characters)"),
+    ("O resumo é cortado em palavra inteira com reticências.", "The summary is cut at a whole word with an ellipsis."),
+    ("Resumo automático das threads", "Automatic thread summaries"),
+    ("Cada thread ganha uma linha de prévia, em itálico sob o título (na lista e no cabeçalho da conversa), com o que está sendo tratado por último. O serviço gera essa linha sozinho, em segundo plano, a cada N turnos concluídos, pedindo a um modelo de chat da OpenAI um resumo dos últimos N turnos.", "Each thread gets a preview line, in italics under the title (in the list and the conversation header), with what is being discussed last. The service generates it on its own, in the background, every N completed turns, asking an OpenAI chat model for a summary of the last N turns."),
+    ("Pré-requisito", "Prerequisite"),
+    ("Chave da OpenAI cadastrada em Voz › Configuração (o módulo de voz não precisa estar habilitado). Sem chave, nada é gerado e nenhum erro aparece.", "OpenAI key registered in Voice › Configuration (the voice module does not need to be enabled). Without a key nothing is generated and no error shows."),
+    ("Ajustar", "Tune"),
+    ("A cada quantos turnos define a frequência e o tamanho da janela resumida. O Prompt controla estilo e tamanho; Tamanho máximo corta o texto guardado.", "Every how many turns sets the frequency and the size of the summarized window. The Prompt controls style and length; Maximum length trims the stored text."),
+    ("Uma chamada curta por janela (tokens dos últimos N turnos); entra na página Custos como thread_summary, estimado.", "One short call per window (tokens of the last N turns); shows on the Costs page as thread_summary, estimated."),
+    ("Quando atualiza", "When it updates"),
+    ("Só depois de um turno concluído com resposta; turnos com erro não contam nem entram no resumo. Threads antigas ganham resumo no próximo turno que fechar a janela.", "Only after a completed turn with a reply; failed turns neither count nor go into the summary. Older threads get a summary at the next turn that closes the window."),
+    ("Ver inteiro", "See it whole"),
+    ("Na lista, o resumo completo aparece no tooltip da thread; no cabeçalho, ao passar o mouse.", "In the list, the full summary shows in the thread tooltip; in the header, on hover."),
 ];
 
 #[cfg(test)]

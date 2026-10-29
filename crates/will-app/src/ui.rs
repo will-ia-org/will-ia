@@ -19,7 +19,6 @@ pub struct Palette {
     pub text: Color32,
     pub text_weak: Color32,
     pub accent: Color32,
-    pub titlebar: Color32,
 }
 
 pub const DARK: Palette = Palette {
@@ -31,7 +30,6 @@ pub const DARK: Palette = Palette {
     text: Color32::from_rgb(226, 230, 237),
     text_weak: Color32::from_rgb(142, 150, 166),
     accent: Color32::from_rgb(79, 140, 255),
-    titlebar: Color32::from_rgb(14, 17, 22),
 };
 
 pub const LIGHT: Palette = Palette {
@@ -43,7 +41,6 @@ pub const LIGHT: Palette = Palette {
     text: Color32::from_rgb(31, 36, 48),
     text_weak: Color32::from_rgb(106, 114, 130),
     accent: Color32::from_rgb(47, 112, 230),
-    titlebar: Color32::from_rgb(236, 239, 245),
 };
 
 pub fn palette(dark: bool) -> &'static Palette {

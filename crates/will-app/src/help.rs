@@ -33,6 +33,22 @@ pub const ENGINE_TOKENS: Help = Help {
     ],
 };
 
+pub const ENGINE_THREAD_SUMMARY: Help = Help {
+    title: "Resumo automático das threads",
+    intro: "Cada thread ganha uma linha de prévia, em itálico sob o título (na lista e no cabeçalho da conversa), com o que está sendo tratado por último. O serviço gera essa linha sozinho, em segundo plano, a cada N turnos concluídos, pedindo a um modelo de chat da OpenAI um resumo dos últimos N turnos.",
+    steps: &[
+        ("Pré-requisito", "Chave da OpenAI cadastrada em Voz › Configuração (o módulo de voz não precisa estar habilitado). Sem chave, nada é gerado e nenhum erro aparece."),
+        ("Ajustar", "A cada quantos turnos define a frequência e o tamanho da janela resumida. O Prompt controla estilo e tamanho; Tamanho máximo corta o texto guardado."),
+    ],
+    notes: &[
+        ("Custo", "Uma chamada curta por janela (tokens dos últimos N turnos); entra na página Custos como thread_summary, estimado."),
+        ("Quando atualiza", "Só depois de um turno concluído com resposta; turnos com erro não contam nem entram no resumo. Threads antigas ganham resumo no próximo turno que fechar a janela."),
+        ("Ver inteiro", "Na lista, o resumo completo aparece no tooltip da thread; no cabeçalho, ao passar o mouse."),
+    ],
+    code: "",
+    links: &[],
+};
+
 pub const ENGINE_EXECUTION: Help = Help {
     title: "Como o motor executa o Claude",
     intro: "Cada thread é um processo claude -p headless, vivo enquanto conversa e aposentado quando fica ocioso ou passa do teto. A sessão é preservada: o processo volta com --resume sem perder o histórico.",

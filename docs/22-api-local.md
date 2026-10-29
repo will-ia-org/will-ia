@@ -63,7 +63,7 @@ Códigos: **401** `token de sessão ausente` / `token de sessão inválido` (tam
 ### Threads
 | Método | Rota | Descrição |
 |---|---|---|
-| GET | `/api/threads` | lista `ThreadSummary` (alive/pending/session_expired preenchidos) |
+| GET | `/api/threads` | lista `ThreadSummary` (alive/pending/session_expired preenchidos; `summary` = resumo automático da conversa ou `null`) |
 | POST | `/api/threads` | `{ title? }` cria thread de origem `ui` |
 | GET | `/api/threads/{id}` | detalhe |
 | GET | `/api/threads/{id}/turns?limit` | turnos (`author` = quem enviou pela API, `null` para outros canais; `prompt` cru, `prompt_display` sem notas de anexo, `attachments[]` = `{name, mime, path, size}`, `merged_into` em turnos absorvidos) |

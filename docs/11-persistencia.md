@@ -31,6 +31,8 @@ CREATE TABLE threads (
   origin TEXT NOT NULL,                -- ui | telegram | realtime
   origin_ref TEXT,                     -- telegram: "<chat_id>:<topic_id>" ; realtime: "voice"
   title TEXT,
+  summary TEXT,                 -- 0007: resumo automático da conversa (docs/10, "Resumo das threads")
+  summary_turns INTEGER NOT NULL DEFAULT 0, -- 0007: turnos concluídos no último resumo
   claude_session_id TEXT,              -- NULL = próxima mensagem começa do zero
   status TEXT NOT NULL DEFAULT 'idle', -- idle | running | error | archived
   created_at TEXT NOT NULL,

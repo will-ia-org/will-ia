@@ -14,7 +14,7 @@ Não há etapa de frontend: um só toolchain (Rust).
 
 ## Rodar
 ```bash
-target/release/will-ia                            # serviço + bandeja; janela oculta após o onboarding (fechar = esconder; "Sair" na bandeja)
+target/release/will-ia                            # serviço + bandeja; "Abrir will-ia" lança o app (fechar a janela encerra só o app)
 target/release/will-ia --show                     # força a janela principal
 target/release/will-ia                            # com o serviço já no ar: mostra a janela da instância ativa (POST /api/ui/show) e sai
 target/release/will-ia serve                      # headless: só serviço + API local em http://127.0.0.1:47300 (sem janela/bandeja/áudio)
@@ -67,7 +67,7 @@ Diagnóstico de áudio: `will-ia audio-devices` lista os dispositivos vistos pel
 
 ## App desktop (egui)
 - Bandeja: menu Abrir / Voz / Sair; o ícone muda com o estado. No GNOME é preciso a extensão AppIndicator para o ícone aparecer (KDE, Cinnamon e XFCE funcionam direto).
-- Fechar a janela só a esconde; reabra pela bandeja, por `will-ia --show` ou executando `will-ia` de novo (segunda instância pede à ativa que mostre a janela e sai).
+- Fechar a janela (botão nativo do SO) encerra o app; o servidor segue na bandeja. Reabra pela bandeja, por `will-ia show` ou executando `will-ia-app` de novo (com o app já aberto, a segunda instância pede à ativa que mostre a janela e sai).
 - Base de conhecimento: o botão de pasta abre o diálogo nativo (`rfd`).
 - WhatsApp: o QR é desenhado na própria janela.
 - Em implementação (ADR-0016); ainda não validado em todas as plataformas.

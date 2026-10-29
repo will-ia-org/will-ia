@@ -165,7 +165,19 @@ impl OpenAi {
         model: &str,
         system: &str,
     ) -> Result<Summary, String> {
-        let input: String = text.chars().take(8000).collect();
+        self.chat_summary(text, model, system, 8000).await
+    }
+
+    /// Chat completion genérico "sistema + um texto do usuário" → resposta curta
+    /// (resumo falável, resumo da thread…). `max_input_chars` corta a entrada.
+    pub async fn chat_summary(
+        &self,
+        text: &str,
+        model: &str,
+        system: &str,
+        max_input_chars: usize,
+    ) -> Result<Summary, String> {
+        let input: String = text.chars().take(max_input_chars).collect();
         let model = model.trim();
         let model = if model.is_empty() { SUM_MODEL } else { model };
         let system = system.trim();

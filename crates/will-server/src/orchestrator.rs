@@ -528,6 +528,147 @@ pub async fn retitle_placeholder_threads(state: &AppState) {
     }
 }
 
+/// Resumo automático da thread (`engine.thread_summary`): quando há
+/// `every_turns` turnos concluídos desde o último resumo, pede a um modelo de
+/// chat da OpenAI (chave do módulo de voz) um resumo curto dos últimos turnos,
+/// guarda em `threads.summary` e avisa a UI (`ThreadUpdated`). Roda em segundo
+/// plano, sem segurar o laço de eventos; falhas só vão para o log.
+fn maybe_summarize_thread(state: Arc<AppState>, thread: ThreadId) {
+    tokio::spawn(async move {
+        let cfg = state.settings().engine.thread_summary;
+        if !cfg.enabled {
+            return;
+        }
+        let every = i64::from(cfg.every_turns.max(1));
+        let (done, at) = match state.storage.thread_summary_progress(thread).await {
+            Ok(p) => p,
+            Err(e) => {
+                tracing::debug!(%thread, error = %e, "resumo da thread: progresso indisponível");
+                return;
+            }
+        };
+        if done < every || done - at < every {
+            return;
+        }
+        let Some(key) = crate::modules::openai_key(&state).await else {
+            tracing::debug!(%thread, "resumo da thread: sem chave da OpenAI (Configurações → Voz)");
+            return;
+        };
+        // Reserva a janela antes de chamar a API: outro turno terminando em
+        // paralelo não dispara um segundo resumo; falha espera a próxima janela.
+        let _ = state.storage.set_thread_summary(thread, None, done).await;
+        let turns = match state.storage.list_turns(thread, every).await {
+            Ok(t) => t,
+            Err(e) => {
+                tracing::warn!(%thread, error = %e, "resumo da thread: turnos indisponíveis");
+                return;
+            }
+        };
+        let transcript = thread_transcript(&turns);
+        if transcript.trim().is_empty() {
+            return;
+        }
+        let ai = will_realtime::openai::OpenAi::new(key);
+        let sum = match ai
+            .chat_summary(&transcript, &cfg.model, &cfg.prompt, 12_000)
+            .await
+        {
+            Ok(s) => s,
+            Err(e) => {
+                tracing::warn!(%thread, error = %e, "resumo da thread: OpenAI falhou");
+                return;
+            }
+        };
+        let text = clip_summary(&sum.script, cfg.max_chars);
+        if text.is_empty() {
+            return;
+        }
+        if let Err(e) = state
+            .storage
+            .set_thread_summary(thread, Some(&text), done)
+            .await
+        {
+            tracing::warn!(%thread, error = %e, "resumo da thread: não gravou");
+            return;
+        }
+        let usd = sum.usd();
+        let rec = will_storage::costs::NewAiCost {
+            source: "thread_summary".into(),
+            r#ref: Some(thread.to_string()),
+            model: Some(cfg.model.clone()),
+            units: serde_json::json!({
+                "prompt_tokens": sum.prompt_tokens,
+                "completion_tokens": sum.completion_tokens,
+                "turns": turns.len(),
+            }),
+            usd,
+            estimated: true,
+            duration_secs: None,
+            note: Some("resumo automático da thread".into()),
+        };
+        let _ = state.storage.add_ai_cost(&rec).await;
+        tracing::info!(%thread, turns = done, chars = text.chars().count(), "resumo da thread atualizado");
+        emit_thread_updated(&state, thread).await;
+    });
+}
+
+/// Últimos turnos como transcrição "Usuário: … / Assistente: …" (sem notas de
+/// anexo; cada lado cortado para não estourar a entrada do modelo).
+fn thread_transcript(turns: &[will_storage::threads::TurnRecord]) -> String {
+    const SIDE_MAX: usize = 2_000;
+    let mut out = String::new();
+    for t in turns {
+        if t.is_error || t.error_kind.is_some() {
+            continue;
+        }
+        let (prompt, _) = will_core::split_attachment_notes(&t.prompt);
+        let prompt = if prompt.trim().is_empty() {
+            t.prompt.trim()
+        } else {
+            prompt.trim()
+        };
+        if !prompt.is_empty() {
+            out.push_str("Usuário: ");
+            out.push_str(&will_core::tools::truncate(prompt, SIDE_MAX));
+            out.push('\n');
+        }
+        if let Some(r) = t
+            .result_text
+            .as_deref()
+            .map(str::trim)
+            .filter(|r| !r.is_empty())
+        {
+            out.push_str("Assistente: ");
+            out.push_str(&will_core::tools::truncate(r, SIDE_MAX));
+            out.push('\n');
+        }
+        out.push('\n');
+    }
+    out
+}
+
+/// Uma linha só, sem marcação óbvia, cortada em palavra inteira com "…".
+fn clip_summary(text: &str, max_chars: usize) -> String {
+    let joined = text.split_whitespace().collect::<Vec<_>>().join(" ");
+    let one_line = joined
+        .trim()
+        .trim_start_matches("Resumo:")
+        .trim()
+        .trim_matches(['"', '“', '”'])
+        .trim()
+        .to_string();
+    let max = max_chars.max(40);
+    if one_line.chars().count() <= max {
+        return one_line;
+    }
+    let cut: String = one_line.chars().take(max - 1).collect();
+    let cut = match cut.rfind(' ') {
+        Some(i) if i > max / 2 => cut[..i].to_string(),
+        _ => cut,
+    };
+    format!("{}…", cut.trim_end_matches([',', ';', ':']))
+}
+
 /// Converte EngineEvent → persistência + Event.
 pub fn spawn_engine_loop(state: Arc<AppState>) {
     let mut rx = state.engine.subscribe();
@@ -661,6 +802,7 @@ async fn handle_engine_event(state: &Arc<AppState>, ev: EngineEvent) {
                 result,
             });
             emit_thread_updated(state, thread).await;
+            maybe_summarize_thread(state.clone(), thread);
         }
         EngineEvent::Dropped {
             thread,
@@ -787,4 +929,49 @@ pub fn spawn_bus_persistence(state: Arc<AppState>) {
             }
         }
     });
+}
+
+#[cfg(test)]
+mod summary_tests {
+    use super::*;
+
+    #[test]
+    fn clip_keeps_short_and_cuts_on_word() {
+        assert_eq!(
+            clip_summary("  Resumo:  \"Deploy do card 3266 feito\" ", 280),
+            "Deploy do card 3266 feito"
+        );
+        let long = "palavra ".repeat(80);
+        let c = clip_summary(&long, 60);
+        assert!(c.ends_with('…'));
+        assert!(c.chars().count() <= 60);
+        assert!(!c.contains("  "));
+    }
+
+    #[test]
+    fn transcript_skips_errors_and_attachment_notes() {
+        let mk = |p: &str, r: Option<&str>, err: bool| will_storage::threads::TurnRecord {
+            id: will_core::TurnId::default(),
+            thread_id: ThreadId::default(),
+            started_at: chrono::Utc::now(),
+            finished_at: Some(chrono::Utc::now()),
+            prompt: p.into(),
+            result_text: r.map(str::to_string),
+            is_error: err,
+            error_kind: None,
+            cost_usd: None,
+            duration_ms: None,
+            model: None,
+            attachments: vec![],
+            author: None,
+        };
+        let turns = vec![
+            mk("Oi, sobe o deploy", Some("Subindo."), false),
+            mk("falhou", Some("erro"), true),
+        ];
+        let t = thread_transcript(&turns);
+        assert!(t.contains("Usuário: Oi, sobe o deploy"));
+        assert!(t.contains("Assistente: Subindo."));
+        assert!(!t.contains("falhou"));
+    }
 }

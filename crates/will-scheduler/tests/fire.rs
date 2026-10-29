@@ -34,6 +34,7 @@ impl FakeHost {
             alive: false,
             pending: 0,
             session_expired: false,
+            summary: None,
         };
         let id = t.id;
         self.threads.lock().push(t);

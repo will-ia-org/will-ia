@@ -112,6 +112,45 @@ pub struct EngineSettings {
     pub log_raw_stream: bool,
     pub append_system_prompt: String,
     pub turn_timeout_minutes: u64,
+    /// Resumo automático da conversa de cada thread (lista e cabeçalho da UI).
+    pub thread_summary: ThreadSummarySettings,
+}
+
+/// Resumo das threads: a cada `every_turns` turnos concluídos, um modelo de
+/// chat da OpenAI (mesma chave do módulo de voz) resume os últimos turnos em
+/// uma ou duas frases, guardadas em `threads.summary` e mostradas sob o título.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct ThreadSummarySettings {
+    pub enabled: bool,
+    /// Turnos concluídos entre um resumo e o próximo (também quantos entram no resumo).
+    pub every_turns: u32,
+    /// Modelo de chat (`gpt-4o-mini`).
+    pub model: String,
+    /// Prompt de sistema do resumo.
+    pub prompt: String,
+    /// Tamanho máximo do resumo guardado (caracteres; corta em palavra inteira).
+    pub max_chars: usize,
+}
+impl Default for ThreadSummarySettings {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            every_turns: 3,
+            model: "gpt-4o-mini".into(),
+            prompt: default_thread_summary_prompt().into(),
+            max_chars: 280,
+        }
+    }
+}
+
+/// Prompt padrão do resumo das threads.
+pub fn default_thread_summary_prompt() -> &'static str {
+    "Você recebe os últimos turnos de uma conversa entre um usuário e um assistente (formato \"Usuário:\" / \"Assistente:\"). \
+Escreva, em português do Brasil, um resumo de UMA ou DUAS frases curtas do que está sendo tratado por último: o assunto, o que foi pedido e o que ficou decidido ou pendente. \
+Texto corrido, sem marcação, sem listas, sem código, sem URLs, sem IDs/hashes, sem aspas. \
+Não comece com \"O usuário\" nem \"Resumo:\"; vá direto ao assunto, como uma linha de prévia de e-mail. \
+Responda APENAS com o resumo."
 }
 impl Default for EngineSettings {
     fn default() -> Self {
@@ -130,6 +169,7 @@ impl Default for EngineSettings {
             log_raw_stream: false,
             append_system_prompt: default_system_append().into(),
             turn_timeout_minutes: 30,
+            thread_summary: ThreadSummarySettings::default(),
         }
     }
 }

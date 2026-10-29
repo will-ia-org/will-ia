@@ -128,6 +128,10 @@ pub struct ThreadSummary {
     /// Sessão salva não existe mais no disco (vai voltar do zero).
     #[serde(default)]
     pub session_expired: bool,
+    /// Resumo curto do que foi conversado por último (gerado a cada N turnos;
+    /// `engine.thread_summary`). `None` até o primeiro resumo.
+    #[serde(default)]
+    pub summary: Option<String>,
 }
 
 /// Títulos genéricos dados na criação, substituídos pelo assunto na primeira

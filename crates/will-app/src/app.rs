@@ -38,8 +38,8 @@ pub fn run(profile: Option<Profile>, visible: bool) -> anyhow::Result<()> {
         .with_inner_size([1180.0, 780.0])
         .with_min_inner_size([900.0, 600.0])
         .with_icon(crate::icon::egui_icon())
-        // Barra de título desenhada pelo app (integrada ao fundo); ver `title_bar`.
-        .with_decorations(false)
+        // Decorações do próprio SO (barra de título, minimizar/maximizar/fechar).
+        .with_decorations(true)
         .with_visible(visible);
     let options = eframe::NativeOptions {
         viewport,
@@ -138,7 +138,6 @@ pub struct WillApp {
     last_status_refresh: Instant,
     theme_applied: Option<String>,
     hotkey_applied: Option<String>,
-    pending_hide: bool,
     /// Captura agendada (caminho, quadros restantes) para dar tempo à navegação.
     pending_screenshot: Option<(std::path::PathBuf, u8)>,
     /// Recarga das settings do snapshot depois de `SettingsChanged`.
@@ -200,7 +199,6 @@ impl WillApp {
             last_status_refresh: Instant::now() - Duration::from_secs(60),
             theme_applied: None,
             hotkey_applied: None,
-            pending_hide: false,
             pending_screenshot: None,
             settings_task: None,
             resync_task: None,
@@ -292,11 +290,6 @@ impl WillApp {
         ctx.send_viewport_cmd(egui::ViewportCommand::Minimized(false));
         ctx.send_viewport_cmd(egui::ViewportCommand::Focus);
         ctx.request_repaint();
-    }
-
-    fn hide_window(&mut self, ctx: &egui::Context) {
-        self.window_visible = false;
-        ctx.send_viewport_cmd(egui::ViewportCommand::Visible(false));
     }
 
     fn handle_event(&mut self, ev: Event) {
@@ -734,232 +727,6 @@ impl WillApp {
                 }
             });
     }
-
-    /// Barra de título integrada: arrastar move a janela, duplo clique maximiza,
-    /// botões minimizar / maximizar / fechar (fechar = ocultar para a bandeja).
-    fn title_bar(&mut self, ui: &mut egui::Ui) {
-        let ctx = ui.ctx().clone();
-        let h = 38.0;
-        let (rect, _) =
-            ui.allocate_exact_size(egui::vec2(ui.available_width(), h), egui::Sense::hover());
-        let dark = ui.visuals().dark_mode;
-        let bg = ui::palette(dark).titlebar;
-        ui.painter().rect_filled(rect, 0.0, bg);
-        let maximized = ctx.input(|i| i.viewport().maximized.unwrap_or(false));
-
-        // área de arrastar (tudo menos os botões)
-        let btn_w = 46.0;
-        let drag_rect =
-            egui::Rect::from_min_max(rect.min, egui::pos2(rect.max.x - btn_w * 3.0, rect.max.y));
-        let drag = ui.interact(
-            drag_rect,
-            egui::Id::unique("titlebar-drag"),
-            egui::Sense::click_and_drag(),
-        );
-        if drag.drag_started_by(egui::PointerButton::Primary) {
-            ctx.send_viewport_cmd(egui::ViewportCommand::StartDrag);
-        }
-        if drag.double_clicked_by(egui::PointerButton::Primary) {
-            ctx.send_viewport_cmd(egui::ViewportCommand::Maximized(!maximized));
-        }
-        // título
-        let icon_c = egui::pos2(rect.left() + 20.0, rect.center().y);
-        ui.painter()
-            .circle_filled(icon_c, 7.0, egui::Color32::from_rgb(31, 42, 68));
-        ui.painter().circle_stroke(
-            icon_c,
-            4.2,
-            egui::Stroke::new(1.4, egui::Color32::from_rgb(150, 170, 220)),
-        );
-        ui.painter()
-            .circle_filled(icon_c, 1.6, egui::Color32::WHITE);
-        let title_color = if dark {
-            egui::Color32::from_rgb(200, 205, 215)
-        } else {
-            egui::Color32::from_rgb(40, 44, 54)
-        };
-        ui.painter().text(
-            egui::pos2(rect.left() + 34.0, rect.center().y),
-            egui::Align2::LEFT_CENTER,
-            "will-ia",
-            egui::FontId::proportional(14.0),
-            title_color,
-        );
-        if self.voice.session_active {
-            let (label, color) = crate::voice::overlay::label_for(&self.voice.state);
-            ui.painter().circle_filled(
-                egui::pos2(rect.left() + 100.0, rect.center().y),
-                4.0,
-                color,
-            );
-            ui.painter().text(
-                egui::pos2(rect.left() + 110.0, rect.center().y),
-                egui::Align2::LEFT_CENTER,
-                trf("voz · {}", &[&label]),
-                egui::FontId::proportional(12.5),
-                color,
-            );
-        }
-
-        // botões
-        let mut x = rect.max.x - btn_w;
-        let stroke_color = title_color;
-        for (i, kind) in ["close", "max", "min"].iter().enumerate() {
-            let r = egui::Rect::from_min_size(egui::pos2(x, rect.min.y), egui::vec2(btn_w, h));
-            let resp = ui.interact(
-                r,
-                egui::Id::unique(("titlebar-btn", i)),
-                egui::Sense::click(),
-            );
-            if resp.hovered() {
-                let fill = if *kind == "close" {
-                    egui::Color32::from_rgb(200, 60, 60)
-                } else if dark {
-                    egui::Color32::from_rgb(45, 48, 58)
-                } else {
-                    egui::Color32::from_rgb(220, 223, 230)
-                };
-                ui.painter().rect_filled(r, 0.0, fill);
-            }
-            let c = r.center();
-            let sc = if resp.hovered() && *kind == "close" {
-                egui::Color32::WHITE
-            } else {
-                stroke_color
-            };
-            let st = egui::Stroke::new(1.3, sc);
-            match *kind {
-                "min" => {
-                    ui.painter().line_segment(
-                        [
-                            egui::pos2(c.x - 5.0, c.y + 0.5),
-                            egui::pos2(c.x + 5.0, c.y + 0.5),
-                        ],
-                        st,
-                    );
-                }
-                "max" => {
-                    if maximized {
-                        ui.painter().rect_stroke(
-                            egui::Rect::from_center_size(
-                                egui::pos2(c.x - 1.0, c.y + 1.0),
-                                egui::vec2(8.0, 8.0),
-                            ),
-                            1.0,
-                            st,
-                            egui::StrokeKind::Middle,
-                        );
-                        ui.painter().line_segment(
-                            [
-                                egui::pos2(c.x - 2.0, c.y - 3.0),
-                                egui::pos2(c.x - 2.0, c.y - 4.0),
-                            ],
-                            st,
-                        );
-                        ui.painter().line_segment(
-                            [
-                                egui::pos2(c.x - 2.0, c.y - 4.0),
-                                egui::pos2(c.x + 5.0, c.y - 4.0),
-                            ],
-                            st,
-                        );
-                        ui.painter().line_segment(
-                            [
-                                egui::pos2(c.x + 5.0, c.y - 4.0),
-                                egui::pos2(c.x + 5.0, c.y + 3.0),
-                            ],
-                            st,
-                        );
-                        ui.painter().line_segment(
-                            [
-                                egui::pos2(c.x + 5.0, c.y + 3.0),
-                                egui::pos2(c.x + 4.0, c.y + 3.0),
-                            ],
-                            st,
-                        );
-                    } else {
-                        ui.painter().rect_stroke(
-                            egui::Rect::from_center_size(c, egui::vec2(9.0, 9.0)),
-                            1.0,
-                            st,
-                            egui::StrokeKind::Middle,
-                        );
-                    }
-                }
-                _ => {
-                    ui.painter().line_segment(
-                        [
-                            egui::pos2(c.x - 5.0, c.y - 5.0),
-                            egui::pos2(c.x + 5.0, c.y + 5.0),
-                        ],
-                        st,
-                    );
-                    ui.painter().line_segment(
-                        [
-                            egui::pos2(c.x - 5.0, c.y + 5.0),
-                            egui::pos2(c.x + 5.0, c.y - 5.0),
-                        ],
-                        st,
-                    );
-                }
-            }
-            if resp.clicked() {
-                match *kind {
-                    "min" => ctx.send_viewport_cmd(egui::ViewportCommand::Minimized(true)),
-                    "max" => ctx.send_viewport_cmd(egui::ViewportCommand::Maximized(!maximized)),
-                    _ => self.pending_hide = true,
-                }
-            }
-            let tip = match *kind {
-                "min" => tr("Minimizar"),
-                "max" => {
-                    if maximized {
-                        tr("Restaurar")
-                    } else {
-                        tr("Maximizar")
-                    }
-                }
-                _ => tr("Fechar (continua na bandeja)"),
-            };
-            resp.on_hover_text(tip);
-            x -= btn_w;
-        }
-    }
-
-    /// Redimensionar pelas bordas (a janela não tem moldura do sistema).
-    fn resize_edges(&self, ctx: &egui::Context) {
-        use egui::{CursorIcon, ResizeDirection as D, ViewportCommand as VC};
-        if ctx.input(|i| i.viewport().maximized.unwrap_or(false)) {
-            return;
-        }
-        let Some(pos) = ctx.input(|i| i.pointer.latest_pos()) else {
-            return;
-        };
-        let r = ctx.content_rect();
-        let m = 6.0;
-        let left = pos.x <= r.left() + m;
-        let right = pos.x >= r.right() - m;
-        let top = pos.y <= r.top() + m;
-        let bottom = pos.y >= r.bottom() - m;
-        let dir = match (left, right, top, bottom) {
-            (true, _, true, _) => Some((D::NorthWest, CursorIcon::ResizeNwSe)),
-            (_, true, true, _) => Some((D::NorthEast, CursorIcon::ResizeNeSw)),
-            (true, _, _, true) => Some((D::SouthWest, CursorIcon::ResizeNeSw)),
-            (_, true, _, true) => Some((D::SouthEast, CursorIcon::ResizeNwSe)),
-            (true, _, _, _) => Some((D::West, CursorIcon::ResizeHorizontal)),
-            (_, true, _, _) => Some((D::East, CursorIcon::ResizeHorizontal)),
-            (_, _, true, _) => Some((D::North, CursorIcon::ResizeVertical)),
-            (_, _, _, true) => Some((D::South, CursorIcon::ResizeVertical)),
-            _ => None,
-        };
-        if let Some((d, cursor)) = dir {
-            ctx.set_cursor_icon(cursor);
-            let pressed = ctx.input(|i| i.pointer.primary_pressed());
-            if pressed {
-                ctx.send_viewport_cmd(VC::BeginResize(d));
-            }
-        }
-    }
 }
 
 impl eframe::App for WillApp {
@@ -977,17 +744,8 @@ impl eframe::App for WillApp {
         let ctx = ui.ctx().clone();
         self.apply_theme(&ctx);
 
-        // Fechar a janela nunca encerra o serviço: ele continua na bandeja (ou, sem
-        // bandeja, em segundo plano; rodar `will-ia` de novo reabre a janela).
-        if ctx.input(|i| i.viewport().close_requested()) {
-            ctx.send_viewport_cmd(egui::ViewportCommand::CancelClose);
-            self.hide_window(&ctx);
-        }
-
-        egui::Panel::top("titlebar")
-            .exact_size(38.0)
-            .show_separator_line(false)
-            .show(ui, |ui| self.title_bar(ui));
+        // Fechar a janela (botão nativo do SO) encerra o app: ele é só o cliente;
+        // o servidor `will-ia` continua residente e reabrir o app reconecta.
 
         // Sem conexão (sem perfil, servidor fora do ar ou depois de sair do
         // perfil): só a tela de entrada, sem menu nem páginas. Ela some sozinha
@@ -1004,12 +762,7 @@ impl eframe::App for WillApp {
                 };
                 self.pages.connect.ui(ui, &mut cx);
             });
-            if self.pending_hide {
-                self.pending_hide = false;
-                self.hide_window(&ctx);
-            }
             self.toasts.show(&ctx);
-            self.resize_edges(&ctx);
             return;
         }
 
@@ -1095,12 +848,7 @@ impl eframe::App for WillApp {
             self.pending_leave = false;
             self.leave_profile();
         }
-        if self.pending_hide {
-            self.pending_hide = false;
-            self.hide_window(&ctx);
-        }
         self.toasts.show(&ctx);
-        self.resize_edges(&ctx);
     }
 
     fn on_exit(&mut self, _gl: Option<&eframe::glow::Context>) {

@@ -468,6 +468,61 @@ impl EnginePage {
                 ui::text_area(ui, &mut e.append_system_prompt, 5);
             });
         });
+        // ---- resumo das threads ----
+        ui::section_help(
+            ui,
+            tr("Resumo das threads"),
+            Some(&help::ENGINE_THREAD_SUMMARY),
+            |ui| {
+                let ts = &mut st.draft.engine.thread_summary;
+                ui.label(
+                egui::RichText::new(tr(
+                    "A cada N turnos concluídos, um modelo de chat da OpenAI resume o que está sendo conversado em uma ou duas frases, mostradas sob o título na lista de threads e no cabeçalho. Usa a chave da OpenAI do módulo de voz.",
+                ))
+                .small()
+                .weak(),
+            );
+                ui.add_space(4.0);
+                ui::field(ui, tr("Habilitar"), None, |ui| {
+                    ui::toggle(ui, &mut ts.enabled);
+                });
+                ui::field(
+                ui,
+                tr("A cada quantos turnos"),
+                Some(tr("Turnos concluídos entre um resumo e o próximo; os mesmos N turnos entram no resumo.")),
+                |ui| {
+                    ui::number(ui, &mut ts.every_turns, 1..=50);
+                },
+            );
+                ui::field(ui, tr("Modelo"), None, |ui| {
+                    ui::text_input(ui, &mut ts.model, "gpt-4o-mini");
+                });
+                ui::field(
+                ui,
+                tr("Prompt do resumo"),
+                Some(tr("Instruções de sistema; os últimos turnos vão como mensagem do usuário no formato Usuário:/Assistente:.")),
+                |ui| {
+                    ui::text_area(ui, &mut ts.prompt, 7);
+                    let is_default = ts.prompt.trim()
+                        == will_core::settings::default_thread_summary_prompt().trim();
+                    if ui
+                        .add_enabled(!is_default, egui::Button::new(tr("Restaurar padrão")))
+                        .clicked()
+                    {
+                        ts.prompt = will_core::settings::default_thread_summary_prompt().into();
+                    }
+                },
+            );
+                ui::field(
+                    ui,
+                    tr("Tamanho máximo (caracteres)"),
+                    Some(tr("O resumo é cortado em palavra inteira com reticências.")),
+                    |ui| {
+                        ui::number(ui, &mut ts.max_chars, 40..=2000);
+                    },
+                );
+            },
+        );
         st.save_bar(ui, cx.svc, "engine");
 
         if self.confirm_bypass {

@@ -49,6 +49,11 @@ fn row_to_thread(r: &sqlx::sqlite::SqliteRow) -> Option<ThreadSummary> {
         alive: false,
         pending: 0,
         session_expired: false,
+        summary: r
+            .try_get::<Option<String>, _>("summary")
+            .ok()
+            .flatten()
+            .filter(|s| !s.trim().is_empty()),
     })
 }
 
@@ -84,6 +89,7 @@ impl Storage {
             alive: false,
             pending: 0,
             session_expired: false,
+            summary: None,
         })
     }
 
@@ -157,6 +163,51 @@ impl Storage {
             .execute(&self.pool)
             .await?;
         Ok(())
+    }
+
+    /// Guarda o resumo da conversa e a contagem de turnos concluídos em que ele
+    /// foi gerado (`None` = só marca a tentativa, mantendo o resumo anterior).
+    pub async fn set_thread_summary(
+        &self,
+        id: ThreadId,
+        summary: Option<&str>,
+        turns_done: i64,
+    ) -> Result<()> {
+        match summary {
+            Some(s) => {
+                sqlx::query("UPDATE threads SET summary = ?, summary_turns = ? WHERE id = ?")
+                    .bind(s)
+                    .bind(turns_done)
+                    .bind(id.to_string())
+                    .execute(&self.pool)
+                    .await?;
+            }
+            None => {
+                sqlx::query("UPDATE threads SET summary_turns = ? WHERE id = ?")
+                    .bind(turns_done)
+                    .bind(id.to_string())
+                    .execute(&self.pool)
+                    .await?;
+            }
+        }
+        Ok(())
+    }
+
+    /// `(turnos concluídos com resposta, turnos no último resumo)` da thread —
+    /// base para decidir se está na hora de resumir de novo.
+    pub async fn thread_summary_progress(&self, id: ThreadId) -> Result<(i64, i64)> {
+        let r = sqlx::query(
+            "SELECT \
+               (SELECT COUNT(*) FROM turns WHERE thread_id = t.id AND finished_at IS NOT NULL \
+                  AND is_error = 0 AND error_kind IS NULL) AS done, \
+               t.summary_turns AS at \
+             FROM threads t WHERE t.id = ?",
+        )
+        .bind(id.to_string())
+        .fetch_optional(&self.pool)
+        .await?
+        .ok_or(StorageError::NotFound)?;
+        Ok((r.get::<i64, _>("done"), r.get::<i64, _>("at")))
     }
 
     pub async fn add_thread_cost(&self, id: ThreadId, cost: f64) -> Result<()> {

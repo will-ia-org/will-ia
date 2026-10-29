@@ -153,6 +153,11 @@ fn when_label(ui: &mut egui::Ui, pal: &ui::Palette, dt: Option<&chrono::DateTime
     }
 }
 
+/// Cor de texto fraca da paleta corrente (para trechos fora do escopo de `pal`).
+fn pal_text_weak(ui: &egui::Ui) -> egui::Color32 {
+    ui::palette(ui.visuals().dark_mode).text_weak
+}
+
 /// Botão pequeno "copiar" com área de clique real (moldura só no hover).
 fn copy_button(ui: &mut egui::Ui, pal: &ui::Palette, hover: &str) -> bool {
     ui.add(
@@ -685,12 +690,39 @@ impl ThreadsPage {
                                 ui::dot(ui, status_tone(t));
                                 ui.add(egui::Label::new(egui::RichText::new(title_of(t)).font(ui::medium(13.0))).truncate());
                             });
-                            ui.with_layout(egui::Layout::right_to_left(egui::Align::Min), |ui| {
-                                ui.label(egui::RichText::new(time_ago(&t.last_activity_at)).size(10.5).color(pal.text_weak));
+                            // 2ª linha: resumo da conversa (itálico, truncado) à esquerda,
+                            // sem empurrar o tempo relativo, que fica fixo à direita.
+                            ui.horizontal(|ui| {
+                                let when_text = time_ago(&t.last_activity_at);
+                                let when_w = ui
+                                    .fonts_mut(|f| f.layout_no_wrap(when_text.clone(), egui::FontId::proportional(10.5), pal.text_weak))
+                                    .size()
+                                    .x
+                                    + 8.0;
+                                let when = egui::RichText::new(when_text).size(10.5).color(pal.text_weak);
+                                if let Some(sm) = t.summary.as_deref().filter(|x| !x.trim().is_empty()) {
+                                    ui.add_space(14.0);
+                                    ui.scope(|ui| {
+                                        ui.set_max_width((ui.available_width() - when_w).max(24.0));
+                                        ui.add(
+                                            egui::Label::new(
+                                                egui::RichText::new(sm).size(10.5).italics().color(pal.text_weak),
+                                            )
+                                            .truncate(),
+                                        );
+                                    });
+                                }
+                                ui.with_layout(egui::Layout::right_to_left(egui::Align::Min), |ui| {
+                                    ui.label(when);
+                                });
                             });
                         });
                         // Detalhes saem da linha e vão para o tooltip.
                         let mut tip = format!("{}\n{}", origin_label(t), fmt_exact(&t.last_activity_at));
+                        if let Some(sm) = t.summary.as_deref().filter(|x| !x.trim().is_empty()) {
+                            tip.push_str("\n\n");
+                            tip.push_str(sm);
+                        }
                         if t.pending > 0 {
                             tip.push('\n');
                             tip.push_str(&trf("{} pendente(s)", &[&t.pending]));
@@ -855,6 +887,19 @@ impl ThreadsPage {
                         .small()
                         .weak(),
                 );
+            }
+            if let Some(sm) = t.summary.as_deref().filter(|x| !x.trim().is_empty()) {
+                ui.add_space(4.0);
+                ui.add(
+                    egui::Label::new(
+                        egui::RichText::new(sm)
+                            .small()
+                            .italics()
+                            .color(pal_text_weak(ui)),
+                    )
+                    .truncate(),
+                )
+                .on_hover_text(sm);
             }
             if t.session_expired {
                 ui::badge(

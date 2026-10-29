@@ -88,7 +88,7 @@ cargo test --workspace
 scripts/smoke.sh                               # ponta a ponta com fake-claude (will-ia serve)
 ```
 
-Os dois binários ficam **lado a lado** (o servidor acha o app na própria pasta ou no PATH). Executar `will-ia` com o servidor já no ar apenas abre o app e sai; executar `will-ia-app` com o app já aberto só traz a janela para frente. Fechar a janela do app a oculta; o servidor é o processo residente (sem "Sair"; só kill forçado). Detalhes em [`docs/13`](docs/13-plataformas-e-distribuicao.md) e [`docs/26`](docs/26-cliente-servidor.md).
+Os dois binários ficam **lado a lado** (o servidor acha o app na própria pasta ou no PATH). Executar `will-ia` com o servidor já no ar apenas abre o app e sai; executar `will-ia-app` com o app já aberto só traz a janela para frente. Fechar a janela do app (botões nativos do SO) encerra o app; o servidor é o processo residente (sem "Sair"; só kill forçado). Detalhes em [`docs/13`](docs/13-plataformas-e-distribuicao.md) e [`docs/26`](docs/26-cliente-servidor.md).
 
 ## Modo portátil (pendrive)
 
