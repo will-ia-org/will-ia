@@ -5,6 +5,10 @@
 //! `<config do app>/permissions-pass.json` guarda a versão da passagem, para não
 //! repetir. Fora do macOS tudo aqui é inerte.
 
+// Fora do macOS quase tudo deste módulo fica sem uso (o CI Linux/Windows roda com
+// `-D warnings`): silencia só aqui, em vez de espalhar `cfg` por campo e import.
+#![cfg_attr(not(target_os = "macos"), allow(dead_code, unused_imports))]
+
 use crate::i18n::tr;
 use crate::pages::Cx;
 use crate::ui::{self, Tone};

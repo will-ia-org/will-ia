@@ -18,8 +18,10 @@ use will_core::{Event, Module};
 const DEFAULT_SECRET_KEY: &str = "google_client_secret";
 
 /// Escopos lógicos oferecidos ao conectar: (chave aceita pelo serviço, rótulo pt-BR;
-/// traduzir com `tr` ao exibir).
-const SCOPE_OPTIONS: [(&str, &str); 7] = [
+/// traduzir com `tr` ao exibir). `N_SCOPES` dimensiona os vetores de marcação —
+/// um índice fora do tamanho derrubava o app ao abrir "Conectar conta".
+const N_SCOPES: usize = 7;
+const SCOPE_OPTIONS: [(&str, &str); N_SCOPES] = [
     ("calendar", "Agenda (ler)"),
     ("calendar_write", "Agenda (criar/editar)"),
     ("gmail", "Gmail (ler)"),
@@ -42,7 +44,9 @@ pub struct GooglePage {
     calendars: Loader<Value>,
     client_secret: SecretField,
     show_connect: bool,
-    connect_scopes: [bool; 5],
+    connect_scopes: [bool; N_SCOPES],
+    /// Reautorização com escolha de escopos: (id da conta, marcação por opção).
+    reauth_pick: Option<(String, [bool; N_SCOPES])>,
     flow: Option<Flow>,
     /// URL de autorização a abrir no navegador do cliente (uma vez).
     open_url_once: Option<String>,
@@ -60,7 +64,8 @@ impl Default for GooglePage {
             calendars: Loader::default(),
             client_secret: SecretField::default(),
             show_connect: false,
-            connect_scopes: [true, false, true, false, false],
+            connect_scopes: [true, false, true, false, false, false, false],
+            reauth_pick: None,
             flow: None,
             open_url_once: None,
             disconnect_task: None,
@@ -146,7 +151,11 @@ impl GooglePage {
                 Some(id) => {
                     c.google_reauthorize(
                         id,
-                        Some(json!({ "callback_port": port, "open_browser": false })),
+                        Some(json!({
+                            "callback_port": port,
+                            "open_browser": false,
+                            "scopes": scopes,
+                        })),
                     )
                     .await?
                 }
@@ -453,6 +462,25 @@ impl GooglePage {
                                 }
                                 ui.label(egui::RichText::new(format!("· id {id}")).weak().small());
                             });
+                            let missing = missing_scopes(a, &st.saved);
+                            if !missing.is_empty() {
+                                ui.horizontal_wrapped(|ui| {
+                                    ui.spacing_mut().item_spacing.x = 6.0;
+                                    ui.label(
+                                        egui::RichText::new(tr("faltam para os módulos ligados:"))
+                                            .small()
+                                            .color(Tone::Warning.color(ui.visuals().dark_mode)),
+                                    );
+                                    for k in &missing {
+                                        let label = SCOPE_OPTIONS
+                                            .iter()
+                                            .find(|(kk, _)| kk == k)
+                                            .map(|(_, l)| tr(l))
+                                            .unwrap_or(k);
+                                        ui::badge(ui, label, Tone::Warning);
+                                    }
+                                });
+                            }
                             ui.horizontal(|ui| {
                                 let reauthorizing = self
                                     .flow
@@ -462,11 +490,24 @@ impl GooglePage {
                                 if reauthorizing {
                                     ui.spinner();
                                 }
+                                let picking = self
+                                    .reauth_pick
+                                    .as_ref()
+                                    .is_some_and(|(pid, _)| pid == &id);
                                 if ui
-                                    .add_enabled(!busy_flow, egui::Button::new(tr("Reautorizar")))
+                                    .add_enabled(
+                                        !busy_flow && !picking,
+                                        egui::Button::new(tr("Reautorizar / ampliar escopos")),
+                                    )
+                                    .on_hover_text(tr("Renova o consentimento e permite acrescentar escopos (ex.: Drive) sem desconectar a conta."))
                                     .clicked()
                                 {
-                                    self.start_oauth(cx, Some(id.clone()), None, redirect_port);
+                                    let granted = granted_logical(a);
+                                    let mut pick = [false; N_SCOPES];
+                                    for (i, (k, _)) in SCOPE_OPTIONS.iter().enumerate() {
+                                        pick[i] = granted.contains(k) || missing.contains(k);
+                                    }
+                                    self.reauth_pick = Some((id.clone(), pick));
                                 }
                                 if ui
                                     .add_enabled(
@@ -478,6 +519,51 @@ impl GooglePage {
                                     self.confirm_disconnect = Some((id.clone(), email.clone()));
                                 }
                             });
+                            if let Some((_, pick)) = self
+                                .reauth_pick
+                                .as_mut()
+                                .filter(|(pid, _)| pid == &id)
+                            {
+                                let granted = granted_logical(a);
+                                ui.add_space(4.0);
+                                ui.label(
+                                    egui::RichText::new(tr(
+                                        "Escopos desta conta (os já concedidos continuam; marque os novos):",
+                                    ))
+                                    .small(),
+                                );
+                                for (i, (k, label)) in SCOPE_OPTIONS.iter().enumerate() {
+                                    let has = granted.contains(k);
+                                    if has {
+                                        pick[i] = true;
+                                    }
+                                    ui.add_enabled(!has, egui::Checkbox::new(&mut pick[i], tr(label)));
+                                }
+                                let mut go = None;
+                                ui.horizontal(|ui| {
+                                    if ui::primary_button(ui, tr("Abrir navegador para autorizar"))
+                                        .clicked()
+                                    {
+                                        go = Some(
+                                            SCOPE_OPTIONS
+                                                .iter()
+                                                .zip(pick.iter())
+                                                .filter(|(_, on)| **on)
+                                                .map(|((k, _), _)| k.to_string())
+                                                .collect::<Vec<_>>(),
+                                        );
+                                    }
+                                    if ui.button(tr("Cancelar")).clicked() {
+                                        go = Some(Vec::new());
+                                    }
+                                });
+                                if let Some(scopes) = go {
+                                    self.reauth_pick = None;
+                                    if !scopes.is_empty() {
+                                        self.start_oauth(cx, Some(id.clone()), Some(scopes), redirect_port);
+                                    }
+                                }
+                            }
                         });
                 }
 
@@ -1029,6 +1115,83 @@ fn scope_labels(account: &Value) -> Vec<String> {
     out
 }
 
+/// Chaves lógicas (`SCOPE_OPTIONS`) que a conta já tem, a partir das URLs
+/// concedidas. `drive` completo implica `drive` (ler); `calendar.events`
+/// implica `calendar` (ler) etc.
+fn granted_logical(account: &Value) -> Vec<&'static str> {
+    let Some(arr) = account.get("scopes").and_then(|s| s.as_array()) else {
+        return Vec::new();
+    };
+    let mut out: Vec<&'static str> = Vec::new();
+    let mut add = |k: &'static str| {
+        if !out.contains(&k) {
+            out.push(k);
+        }
+    };
+    for sc in arr.iter().filter_map(|s| s.as_str()) {
+        match sc {
+            s if s.ends_with("calendar.readonly") || s == "calendar" || s == "calendar_read" => {
+                add("calendar")
+            }
+            s if s.ends_with("calendar.events")
+                || s.ends_with("/auth/calendar")
+                || s == "calendar_write" =>
+            {
+                add("calendar");
+                add("calendar_write");
+            }
+            s if s.ends_with("gmail.readonly") || s == "gmail" || s == "gmail_read" => add("gmail"),
+            s if s.ends_with("gmail.send") || s == "gmail_send" => {
+                add("gmail");
+                add("gmail_send");
+            }
+            s if s.ends_with("gmail.modify") || s == "gmail_modify" => {
+                add("gmail");
+                add("gmail_modify");
+            }
+            s if s.ends_with("drive.readonly") || s == "drive" || s == "drive_read" => add("drive"),
+            s if s.ends_with("/auth/drive") || s == "drive_write" => {
+                add("drive");
+                add("drive_write");
+            }
+            _ => {}
+        }
+    }
+    out
+}
+
+/// Escopos que os módulos **ligados** nas configurações exigem e a conta ainda
+/// não concedeu — é o que o "Reautorizar / ampliar escopos" sugere.
+fn missing_scopes(account: &Value, settings: &will_core::settings::Settings) -> Vec<&'static str> {
+    let granted = granted_logical(account);
+    let mut wanted: Vec<&'static str> = Vec::new();
+    if settings.calendar.enabled {
+        wanted.push(if settings.calendar.allow_write {
+            "calendar_write"
+        } else {
+            "calendar"
+        });
+    }
+    if settings.gmail.enabled {
+        wanted.push("gmail");
+        if settings.gmail.allow_send {
+            wanted.push("gmail_send");
+        }
+        if settings.gmail.allow_modify {
+            wanted.push("gmail_modify");
+        }
+    }
+    if settings.drive.enabled {
+        wanted.push(if settings.drive.allow_write {
+            "drive_write"
+        } else {
+            "drive"
+        });
+    }
+    wanted.retain(|w| !granted.contains(w));
+    wanted
+}
+
 fn role_label(role: &str) -> String {
     match role {
         "owner" => tr("dona").into(),
@@ -1073,6 +1236,30 @@ mod tests {
         );
         assert_eq!(parse_hex_color("#abc"), None);
         assert_eq!(parse_hex_color(""), None);
+    }
+
+    #[test]
+    fn granted_and_missing_scopes() {
+        let a = serde_json::json!({"scopes": ["openid", "https://www.googleapis.com/auth/gmail.modify", "https://www.googleapis.com/auth/calendar.readonly"]});
+        let g = granted_logical(&a);
+        assert_eq!(g, vec!["gmail", "gmail_modify", "calendar"]);
+        let mut st = will_core::settings::Settings::fresh();
+        st.calendar.enabled = true;
+        st.calendar.allow_write = true;
+        st.gmail.enabled = true;
+        st.gmail.allow_send = true;
+        st.gmail.allow_modify = true;
+        st.drive.enabled = true;
+        st.drive.allow_write = false;
+        assert_eq!(
+            missing_scopes(&a, &st),
+            vec!["calendar_write", "gmail_send", "drive"]
+        );
+        st.drive.enabled = false;
+        assert_eq!(
+            missing_scopes(&a, &st),
+            vec!["calendar_write", "gmail_send"]
+        );
     }
 
     #[test]

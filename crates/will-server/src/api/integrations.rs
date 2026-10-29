@@ -590,6 +590,9 @@ pub struct ConnectBody {
 pub struct ReauthBody {
     pub open_browser: Option<bool>,
     pub callback_port: Option<u16>,
+    /// Escopos lógicos a **acrescentar** (consentimento incremental); os já
+    /// concedidos e os exigidos pelos módulos ligados entram sempre.
+    pub scopes: Option<Vec<String>>,
 }
 
 #[derive(serde::Deserialize)]
@@ -636,7 +639,7 @@ pub async fn google_reauthorize(
         let b = body.map(|b| b.0).unwrap_or_default();
         let open = b.open_browser.unwrap_or(b.callback_port.is_none());
         let start = g
-            .reauthorize(&id, open, b.callback_port)
+            .reauthorize(&id, b.scopes.unwrap_or_default(), open, b.callback_port)
             .await
             .map_err(bad)?;
         Ok(Json(

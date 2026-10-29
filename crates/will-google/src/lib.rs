@@ -294,10 +294,12 @@ impl GoogleModule {
     }
 
     /// Reautoriza uma conta existente (consentimento incremental: inclui os
-    /// escopos já concedidos antes).
+    /// escopos já concedidos, os exigidos pelos módulos ligados e os `extra`
+    /// pedidos pelo cliente — ex.: acrescentar o Drive a uma conta antiga).
     pub async fn reauthorize(
         &self,
         account_id: &str,
+        extra: Vec<String>,
         open_browser: bool,
         callback_port: Option<u16>,
     ) -> Result<ConnectStart, String> {
@@ -327,6 +329,17 @@ impl GoogleModule {
                 wanted.push("gmail_modify".into());
             }
         }
+        if cfg.drive.enabled {
+            wanted.push(
+                if cfg.drive.allow_write {
+                    "drive_write"
+                } else {
+                    "drive"
+                }
+                .to_string(),
+            );
+        }
+        wanted.extend(extra);
         let urls = oauth::logical_to_scopes(&wanted).map_err(|e| e.to_string())?;
         let urls = oauth::merge_scopes(&urls, &account.scopes);
         self.begin_flow(urls, Some(account), open_browser, callback_port)

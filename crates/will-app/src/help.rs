@@ -336,6 +336,7 @@ pub const GOOGLE_DRIVE: Help = Help {
     links: &[("Drive: sintaxe de busca", "https://developers.google.com/drive/api/guides/search-files")],
 };
 
+#[cfg_attr(not(target_os = "macos"), allow(dead_code))]
 pub const MACOS_PERMISSIONS: Help = Help {
     title: "Permissões do macOS",
     intro: "O will-ia pede tudo de uma vez na primeira abertura depois de instalar: microfone (voz) e notificações pelo app; Arquivos e Pastas pelo servidor, ao tocar na base de conhecimento. O instalador assina os binários com uma identidade estável, então a concessão continua valendo depois de atualizar.",
