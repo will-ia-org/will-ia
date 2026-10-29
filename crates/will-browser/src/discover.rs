@@ -40,9 +40,28 @@ pub fn parse_devtools_active_port(s: &str) -> Option<DevToolsActivePort> {
 /// Lê `<dir>/DevToolsActivePort`. O Chrome apaga o arquivo ao sair, então
 /// existir já é um bom sinal de navegador vivo.
 pub fn read_devtools_active_port(dir: &Path) -> Option<DevToolsActivePort> {
+    try_read_devtools_active_port(dir).ok().flatten()
+}
+
+/// Como `read_devtools_active_port`, mas distingue "não existe" (`Ok(None)`) de
+/// "não consegui ler" (`Err`): no macOS a pasta do perfil do Chrome é protegida
+/// (TCC) e um serviço sem *Acesso Total ao Disco* recebe `Operation not permitted`.
+pub fn try_read_devtools_active_port(dir: &Path) -> Result<Option<DevToolsActivePort>, String> {
     let p = dir.join("DevToolsActivePort");
-    let s = std::fs::read_to_string(p).ok()?;
-    parse_devtools_active_port(&s)
+    match std::fs::read_to_string(&p) {
+        Ok(s) => Ok(parse_devtools_active_port(&s)),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(None),
+        Err(e) if e.kind() == std::io::ErrorKind::PermissionDenied => Err(format!(
+            "sem permissão para ler {} ({e}){}",
+            p.display(),
+            if cfg!(target_os = "macos") {
+                " — conceda Acesso Total ao Disco ao will-ia em Ajustes do Sistema → Privacidade e Segurança"
+            } else {
+                ""
+            }
+        )),
+        Err(e) => Err(format!("{}: {e}", p.display())),
+    }
 }
 
 /// Perfil conhecido: nome legível + pasta `user-data-dir`.

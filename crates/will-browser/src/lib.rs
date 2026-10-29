@@ -12,9 +12,10 @@
 //! - antes de qualquer repasse, garante o upstream (`ensure_upstream`):
 //!   1. `GET /json/version` em cada host candidato (`localhost` = `127.0.0.1` **e** `[::1]`);
 //!   2. porta aberta mas sem `/json/*` (Chrome sem `--remote-allow-origins`, caso do perfil
-//!      principal do usuário com depuração ligada por outro app): lê `DevToolsActivePort`
-//!      do perfil dedicado e, com `attach_existing`, dos perfis do usuário, e valida com um
-//!      handshake WebSocket + `Browser.getVersion`. Nesse modo o proxy **sintetiza**
+//!      principal do usuário com depuração ligada por outro app): tenta o WebSocket do
+//!      navegador **sem token** (`/devtools/browser`, aceito pelo Chrome recente) e, se
+//!      recusado, lê `DevToolsActivePort` do perfil dedicado e, com `attach_existing`, dos
+//!      perfis do usuário; valida com `Browser.getVersion`. Nesse modo o proxy **sintetiza**
 //!      `/json/version`, `/json/list`, `/json/new`, `/json/activate`, `/json/close` por CDP;
 //!   3. porta ocupada por algo que não reconhece → erro acionável (**não** lança um segundo
 //!      navegador na mesma porta);
@@ -435,7 +436,52 @@ impl BrowserModule {
             self.clear_upstream();
             return Err(errors.join("; "));
         }
-        // Porta aberta, mas sem HTTP de descoberta: DevToolsActivePort + handshake.
+        // Porta aberta, mas sem HTTP de descoberta.
+        // 1) Chrome recente aceita o WebSocket do navegador SEM o token
+        //    (`/devtools/browser`), o que dispensa ler o DevToolsActivePort
+        //    (no macOS a pasta do perfil é protegida por TCC).
+        let mut tried = 0usize;
+        for authority in &open {
+            let ws = format!("ws://{authority}/devtools/browser");
+            tried += 1;
+            let cached = self.upstream.read().clone();
+            if let Some(cur) = cached {
+                if cur.browser_ws == ws && !cur.http_discovery {
+                    return Ok(cur);
+                }
+            }
+            match self
+                .cdp_call(
+                    &ws,
+                    "Browser.getVersion",
+                    serde_json::json!({}),
+                    Duration::from_secs(4),
+                )
+                .await
+            {
+                Ok(v) => {
+                    let up = Upstream {
+                        authority: authority.clone(),
+                        browser_ws: ws,
+                        browser: v.get("product").and_then(|b| b.as_str()).map(String::from),
+                        http_discovery: false,
+                        source: "websocket sem token (/devtools/browser)".into(),
+                    };
+                    self.log(
+                        "info",
+                        format!(
+                            "navegador reconhecido pelo WebSocket sem token em {} ({}); /json/* será sintetizado pelo proxy",
+                            up.authority,
+                            up.browser.clone().unwrap_or_default()
+                        ),
+                    );
+                    self.set_upstream(up.clone());
+                    return Ok(up);
+                }
+                Err(e) => errors.push(format!("{ws}: {e}")),
+            }
+        }
+        // 2) DevToolsActivePort (perfil dedicado + perfis do usuário) + handshake.
         let mut profiles = vec![discover::ProfileDir {
             name: "perfil dedicado".into(),
             dir: self.user_data_dir(),
@@ -443,10 +489,16 @@ impl BrowserModule {
         if attach_existing {
             profiles.extend(discover::user_profile_dirs());
         }
-        let mut tried = 0usize;
+        let mut unreadable = 0usize;
         for prof in &profiles {
-            let Some(dap) = discover::read_devtools_active_port(&prof.dir) else {
-                continue;
+            let dap = match discover::try_read_devtools_active_port(&prof.dir) {
+                Ok(Some(d)) => d,
+                Ok(None) => continue,
+                Err(e) => {
+                    unreadable += 1;
+                    errors.push(format!("{}: {e}", prof.name));
+                    continue;
+                }
             };
             let dedicated = prof.name == "perfil dedicado";
             // Perfis do usuário só valem na porta configurada; o dedicado pode ter mudado.
@@ -504,17 +556,19 @@ impl BrowserModule {
         }
         self.clear_upstream();
         let busy = open.join(", ");
-        let hint = if tried == 0 {
+        let hint = if unreadable > 0 {
             format!(
-                "porta ocupada ({busy}) por um processo sem /json/version e sem DevToolsActivePort compatível{}",
+                "porta ocupada ({busy}) por um navegador sem /json/version; o WebSocket sem token foi recusado e há DevToolsActivePort em perfil do usuário que o serviço NÃO TEM PERMISSÃO de ler"
+            )
+        } else {
+            format!(
+                "porta ocupada ({busy}) por um navegador sem /json/version e o handshake CDP falhou ({tried} tentativa(s){})",
                 if attach_existing {
                     ""
                 } else {
-                    " (attach_existing desligado: perfis do usuário não foram olhados)"
+                    "; attach_existing desligado: perfis do usuário não foram olhados"
                 }
             )
-        } else {
-            format!("porta ocupada ({busy}) e o handshake CDP falhou")
         };
         Err(format!("{hint}; detalhes: {}", errors.join("; ")))
     }

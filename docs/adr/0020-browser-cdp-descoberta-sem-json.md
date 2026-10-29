@@ -8,7 +8,7 @@ O proxy CDP (`will-browser`) só reconhecia um navegador por `GET /json/version`
 
 ## Decisão
 
-1. **Descoberta em camadas**: HTTP `/json/version` em cada host candidato (`localhost` → `127.0.0.1` e `[::1]`); se a porta está aberta sem HTTP, `DevToolsActivePort` (perfil dedicado sempre; perfis do usuário quando `attach_existing = true`, padrão) validado por `Browser.getVersion`.
+1. **Descoberta em camadas**: HTTP `/json/version` em cada host candidato (`localhost` → `127.0.0.1` e `[::1]`); se a porta está aberta sem HTTP, **WebSocket sem token** em `/devtools/browser` (Chrome recente aceita; não lê arquivo nenhum, independe de TCC) e, se recusado, `DevToolsActivePort` (perfil dedicado sempre; perfis do usuário quando `attach_existing = true`, padrão); tudo validado por `Browser.getVersion`.
 2. **Síntese**: sem HTTP no navegador, o proxy responde `/json/version|list|new|activate|close` a partir de `Browser.getVersion`/`Target.*`, por uma **única conexão de controle** reaproveitada.
 3. **Porta ocupada por desconhecido → não lançar** outro navegador; erro acionável. Lançamento automático só com a porta livre.
 4. **Erros em JSON** (`503`/`502` `{"error","upstream","hint"}`) nos endpoints de descoberta.

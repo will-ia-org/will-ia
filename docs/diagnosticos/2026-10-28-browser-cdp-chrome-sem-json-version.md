@@ -151,3 +151,17 @@ Em `crates/will-browser` (`src/lib.rs` + novo `src/discover.rs`):
 
 Status: `upstream_authority`, `upstream_source` (`http` / `DevToolsActivePort (<perfil>)`), `upstream_http_discovery`.
 Testes: `tests/proxy.rs` → `attaches_via_devtools_active_port_when_http_is_404`, `busy_port_without_cdp_discovery_does_not_launch`; unitários em `discover.rs`.
+
+## 9. Validação na máquina de origem (2026-10-28 23:12, binário release instalado)
+
+- Primeira tentativa com só `DevToolsActivePort`: falhou — **macOS TCC**: um processo do launchd recebe
+  `Operation not permitted` ao ler `~/Library/Application Support/Google/Chrome/DevToolsActivePort`
+  (no terminal funciona porque ele tem Acesso Total ao Disco). Reproduzido com um LaunchAgent `cat`.
+- Descoberto que o Chrome 156 aceita o WebSocket do navegador **sem token** (`ws://127.0.0.1:9222/devtools/browser` → 101).
+  Adicionado como primeira alternativa; dispensa o arquivo e não depende de permissão de disco.
+- Resultado: `GET http://127.0.0.1:9223/json/version` → 200 sintetizado (`Chrome/156.0.8078.48`,
+  `webSocketDebuggerUrl: ws://127.0.0.1:9223/devtools/browser`); `/json/list` → 24 alvos do Chrome real;
+  `agent-browser --session x open https://example.com` + `snapshot` + `screenshot` + `close` OK pelo proxy;
+  status `upstream_source = websocket sem token (/devtools/browser)`, `upstream_authority = 127.0.0.1:9222`.
+- Portabilidade: TCP/HTTP/WebSocket puros; caminhos de perfil para macOS, Linux e Windows em `discover::user_profile_dirs`;
+  a dica de Acesso Total ao Disco só aparece no macOS.
