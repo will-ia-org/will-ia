@@ -227,6 +227,9 @@ fn section_label(s: &str) -> &str {
 pub struct SettingsPages {
     pub state: SettingsState,
     pub general: general::GeneralPage,
+    /// Aba "Status do serviço" de Geral (antiga página Início): módulos, motor,
+    /// primeiros passos e permissões do macOS.
+    pub status: crate::pages::dashboard::DashboardPage,
     pub engine: engine::EnginePage,
     pub kb: kb::KbPage,
     pub voice: voice::VoicePage,
@@ -242,6 +245,7 @@ pub struct SettingsPages {
 
 impl SettingsPages {
     pub fn on_event(&mut self, ev: &will_core::Event) {
+        self.status.on_event(ev);
         self.engine.on_event(ev);
         self.voice.on_event(ev);
         self.telegram.on_event(ev);
@@ -266,7 +270,28 @@ impl SettingsPages {
         }
         let st = &mut self.state;
         match sec {
-            SettingsSection::General => self.general.ui(ui, cx, st),
+            SettingsSection::General => {
+                ui::heading(
+                    ui,
+                    tr("Geral"),
+                    Some(tr(
+                        "Comportamento do aplicativo nesta máquina e estado do serviço.",
+                    )),
+                );
+                let tab = ui::tabs(
+                    ui,
+                    "general",
+                    &[
+                        ui::Tab::new("settings", tr("Aplicativo")),
+                        ui::Tab::new("status", tr("Status do serviço")),
+                    ],
+                );
+                if tab == "status" {
+                    self.status.ui(ui, cx);
+                } else {
+                    self.general.ui(ui, cx, st);
+                }
+            }
             SettingsSection::Engine => self.engine.ui(ui, cx, st),
             SettingsSection::Kb => self.kb.ui(ui, cx, st),
             SettingsSection::Voice => self.voice.ui(ui, cx, st),

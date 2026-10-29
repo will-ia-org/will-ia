@@ -154,6 +154,8 @@ pub static TABLE: &[(&str, &str)] = &[
     ("Segredo: {}", "Secret: {}"),
     ("Salvar", "Save"),
     ("Descartar", "Discard"),
+    ("Status do serviço", "Service status"),
+    ("Comportamento do aplicativo nesta máquina e estado do serviço.", "Behavior of the app on this machine and service status."),
     ("{}s", "{}s"),
     ("parar", "stop"),
     ("pasta acima", "parent folder"),

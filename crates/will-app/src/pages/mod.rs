@@ -87,7 +87,6 @@ impl SettingsSection {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum Nav {
-    Dashboard,
     Threads,
     Schedules,
     Browser,
@@ -100,7 +99,7 @@ pub enum Nav {
 }
 
 impl Nav {
-    /// `dashboard`, `threads`, `schedules`, `browser`, `approvals`, `logs`, `costs`,
+    /// `dashboard`/`status` (= Geral → Status), `threads`, `schedules`, `browser`, `approvals`, `logs`, `costs`,
     /// `users`, `general`, `engine`, `kb`, `voice`, `telegram`, `mcp`, `external`, `whatsapp`,
     /// `google`, `scheduler`, `browser-settings`, `network`. A tela de entrada
     /// (`connect`) não é uma página: aparece sozinha quando não há conexão.
@@ -108,7 +107,8 @@ impl Nav {
     /// seleciona a aba com `ui::select_tab`; a chave da aba é a do `ui::Tab`).
     pub fn parse(s: &str) -> Option<Nav> {
         Some(match s {
-            "dashboard" => Nav::Dashboard,
+            // "Início" virou a aba Status de Configurações → Geral (2026-10-29).
+            "dashboard" | "status" => Nav::Settings(SettingsSection::General),
             "threads" => Nav::Threads,
             "schedules" => Nav::Schedules,
             "browser" => Nav::Browser,
@@ -179,7 +179,6 @@ pub struct Pages {
     /// Tela de entrada (perfis/login); desenhada pelo app no lugar das páginas
     /// quando não há conexão, e dona do modal de troca obrigatória de senha.
     pub connect: connect::ConnectPage,
-    pub dashboard: dashboard::DashboardPage,
     pub threads: threads::ThreadsPage,
     pub schedules: schedules::SchedulesPage,
     pub browser: browser::BrowserPage,
@@ -192,7 +191,6 @@ pub struct Pages {
 
 impl Pages {
     pub fn on_event(&mut self, ev: &Event) {
-        self.dashboard.on_event(ev);
         self.threads.on_event(ev);
         self.schedules.on_event(ev);
         self.browser.on_event(ev);
@@ -204,7 +202,6 @@ impl Pages {
 
     pub fn ui(&mut self, ui: &mut egui::Ui, nav: Nav, cx: &mut Cx) {
         match nav {
-            Nav::Dashboard => self.dashboard.ui(ui, cx),
             Nav::Threads => self.threads.ui(ui, cx),
             Nav::Schedules => self.schedules.ui(ui, cx),
             Nav::Browser => self.browser.ui(ui, cx),

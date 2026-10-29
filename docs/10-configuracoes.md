@@ -1,6 +1,6 @@
 # 10 — Configurações (UI e esquema)
 
-Janela nativa (egui/eframe, crate `will-app`, binário `will-ia-app`, cliente do servidor `will-ia`; `docs/26`) com navegação lateral: páginas Dashboard, Threads, Aprovações, Agendamentos, Browser CDP, Logs, Custos, **Conexão** e Configurações (seções abaixo). Cada seção mapeia para um sub-struct de `Settings`. Segredos não ficam em `Settings`: ficam no keyring e `Settings` guarda apenas referências (`secret_ref`).
+Janela nativa (egui/eframe, crate `will-app`, binário `will-ia-app`, cliente do servidor `will-ia`; `docs/26`) com navegação lateral: páginas Threads (abre nela), Aprovações, Agendamentos, Browser CDP, Logs, Custos, **Conexão** e Configurações (seções abaixo). Cada seção mapeia para um sub-struct de `Settings`. Segredos não ficam em `Settings`: ficam no keyring e `Settings` guarda apenas referências (`secret_ref`).
 
 ## Seções e campos
 
@@ -198,7 +198,9 @@ Detalhes em [25](25-browser-cdp.md). A página **Browser CDP** (fora de Configur
 ### MCP (complemento)
 Tabela de ferramentas agrupada por família com coluna **Política** (`auto` / `confirmar` / `desligada`) e timeout de aprovação (min, padrão 5). Painel **Aprovações pendentes** com ✅/❌ e detalhe dos argumentos.
 
-### Dashboard
+### Status do serviço (aba de Geral; era a página "Início"/Dashboard até 2026-10-29)
+
+O app abre direto em **Threads**. O conteúdo do antigo Início vive em Configurações → Geral → aba **Status do serviço** (`--nav general/status`; `--nav dashboard` e `--nav status` levam ao mesmo lugar): primeiros passos (só enquanto faltar algo), cartão de permissões do macOS, grade de módulos e estatísticas do motor (com a linha da base de conhecimento). "Ações rápidas" e a seção própria da KB saíram (já existem em Threads, Logs, Voz e Base de conhecimento).
 Status dos módulos, base de conhecimento, motor (processos vivos, token ativo) e aprovações pendentes.
 
 ### Threads
@@ -229,7 +231,7 @@ Conectar troca o servidor **sem reiniciar o app**: fecha o WS, limpa o snapshot 
 Aparece na navegação só quando o `Principal` atual é admin (membros recebem 403 nas rotas e o item some). Tabela de `GET /api/users`: usuário, nome, e-mail, papel, estado (ativo/desativado), último login, "troca de senha pendente". Ações: **Novo usuário** (usuário `[a-z0-9._-]`, nome, e-mail opcional, papel, senha inicial ≥ 8 — gerada aleatoriamente por padrão, com Copiar — e "obrigar troca no primeiro login", ligado por padrão → `POST /api/users`); **Editar** (nome, e-mail, papel → `PATCH`); **Redefinir senha** (`PATCH` com `password`: força troca no próximo login e derruba as sessões); **Desativar / Reativar** (`PATCH active`; `DELETE` também só desativa; a própria conta não pode ser desativada nem rebaixada, o botão fica desabilitado com tooltip); **Sessões** (modal com `GET /api/users/{id}/sessions`: criada em, expira em, último uso, cliente). Usuários desativados ficam listados, em cinza, porque a autoria histórica aponta para eles.
 
 ### Navegação por papel
-O menu **Configurações** (todas as seções desta página) e **Usuários** só aparecem para `admin`; para membros ficam Dashboard, Threads, Agendamentos, Browser CDP (sem o cartão Instalação), Aprovações, Logs, Custos e Conexão. O app decide pelo `role` de `GET /api/auth/me` (snapshot) e, por garantia, trata qualquer 403 como "só administradores" num toast. "Esta máquina" com o token local é sempre admin.
+O menu **Configurações** (todas as seções desta página) e **Usuários** só aparecem para `admin`; para membros ficam Threads, Agendamentos, Browser CDP (sem o cartão Instalação), Aprovações, Logs, Custos e Conexão. O app decide pelo `role` de `GET /api/auth/me` (snapshot) e, por garantia, trata qualquer 403 como "só administradores" num toast. "Esta máquina" com o token local é sempre admin.
 
 ### Logs
 Visor estilo terminal (monoespaçado, uma linha por registro: hora · nível · módulo · mensagem, mesmas cores nos dois temas) com histórico do banco + cauda ao vivo; filtro de texto com destaque, nível mínimo, módulo, seguir, quebrar linhas, data, pausar ao vivo, copiar visíveis, limpar tela e abrir a pasta de logs.
@@ -288,7 +290,7 @@ Página com **duas ou mais seções independentes** não empilha cartões numa r
 | Configurações › Rede | `network` | `listen` Escuta · `cert` Certificado em uso |
 | Browser CDP (página) | `browser` | `status` Status · `install` Instalação · `tests` Testes · `traffic` Tráfego CDP (ao vivo) |
 
-Ficam sem abas as páginas curtas de uma seção (Geral, Agendamentos, Browser CDP em Configurações) e as de lista + formulário (MCPs externos, Agendamentos, Usuários, Custos, Início). Em **Custos**, o filtro "Fonte" lista todas as fontes gravadas em `ai_costs` (`voice`, `voice_stt`, `voice_tts`, `voice_summary`, `claude`, `thread_summary`, `telegram_*`) mais qualquer valor novo visto nos dados (rótulo = valor bruto), e vale para o resumo e para os registros. Aprovações usa abas (`pending` · `history`).
+Ficam sem abas as páginas curtas de uma seção (Agendamentos, Browser CDP em Configurações) e as de lista + formulário (MCPs externos, Agendamentos, Usuários, Custos); Geral tem as abas Aplicativo · Status do serviço. Em **Custos**, o filtro "Fonte" lista todas as fontes gravadas em `ai_costs` (`voice`, `voice_stt`, `voice_tts`, `voice_summary`, `claude`, `thread_summary`, `telegram_*`) mais qualquer valor novo visto nos dados (rótulo = valor bruto), e vale para o resumo e para os registros. Aprovações usa abas (`pending` · `history`).
 
 ### Ícones
 
@@ -302,11 +304,11 @@ Ficam sem abas as páginas curtas de uma seção (Geral, Agendamentos, Browser C
 
 **Idioma (i18n).** Sem crates externas: os textos da UI ficam em pt-BR no código e são a própria chave. `i18n::tr("Salvar")` devolve o texto no idioma corrente; `i18n::trf("Criados: {}", &[&n])` preenche marcadores `{}` em ordem. A tabela `i18n::TABLE` guarda os pares `(pt-BR, en)`; chave ausente devolve o pt-BR. O idioma vem de Geral › Idioma (`settings.general.language`) e o app chama `set_language` a cada quadro a partir do snapshot, então salvar a seção troca a UI inteira no quadro seguinte (exceções: o menu da bandeja em Windows/macOS é construído na inicialização e só atualiza o item de voz). Testes garantem chaves únicas e mesma quantidade de `{}` nos dois idiomas. Não se traduzem ids, nomes de nível de log, URLs, modelos e textos técnicos copiáveis (ex.: `export …`).
 
-**Estado dos módulos** (`will_core::ModuleStatus`, bolinhas do Início e do menu lateral; rótulo em `ui::module_label`):
+**Estado dos módulos** (`will_core::ModuleStatus`, bolinhas da aba Status e do menu lateral; rótulo em `ui::module_label`):
 
 | Cor | Estado | Significado |
 |---|---|---|
-| verde | `Running` → "pronto" | habilitado, configurado e operacional, mesmo ocioso (motor: token ativo + KB ok; voz: habilitada + chave; Google: conta conectada; Telegram: polling no ar; WhatsApp: conta conectada; MCP: ouvindo; Browser CDP: proxy escutando, mesmo sem navegador aberto). O Início acrescenta detalhes ("N processo(s) vivo(s)", "em sessão", "N conta(s)") |
+| verde | `Running` → "pronto" | habilitado, configurado e operacional, mesmo ocioso (motor: token ativo + KB ok; voz: habilitada + chave; Google: conta conectada; Telegram: polling no ar; WhatsApp: conta conectada; MCP: ouvindo; Browser CDP: proxy escutando, mesmo sem navegador aberto). A aba Status acrescenta detalhes ("N processo(s) vivo(s)", "em sessão", "N conta(s)") |
 | azul | `Starting` → "iniciando" | transição |
 | amarelo | `Degraded(motivo)` → "atenção · motivo" | habilitado, mas falta algo ou algo falha; o motivo é sempre mostrado |
 | vermelho | `Error(motivo)` → "erro · motivo" | falhou ao subir ou erro fatal |

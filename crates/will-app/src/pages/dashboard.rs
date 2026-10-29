@@ -1,4 +1,5 @@
-//! Início: status dos módulos, KB, motor, primeiros passos.
+//! Status do serviço (aba de Configurações → Geral; era a página "Início" até
+//! 2026-10-29): primeiros passos, permissões do macOS, módulos e motor.
 
 use super::{Cx, Nav, SettingsSection};
 use crate::i18n::{tr, trf};
@@ -98,12 +99,6 @@ impl DashboardPage {
         }
         self.status.poll();
         self.google_accounts.poll();
-        ui::heading(
-            ui,
-            tr("Início"),
-            Some(tr("Estado do serviço nesta máquina.")),
-        );
-
         self.permissions.ui(ui, cx);
 
         let s = &cx.snap.settings;
@@ -234,60 +229,36 @@ impl DashboardPage {
                         ui.label(tr("Tempo no ar"));
                         ui.label(trf("{} min", &[&(ui::i(v, "uptime_secs") / 60)]));
                         ui.end_row();
+                        ui.label(tr("Base de conhecimento"));
+                        ui.horizontal(|ui| {
+                            let k = &v["kb"];
+                            let path = ui::s(k, "path");
+                            ui::dot(
+                                ui,
+                                if ui::b(k, "exists") {
+                                    Tone::Success
+                                } else {
+                                    Tone::Warning
+                                },
+                            );
+                            ui::mono(
+                                ui,
+                                if path.is_empty() {
+                                    tr("não configurada")
+                                } else {
+                                    &path
+                                },
+                            );
+                            if ui.small_button(tr("configurar")).clicked() {
+                                *cx.go = Some(Nav::Settings(SettingsSection::Kb));
+                            }
+                        });
+                        ui.end_row();
                     });
-            });
-            ui::section(ui, tr("Base de conhecimento"), |ui| {
-                let k = &v["kb"];
-                let path = ui::s(k, "path");
-                ui.horizontal(|ui| {
-                    ui::dot(
-                        ui,
-                        if ui::b(k, "exists") {
-                            Tone::Success
-                        } else {
-                            Tone::Warning
-                        },
-                    );
-                    ui::mono(
-                        ui,
-                        if path.is_empty() {
-                            tr("não configurada")
-                        } else {
-                            &path
-                        },
-                    );
-                    if ui.button(tr("configurar")).clicked() {
-                        *cx.go = Some(Nav::Settings(SettingsSection::Kb));
-                    }
-                });
             });
         }
         if let Some(e) = &self.status.error {
             ui::error_text(ui, e);
         }
-
-        ui::section(ui, tr("Ações rápidas"), |ui| {
-            ui.horizontal_wrapped(|ui| {
-                if ui.button(tr("Nova thread")).clicked() {
-                    *cx.go = Some(Nav::Threads);
-                }
-                if ui.button(tr("Ver logs")).clicked() {
-                    *cx.go = Some(Nav::Logs);
-                }
-                if ui
-                    .add_enabled(
-                        cx.snap.settings.realtime.enabled && !cx.voice.busy(),
-                        egui::Button::new(if cx.voice.session_active {
-                            tr("Desligar voz")
-                        } else {
-                            tr("Ligar voz")
-                        }),
-                    )
-                    .clicked()
-                {
-                    cx.voice.toggle(cx.svc);
-                }
-            });
-        });
     }
 }

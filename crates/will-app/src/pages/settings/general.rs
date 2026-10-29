@@ -13,11 +13,6 @@ pub struct GeneralPage {
 
 impl GeneralPage {
     pub fn ui(&mut self, ui: &mut egui::Ui, cx: &mut Cx, st: &mut SettingsState) {
-        ui::heading(
-            ui,
-            tr("Geral"),
-            Some(tr("Comportamento do aplicativo nesta máquina.")),
-        );
         let portable = cx.snap.portable_root.is_some();
         // Instalado pelo will-ia-setup (docs/27): o início com o sistema é o
         // LaunchAgent/unit/chave Run do instalador; não registrar um segundo

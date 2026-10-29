@@ -173,7 +173,7 @@ impl WillApp {
         voice.apply_settings(&settings.realtime);
         let mut pages = Pages::default();
         // macOS: microfone + notificações pedidos de uma vez na primeira abertura.
-        pages.dashboard.permissions.first_run_pass();
+        pages.settings.status.permissions.first_run_pass();
         if svc.has_profile() {
             pages.settings.state.load(&svc);
         }
@@ -183,7 +183,7 @@ impl WillApp {
         // Sem conexão a tela de entrada cobre tudo; `nav` só importa depois
         // (o modal de troca de senha aparece sobre qualquer página).
         let nav = if !snap.connected || settings.general.onboarding_done || !snap.is_admin() {
-            Nav::Dashboard
+            Nav::Threads
         } else {
             Nav::Settings(SettingsSection::Engine)
         };
@@ -249,7 +249,7 @@ impl WillApp {
         self.resync_task = None;
         self.me_task = None;
         self.pick_nav_on_settings = false;
-        self.nav = Nav::Dashboard;
+        self.nav = Nav::Threads;
         self.toasts.info(tr("Sessão encerrada."));
     }
 
@@ -418,8 +418,8 @@ impl WillApp {
                 self.resync_task = None;
                 self.me_task = None;
                 // A tela de entrada fica até `ClientEvent::Connected`; depois
-                // Início (ou onboarding, decidido quando as settings chegarem).
-                self.nav = Nav::Dashboard;
+                // Threads (ou onboarding, decidido quando as settings chegarem).
+                self.nav = Nav::Threads;
                 self.toasts.info(trf("Conectando em {}…", &[&profile.name]));
             }
             UiCommand::HotkeyDown => {
@@ -448,6 +448,9 @@ impl WillApp {
                     self.nav = n;
                     if let (Some(p), Some(t)) = (page, tab) {
                         ui::select_tab(ctx, p, t);
+                    } else if matches!(page, Some("dashboard") | Some("status")) {
+                        // antigo "Início": aba Status de Configurações → Geral
+                        ui::select_tab(ctx, "general", "status");
                     }
                 } else if let Some(id) = nav.as_deref().and_then(|n| n.strip_prefix("threads/")) {
                     // diagnóstico: abre a página de threads já com a thread selecionada
@@ -499,7 +502,7 @@ impl WillApp {
                 .info(tr("Primeiro acesso: defina uma nova senha para continuar."));
         }
         if !admin && matches!(self.nav, Nav::Settings(_) | Nav::Users) {
-            self.nav = Nav::Dashboard;
+            self.nav = Nav::Threads;
         }
     }
 
@@ -614,7 +617,7 @@ impl WillApp {
         }
         if self.svc.has_profile() && self.last_status_refresh.elapsed() > Duration::from_secs(15) {
             self.last_status_refresh = Instant::now();
-            self.pages.dashboard.refresh(&self.svc);
+            self.pages.settings.status.refresh(&self.svc);
         }
         self.apply_hotkey();
     }
@@ -695,7 +698,6 @@ impl WillApp {
             .max_height((ui.available_height() - 12.0).max(80.0))
             .show(ui, |ui| {
                 let mut items: Vec<(Nav, String)> = vec![
-                    (Nav::Dashboard, tr("Início").into()),
                     (Nav::Threads, tr("Threads").into()),
                     (Nav::Schedules, tr("Agendamentos").into()),
                     (Nav::Browser, tr("Browser CDP").into()),
