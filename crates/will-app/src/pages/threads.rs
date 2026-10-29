@@ -214,7 +214,13 @@ fn wrapped_label(
         break_anywhere: false,
         overflow_character: Some('…'),
     };
-    ui.add(egui::Label::new(job))
+    // `.wrap()` é obrigatório: num layout horizontal o Label usa `Extend` e
+    // troca o `max_width` do job por infinito (só `max_rows` sobrevive).
+    ui.scope(|ui| {
+        ui.set_max_width(max_width.max(24.0));
+        ui.add(egui::Label::new(job).wrap())
+    })
+    .inner
 }
 
 /// Botão pequeno "copiar" com área de clique real (moldura só no hover).
