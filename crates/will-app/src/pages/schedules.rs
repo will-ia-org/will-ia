@@ -644,15 +644,21 @@ impl SchedulesPage {
                         });
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                         ui.spacing_mut().item_spacing.x = 8.0;
-                        let chevron = if expanded { "▾" } else { "▸" };
-                        if ui
-                            .add(egui::Button::new(RichText::new(chevron).size(14.0)).frame(false))
-                            .on_hover_text(if expanded {
+                        let chevron = if expanded {
+                            crate::icons::EXPAND_MORE
+                        } else {
+                            crate::icons::CHEVRON_RIGHT
+                        };
+                        if ui::icon_button(
+                            ui,
+                            chevron,
+                            if expanded {
                                 tr("recolher")
                             } else {
                                 tr("detalhes")
-                            })
-                            .clicked()
+                            },
+                        )
+                        .clicked()
                         {
                             if expanded {
                                 self.expanded.remove(&id);

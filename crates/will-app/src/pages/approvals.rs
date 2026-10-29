@@ -299,7 +299,8 @@ impl ApprovalsPage {
                     .desired_width(280.0),
             );
             ui::text_context_menu(&r);
-            if !self.filter_text.is_empty() && ui.button("✕").on_hover_text(tr("Limpar")).clicked()
+            if !self.filter_text.is_empty()
+                && ui::icon_button(ui, crate::icons::CLOSE, tr("Limpar")).clicked()
             {
                 self.filter_text.clear();
             }

@@ -86,14 +86,23 @@ pub fn install_fonts(ctx: &egui::Context) {
             "../assets/fonts/NotoEmoji.ttf"
         ))),
     );
+    // emoji-icon-font (MIT, a mesma do egui): símbolos que nem a Inter nem a Noto
+    // Emoji têm (🗐 do botão "copiar" do egui_commonmark, ✔, ↺, ⟳ …). O egui 0.37
+    // só a inclui nas famílias com a feature `monochrome_emoji_fonts`.
+    fonts.font_data.insert(
+        "emoji-icon-font".into(),
+        std::sync::Arc::new(FontData::from_static(epaint_default_fonts::EMOJI_ICON)),
+    );
     let mut fallback: Vec<String> = fonts
         .families
         .get(&FontFamily::Proportional)
         .cloned()
         .unwrap_or_default();
     fallback.insert(0, "noto-emoji".to_string());
+    fallback.push("emoji-icon-font".to_string());
     if let Some(mono) = fonts.families.get_mut(&FontFamily::Monospace) {
         mono.push("noto-emoji".to_string());
+        mono.push("emoji-icon-font".to_string());
     }
     let mut prop = vec!["inter".to_string()];
     prop.extend(fallback.iter().cloned());
@@ -104,6 +113,89 @@ pub fn install_fonts(ctx: &egui::Context) {
         fonts.families.insert(FontFamily::Name(name.into()), fam);
     }
     ctx.set_fonts(fonts);
+    // Material Symbols (ícones da UI, `crate::icons`): família própria + reserva
+    // de menor prioridade na proporcional. Depois do `set_fonts`, que substitui tudo.
+    egui_material_icons::initialize(ctx);
+}
+
+// ---------- ícones (Material Symbols; ver src/icons.rs) ----------
+
+/// Ícone solto (rótulo) na cor dada, sem quebra.
+pub fn icon_colored(
+    ui: &mut Ui,
+    ic: crate::icons::MaterialIcon,
+    size: f32,
+    color: Color32,
+) -> egui::Response {
+    ui.add(
+        egui::Label::new(ic.rich_text().size(size).color(color))
+            .wrap_mode(egui::TextWrapMode::Extend)
+            .selectable(false),
+    )
+}
+
+/// Botão só de ícone, sem moldura, com tooltip.
+pub fn icon_button(ui: &mut Ui, ic: crate::icons::MaterialIcon, tooltip: &str) -> egui::Response {
+    let color = ui.visuals().text_color();
+    icon_button_colored(ui, ic, tooltip, color)
+}
+
+pub fn icon_button_colored(
+    ui: &mut Ui,
+    ic: crate::icons::MaterialIcon,
+    tooltip: &str,
+    color: Color32,
+) -> egui::Response {
+    let r = ui.add(egui::Button::new(ic.rich_text().size(16.0).color(color)).frame(false));
+    if tooltip.is_empty() {
+        r
+    } else {
+        r.on_hover_text(tooltip)
+    }
+}
+
+/// Ícone + texto num único `WidgetText` (para botões e rótulos): o ícone sai
+/// na família Material e o texto na proporcional, mesma cor e tamanho.
+pub fn icon_text(
+    ui: &Ui,
+    ic: crate::icons::MaterialIcon,
+    text: &str,
+    size: Option<f32>,
+) -> egui::WidgetText {
+    let size = size.unwrap_or_else(|| egui::TextStyle::Button.resolve(ui.style()).size);
+    let color = ui.visuals().text_color();
+    icon_text_colored(ic, text, size, color)
+}
+
+pub fn icon_text_colored(
+    ic: crate::icons::MaterialIcon,
+    text: &str,
+    size: f32,
+    color: Color32,
+) -> egui::WidgetText {
+    use egui::text::{LayoutJob, TextFormat};
+    let mut job = LayoutJob::default();
+    job.append(
+        ic.codepoint,
+        0.0,
+        TextFormat {
+            font_id: egui::FontId::new(size + 2.0, ic.font_family()),
+            color,
+            valign: egui::Align::Center,
+            ..Default::default()
+        },
+    );
+    job.append(
+        text,
+        6.0,
+        TextFormat {
+            font_id: egui::FontId::proportional(size),
+            color,
+            valign: egui::Align::Center,
+            ..Default::default()
+        },
+    );
+    job.into()
 }
 
 /// Remove seletores de variação (U+FE0E/U+FE0F) e modificadores de tom de pele,
@@ -803,14 +895,12 @@ impl SecretField {
                     .desired_width(w),
             );
             text_context_menu(&r);
-            if ui
-                .button(if self.reveal {
-                    tr("ocultar")
-                } else {
-                    tr("ver")
-                })
-                .clicked()
-            {
+            let (eye, eye_tip) = if self.reveal {
+                (crate::icons::VISIBILITY_OFF, tr("ocultar"))
+            } else {
+                (crate::icons::VISIBILITY, tr("ver"))
+            };
+            if icon_button(ui, eye, eye_tip).clicked() {
                 self.reveal = !self.reveal;
             }
             let can_save = !self.input.trim().is_empty();
@@ -887,7 +977,13 @@ impl Toasts {
                         .show(ui, |ui| {
                             ui.set_max_width(380.0);
                             ui.horizontal(|ui| {
-                                dot(ui, t.tone);
+                                let ic = match t.tone {
+                                    Tone::Success => crate::icons::CHECK_CIRCLE,
+                                    Tone::Danger => crate::icons::ERROR,
+                                    Tone::Warning => crate::icons::WARNING,
+                                    _ => crate::icons::INFO,
+                                };
+                                icon_colored(ui, ic, 17.0, color);
                                 ui.label(&t.text);
                             });
                         });
@@ -1088,7 +1184,7 @@ fn help_modal(ctx: &egui::Context, help: &Help) -> bool {
         ui.horizontal(|ui| {
             ui.label(RichText::new(tr(help.title)).font(semibold(18.0)));
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                if ui.button("✕").on_hover_text(tr("Fechar")).clicked() {
+                if icon_button(ui, crate::icons::CLOSE, tr("Fechar")).clicked() {
                     close = true;
                 }
             });

@@ -28,12 +28,20 @@ eframe.workspace = true
 egui.workspace = true
 egui_extras.workspace = true
 egui_commonmark.workspace = true
+# Ícones Material Symbols (fonte embutida, ~1,8 MB) — ver src/icons.rs.
+egui_material_icons = "0.9"
+# emoji-icon-font do egui (🗐 ✔ ↺ ⟳ …): o egui 0.37 só a carrega com `monochrome_emoji_fonts`;
+# o botão "copiar" do egui_commonmark usa 🗐.
+epaint_default_fonts = { version = "0.37", features = ["monochrome_emoji_fonts"] }
 cpal.workspace = true
 rfd.workspace = true
 global-hotkey.workspace = true
 auto-launch = "0.5"
 qrcode.workspace = true
 image = { version = "0.25", default-features = false, features = ["png", "jpeg", "webp", "gif"] }
+
+[dev-dependencies]
+ab_glyph = "0.2"
 
 [lints]
 workspace = true

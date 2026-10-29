@@ -288,7 +288,11 @@ Página com **duas ou mais seções independentes** não empilha cartões numa r
 | Configurações › Rede | `network` | `listen` Escuta · `cert` Certificado em uso |
 | Browser CDP (página) | `browser` | `status` Status · `install` Instalação · `tests` Testes · `traffic` Tráfego CDP (ao vivo) |
 
-Ficam sem abas as páginas curtas de uma seção (Geral, Agendamentos, Browser CDP em Configurações) e as de lista + formulário (MCPs externos, Agendamentos, Usuários, Custos, Início). Aprovações usa abas (`pending` · `history`).
+Ficam sem abas as páginas curtas de uma seção (Geral, Agendamentos, Browser CDP em Configurações) e as de lista + formulário (MCPs externos, Agendamentos, Usuários, Custos, Início). Em **Custos**, o filtro "Fonte" lista todas as fontes gravadas em `ai_costs` (`voice`, `voice_stt`, `voice_tts`, `voice_summary`, `claude`, `thread_summary`, `telegram_*`) mais qualquer valor novo visto nos dados (rótulo = valor bruto), e vale para o resumo e para os registros. Aprovações usa abas (`pending` · `history`).
+
+### Ícones
+
+Ícones da interface vêm da fonte **Material Symbols** (crate `egui_material_icons`, embutida pelo `ui::install_fonts` como família própria e reserva de menor prioridade na proporcional). Os usados pelo app têm nome semântico em `crates/will-app/src/icons.rs` (`CHEVRON_RIGHT`, `EXPAND_MORE`, `CLOSE`, `REFRESH`, `SEND`, `MIC`, `RECORD`, `ATTACH`, `ARROW_UPWARD`, `VISIBILITY`/`VISIBILITY_OFF`, `CHECK_CIRCLE`/`ERROR`/`WARNING`/`INFO` dos toasts…) e são desenhados por `ui::icon_colored`, `ui::icon_button` (sem moldura, com tooltip) ou `ui::icon_text` (ícone + texto num só `WidgetText`, para botões como Enviar/Falar/Anexar). **Regra:** nada de glifo Unicode solto como ícone (▸ ▾ ⋯ 🗐 ▍): a Inter e a Noto Emoji não os têm e viram "caixinha"; um teste em `icons.rs` garante que cada ícone nomeado existe na fonte. Emojis de **conteúdo** (mensagens, Markdown) continuam na Noto Emoji. A `emoji-icon-font` do egui também entra na reserva (feature `monochrome_emoji_fonts` de `epaint_default_fonts`), porque o botão "copiar" dos blocos de código do `egui_commonmark` usa 🗐/✔, que só ela tem.
 
 **Deep-link.** `will-ia screenshot --nav pagina/aba` (ex.: `google/gmail`, `browser/traffic`) abre a página já na aba; dentro do app, quem navega para uma aba específica chama `ui::select_tab(ctx, "kb", "status")` antes de `*cx.go = Some(Nav::Settings(..))` (é o que "Ver .mcp.json" em MCPs externos faz).
 

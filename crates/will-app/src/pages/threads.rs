@@ -1064,7 +1064,7 @@ impl ThreadsPage {
                     if ui.add_enabled(self.create_task.is_none(), egui::Button::new(tr("+ Nova"))).clicked() {
                         self.create_task = Some(cx.svc.call(|c| async move { c.create_thread(None).await }));
                     }
-                    if ui.add(egui::Button::new("↺")).on_hover_text(tr("Atualizar")).clicked() {
+                    if ui::icon_button(ui, crate::icons::REFRESH, tr("Atualizar")).clicked() {
                         self.list.loaded_at = None;
                     }
                 });
@@ -1553,17 +1553,13 @@ impl ThreadsPage {
                                             .truncate(),
                                         )
                                         .on_hover_text(p.display().to_string());
-                                        if ui
-                                            .add(
-                                                egui::Button::new(
-                                                    egui::RichText::new("×")
-                                                        .size(13.0)
-                                                        .color(pal2.text_weak),
-                                                )
-                                                .frame(false),
-                                            )
-                                            .on_hover_text(tr("remover anexo"))
-                                            .clicked()
+                                        if ui::icon_button_colored(
+                                            ui,
+                                            crate::icons::CLOSE,
+                                            tr("remover anexo"),
+                                            pal2.text_weak,
+                                        )
+                                        .clicked()
                                         {
                                             remove = Some(i);
                                         }
@@ -1607,10 +1603,18 @@ impl ThreadsPage {
                             let can = !busy
                                 && (!self.input.trim().is_empty()
                                     || !self.pending_files.is_empty());
-                            let b = egui::Button::new(
-                                egui::RichText::new(if busy { "…" } else { tr("Enviar") })
-                                    .color(egui::Color32::WHITE),
-                            )
+                            let b = egui::Button::new(if busy {
+                                egui::WidgetText::from(
+                                    egui::RichText::new("…").color(egui::Color32::WHITE),
+                                )
+                            } else {
+                                ui::icon_text_colored(
+                                    crate::icons::SEND,
+                                    tr("Enviar"),
+                                    14.0,
+                                    egui::Color32::WHITE,
+                                )
+                            })
                             .fill(if can {
                                 pal2.accent
                             } else {
@@ -1634,7 +1638,7 @@ impl ThreadsPage {
                                     .is_some_and(|(_, t)| t.pending());
                                 let label = if recording {
                                     trf(
-                                        "● {}s",
+                                        "{}s",
                                         &[&format!(
                                             "{:.0}",
                                             self.dictation
@@ -1648,13 +1652,19 @@ impl ThreadsPage {
                                 } else {
                                     tr("Falar").into()
                                 };
-                                let b = egui::Button::new(egui::RichText::new(label).color(
-                                    if recording {
-                                        egui::Color32::WHITE
-                                    } else {
-                                        pal2.text
-                                    },
-                                ))
+                                let color = if recording {
+                                    egui::Color32::WHITE
+                                } else {
+                                    pal2.text
+                                };
+                                let text: egui::WidgetText = if recording {
+                                    ui::icon_text_colored(crate::icons::RECORD, &label, 14.0, color)
+                                } else if transcribing {
+                                    egui::RichText::new(label).color(color).into()
+                                } else {
+                                    ui::icon_text_colored(crate::icons::MIC, &label, 14.0, color)
+                                };
+                                let b = egui::Button::new(text)
                                 .fill(if recording {
                                     egui::Color32::from_rgb(200, 60, 60)
                                 } else {
@@ -1711,9 +1721,12 @@ impl ThreadsPage {
                                 }
                             }
                             // Anexar: diálogo nativo de arquivos (vários de uma vez)
-                            let a = egui::Button::new(
-                                egui::RichText::new(tr("Anexar")).color(pal2.text),
-                            )
+                            let a = egui::Button::new(ui::icon_text_colored(
+                                crate::icons::ATTACH,
+                                tr("Anexar"),
+                                14.0,
+                                pal2.text,
+                            ))
                             .min_size(egui::vec2(68.0, 34.0));
                             if ui
                                 .add_enabled(!busy, a)
@@ -2259,7 +2272,7 @@ fn assistant_card(
                                         summary.clone().unwrap_or_else(|| tr("Gerando a voz… (clique para cancelar)").into()),
                                     ),
                                     SpeakState::Playing => (
-                                        tr("■ parar").into(),
+                                        tr("parar").into(),
                                         summary.clone().unwrap_or_else(|| tr("Tocando o resumo (clique para parar)").into()),
                                     ),
                                 };
@@ -2454,7 +2467,8 @@ fn live_card(
             }
             if !text.is_empty() {
                 ui.add_space(4.0);
-                let caret = if phase.is_multiple_of(2) { "▍" } else { " " };
+                // "|" existe em todas as fontes; "▍" (bloco) só na Hack (mono) e virava caixinha.
+                let caret = if phase.is_multiple_of(2) { "|" } else { " " };
                 md(ui, cache, &format!("{text}{caret}"));
             }
         });

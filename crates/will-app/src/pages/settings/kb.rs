@@ -81,7 +81,10 @@ impl KbPage {
             });
             ui.horizontal(|ui| {
                 if ui
-                    .add_enabled(!loading && parent.is_some(), egui::Button::new(tr("↑ pasta acima")))
+                    .add_enabled(
+                        !loading && parent.is_some(),
+                        egui::Button::new(ui::icon_text(ui, crate::icons::ARROW_UPWARD, tr("pasta acima"), None)),
+                    )
                     .clicked()
                 {
                     go = Some(parent.clone());
