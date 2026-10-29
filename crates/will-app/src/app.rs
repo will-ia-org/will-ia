@@ -172,6 +172,8 @@ impl WillApp {
         let mut voice = VoiceController::new();
         voice.apply_settings(&settings.realtime);
         let mut pages = Pages::default();
+        // macOS: microfone + notificações pedidos de uma vez na primeira abertura.
+        pages.dashboard.permissions.first_run_pass();
         if svc.has_profile() {
             pages.settings.state.load(&svc);
         }
@@ -288,7 +290,17 @@ impl WillApp {
         self.window_visible = true;
         ctx.send_viewport_cmd(egui::ViewportCommand::Visible(true));
         ctx.send_viewport_cmd(egui::ViewportCommand::Minimized(false));
-        ctx.send_viewport_cmd(egui::ViewportCommand::Focus);
+        // macOS 14+: `Focus` vira `activateIgnoringOtherApps:`, que o sistema nega
+        // quando outro app está na frente e converte em ícone pulando no Dock.
+        // Fora do foco, quem ativa é o LaunchServices (`open -a` no próprio
+        // bundle); `Focus` fica para quando já estamos ativos ou fora do bundle.
+        #[cfg(target_os = "macos")]
+        let focus = will_platform::macos::is_active() || !will_platform::macos::activate_self();
+        #[cfg(not(target_os = "macos"))]
+        let focus = true;
+        if focus {
+            ctx.send_viewport_cmd(egui::ViewportCommand::Focus);
+        }
         ctx.request_repaint();
     }
 
@@ -332,9 +344,10 @@ impl WillApp {
             }
             Event::Notification { title, body } => {
                 self.toasts.info(format!("{title}: {body}"));
-                // Janela oculta: notificação nativa na máquina do app (o servidor
-                // só notifica quando tem desktop).
-                if !self.window_visible {
+                // Janela oculta: notificação nativa na máquina do app. Com o
+                // servidor nesta mesma máquina ele já notificou (tem desktop);
+                // só um servidor remoto precisa do app para isso.
+                if !self.window_visible && !self.snap.server_is_local {
                     will_platform::notify(title, body);
                 }
             }
@@ -426,8 +439,16 @@ impl WillApp {
                 }
             }
             UiCommand::Screenshot(path, nav) => {
-                if let Some(n) = nav.as_deref().and_then(Nav::parse) {
+                // `pagina` ou `pagina/aba` (ex.: `google/gmail`, `browser/traffic`).
+                let (page, tab) = match nav.as_deref().and_then(|n| n.split_once('/')) {
+                    Some((p, t)) if p != "threads" => (Some(p), Some(t)),
+                    _ => (nav.as_deref(), None),
+                };
+                if let Some(n) = page.and_then(Nav::parse) {
                     self.nav = n;
+                    if let (Some(p), Some(t)) = (page, tab) {
+                        ui::select_tab(ctx, p, t);
+                    }
                 } else if let Some(id) = nav.as_deref().and_then(|n| n.strip_prefix("threads/")) {
                     // diagnóstico: abre a página de threads já com a thread selecionada
                     if let Ok(t) = will_core::ThreadId::parse(id) {

@@ -3,15 +3,36 @@
 
 pub mod icon;
 pub mod instance;
+#[cfg(target_os = "macos")]
+pub mod macos;
 pub mod process;
 
 use std::path::{Path, PathBuf};
 
-/// Notificação nativa (best-effort; nunca falha o chamador).
+/// Notificações nativas em voo. No macOS o backend (`mac-notification-sys`)
+/// segura a thread até a notificação ser dispensada; o teto evita acumular
+/// threads numa rajada de eventos (as excedentes só vão ao log).
+static NOTIFY_IN_FLIGHT: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+const NOTIFY_MAX_IN_FLIGHT: usize = 6;
+
+/// Notificação nativa (best-effort; nunca falha nem bloqueia o chamador).
 pub fn notify(title: &str, body: &str) {
+    use std::sync::atomic::Ordering;
     let title = title.to_string();
     let body = body.to_string();
+    if NOTIFY_IN_FLIGHT.fetch_add(1, Ordering::SeqCst) >= NOTIFY_MAX_IN_FLIGHT {
+        NOTIFY_IN_FLIGHT.fetch_sub(1, Ordering::SeqCst);
+        tracing::info!(%title, %body, "notificação (muitas em voo; só no log)");
+        return;
+    }
     std::thread::spawn(move || {
+        struct Done;
+        impl Drop for Done {
+            fn drop(&mut self) {
+                NOTIFY_IN_FLIGHT.fetch_sub(1, Ordering::SeqCst);
+            }
+        }
+        let _done = Done;
         #[cfg(any(
             target_os = "linux",
             target_os = "freebsd",
@@ -35,6 +56,29 @@ pub fn notify(title: &str, body: &str) {
             tracing::info!(%title, %body, "notificação");
         }
     });
+}
+
+/// Resultado de tentar listar uma pasta (TCC do macOS nega com EPERM
+/// "Operation not permitted" pastas como Documentos/Mesa/Downloads/iCloud).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum DirAccess {
+    Ok,
+    /// Permissão negada pelo SO (no macOS: Ajustes → Privacidade → Arquivos e Pastas).
+    Denied,
+    Missing,
+    Other(String),
+}
+
+pub fn dir_access(path: &Path) -> DirAccess {
+    match std::fs::read_dir(path) {
+        Ok(mut it) => match it.next() {
+            Some(Err(e)) if e.kind() == std::io::ErrorKind::PermissionDenied => DirAccess::Denied,
+            _ => DirAccess::Ok,
+        },
+        Err(e) if e.kind() == std::io::ErrorKind::PermissionDenied => DirAccess::Denied,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => DirAccess::Missing,
+        Err(e) => DirAccess::Other(e.to_string()),
+    }
 }
 
 /// Há sessão gráfica (bandeja, app, Chrome visível)? Windows/macOS: sempre;

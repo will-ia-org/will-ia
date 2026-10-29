@@ -137,6 +137,10 @@ mod other {
     }
 
     pub fn build() -> Option<Inner> {
+        // macOS: o servidor é um app acessório (só barra de menus, sem Dock nem
+        // Cmd+Tab). Tem de vir antes do primeiro NSStatusItem (ADR-0022).
+        #[cfg(target_os = "macos")]
+        will_platform::macos::become_accessory();
         let menu = Menu::new();
         let open = MenuItem::new("Abrir will-ia", true, None);
         if let Err(e) = menu.append_items(&[&open]) {

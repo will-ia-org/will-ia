@@ -14,6 +14,8 @@ mod install;
 mod os;
 mod payload;
 mod plan;
+#[cfg(target_os = "macos")]
+mod sign;
 
 use clap::Parser;
 use std::path::PathBuf;

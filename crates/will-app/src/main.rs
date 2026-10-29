@@ -18,6 +18,7 @@ mod i18n;
 mod icon;
 mod oauth_cb;
 mod pages;
+mod permissions;
 mod profiles;
 mod service;
 mod speak_cache;

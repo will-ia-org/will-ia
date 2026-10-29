@@ -25,3 +25,5 @@ Formato: contexto → decisão → consequências. Numeração sequencial; nunca
 | [0019](0019-cliente-servidor.md) | Separação cliente/servidor: app egui como cliente HTTP/WS de um servidor residente; contas por pessoa, threads compartilhadas | Aceita |
 | [0020](0020-browser-cdp-descoberta-sem-json.md) | Browser CDP: descoberta por `DevToolsActivePort` + síntese de `/json/*` quando o Chrome não tem HTTP de descoberta; `localhost` dual-stack; não lançar em porta ocupada; erros JSON | Aceita |
 | [0021](0021-instalador-por-usuario.md) | Instalador próprio por usuário (`will-ia-setup`): assistente egui + CLI, binários embutidos, serviço de sessão por SO, dados preservados | Aceita |
+| [0022](0022-macos-servidor-acessorio-ativacao-launchservices.md) | macOS: servidor como app acessório (sem Dock, run loop do AppKit na thread principal) e ativação do app pelo LaunchServices (`open -a`), sem ícone pulando | Aceita |
+| [0023](0023-macos-assinatura-estavel-e-permissoes-de-uma-vez.md) | macOS: instalador assina com identidade autoassinada estável (TCC/Keychain não pedem de novo a cada versão) e permissões pedidas de uma vez na primeira abertura | Aceita |

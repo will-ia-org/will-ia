@@ -182,6 +182,22 @@ fn serve(
         }
     }));
     tracing::info!(url = %handle.url(), "will-ia (servidor) no ar");
+    // macOS: a KB costuma morar em Documentos/Mesa/iCloud, pastas sob TCC. Tocar
+    // nela já no start faz o pedido "Arquivos e Pastas" sair de uma vez; se já foi
+    // negado, avisa com o caminho de Ajustes (ADR-0023, `docs/27`).
+    #[cfg(target_os = "macos")]
+    if let Some(kb) = handle.state.kb_path() {
+        if will_platform::dir_access(&kb) == will_platform::DirAccess::Denied {
+            tracing::warn!(
+                kb = %kb.display(),
+                "sem acesso à base de conhecimento: libere em Ajustes → Privacidade e Segurança → Arquivos e Pastas → will-ia"
+            );
+            will_platform::notify(
+                "will-ia: sem acesso à base de conhecimento",
+                "Libere em Ajustes → Privacidade e Segurança → Arquivos e Pastas → will-ia.",
+            );
+        }
+    }
     if !resident {
         println!(
             "will-ia (headless) no ar: {}  — token em {}",
@@ -200,19 +216,35 @@ fn serve(
         let _ = launcher::open_app(&[]);
     }
 
-    rt.block_on(async move {
-        if resident {
-            ignore_signals();
-            handle.cancelled().await;
-        } else {
-            tokio::select! {
-                _ = tokio::signal::ctrl_c() => {}
-                _ = handle.cancelled() => {}
+    let wait = move || {
+        rt.block_on(async move {
+            if resident {
+                ignore_signals();
+                handle.cancelled().await;
+            } else {
+                tokio::select! {
+                    _ = tokio::signal::ctrl_c() => {}
+                    _ = handle.cancelled() => {}
+                }
+                println!("encerrando…");
+                handle.shutdown().await;
             }
-            println!("encerrando…");
-            handle.shutdown().await;
-        }
-    });
+        });
+    };
+    // macOS com bandeja: a thread principal pertence ao run loop do AppKit (sem
+    // ele o NSStatusItem não desenha nem recebe cliques); a espera do serviço vai
+    // para outra thread e encerra o processo quando o serviço cair (ADR-0022).
+    #[cfg(target_os = "macos")]
+    if tray_handle.is_some() {
+        std::thread::Builder::new()
+            .name("will-wait".into())
+            .spawn(move || {
+                wait();
+                std::process::exit(0);
+            })?;
+        will_platform::macos::run_main_loop();
+    }
+    wait();
     drop(tray_handle);
     Ok(())
 }

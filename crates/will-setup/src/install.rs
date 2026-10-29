@@ -88,6 +88,16 @@ pub fn install(plan: &Plan, opts: &Options, progress: Progress) -> Outcome {
     if let Err(e) = os::write_binaries(plan, log_ref) {
         return fail(&e);
     }
+    // macOS: assinatura com identidade estável, para o TCC/Keychain não pedirem
+    // permissão de novo a cada atualização (ADR-0023).
+    #[cfg(target_os = "macos")]
+    match crate::sign::sign_install(plan, log_ref) {
+        Ok(s) => log(&match s.identity {
+            Some(id) => format!("assinado com \"{id}\" — {}", s.designated),
+            None => format!("assinado ad-hoc — {}", s.designated),
+        }),
+        Err(e) => log(&format!("aviso: assinatura: {e}")),
+    }
 
     p(
         3,

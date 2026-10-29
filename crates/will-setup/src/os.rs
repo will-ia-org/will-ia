@@ -965,7 +965,16 @@ pub fn wait_health(data_dir: &Path, timeout: Duration) -> Result<u16, String> {
 }
 
 pub fn open_app(plan: &Plan) -> Result<(), String> {
-    spawn_detached(&plan.app_path, &["--show"])
+    // macOS: pelo LaunchServices (`open -a`), que ativa o app como o Dock faria —
+    // lançar o binário direto fazia o ícone pular (ADR-0022).
+    #[cfg(target_os = "macos")]
+    {
+        run("open", &["-a", &plan.install_dir.to_string_lossy()]).map(|_| ())
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        spawn_detached(&plan.app_path, &["--show"])
+    }
 }
 
 // ---------------------------------------------------------------- manifesto

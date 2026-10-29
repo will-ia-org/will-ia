@@ -32,7 +32,7 @@ binários embutidos: o `release.yml` compila os três no mesmo job.
 | | macOS | Linux | Windows |
 |---|---|---|---|
 | Binários | `~/Applications/will-ia.app/Contents/MacOS/{will-ia-app,will-ia}` (+ `Info.plist` do release) | `~/.local/bin/{will-ia,will-ia-app}` | `%LOCALAPPDATA%\Programs\will-ia\{will-ia.exe,will-ia-app.exe}` |
-| Início com o sistema | LaunchAgent `~/Library/LaunchAgents/dev.will.will-ia.plist` (`RunAtLoad`, `KeepAlive`, `ProcessType Interactive`, `PATH` com Homebrew/nvm/`~/.local/bin`, logs em `<data_dir>/logs/launchd.*.log`) | com sessão gráfica: `~/.config/autostart/will-ia.desktop` (`Exec=<bin>/will-ia`, residente + bandeja); sem tela: user unit `~/.config/systemd/user/will-ia.service` (`will-ia serve`, `Restart=on-failure`, `enable`) | valor `will-ia` em `HKCU\Software\Microsoft\Windows\CurrentVersion\Run` |
+| Início com o sistema | LaunchAgent `~/Library/LaunchAgents/dev.will.will-ia.plist` (`RunAtLoad`, `KeepAlive`, `ProcessType Interactive`, `PATH` com Homebrew/nvm/`~/.local/bin`, logs em `<data_dir>/logs/launchd.*.log`) — o servidor roda como app **acessório** (só barra de menus, ADR-0022) | com sessão gráfica: `~/.config/autostart/will-ia.desktop` (`Exec=<bin>/will-ia`, residente + bandeja); sem tela: user unit `~/.config/systemd/user/will-ia.service` (`will-ia serve`, `Restart=on-failure`, `enable`) | valor `will-ia` em `HKCU\Software\Microsoft\Windows\CurrentVersion\Run` |
 | Atalhos | symlink `~/Desktop/will-ia.app` (Launchpad já vê `~/Applications`) | `~/.local/share/applications/will-ia.desktop` (menu) + cópia na Área de Trabalho (`xdg-user-dir DESKTOP`, executável, `gio … metadata::trusted`) | `.lnk` no Menu Iniciar (`%APPDATA%\…\Start Menu\Programs`) e na Área de Trabalho (PowerShell `WScript.Shell`) |
 | Dados (nunca tocados) | `~/Library/Application Support/dev.will.will-ia` | `~/.local/share/will-ia` | `%APPDATA%\will\will-ia\data` |
 
@@ -109,6 +109,39 @@ Uso: descompactar e abrir o instalador (servidor sem tela: `./will-ia-setup --ye
 assinado/notarizado: no macOS o usuário libera em Privacidade e Segurança ou
 `xattr -dr com.apple.quarantine "Instalar will-ia.app" will-ia.app`; no Windows o SmartScreen pede
 "Executar assim mesmo".
+
+## Permissões no macOS
+
+Tudo que passa pelo TCC/diálogos do sistema, por processo, e como o will-ia pede **de uma vez** na
+primeira abertura após instalar (ADR-0023). Processos: **servidor** `will-ia` (LaunchAgent), **app**
+`will-ia-app`, **setup** `will-ia-setup`, **filhos** do servidor (`claude`, Chrome do Browser CDP,
+`agent-browser`) — filhos herdam a atribuição ao responsável, o servidor.
+
+| Permissão | Processo | Gatilho (antes) | Como é pedida agora |
+|---|---|---|---|
+| Microfone | app (`cpal`/CoreAudio; no headless o áudio vem do app pelo WS) | 1ª sessão de voz | app, 1ª abertura: `AVCaptureDevice requestAccessForMediaType:`; cartão no Início mostra o estado e tem "Pedir agora"/"Abrir Ajustes" |
+| Notificações | servidor e app (`notify-rust` → `NSUserNotificationCenter` em nome do bundle `dev.will.will-ia`) | 1ª aprovação/aviso | app, 1ª abertura: notificação "will-ia instalado"; só o servidor notifica em loopback (o app, só com servidor remoto) |
+| Arquivos e Pastas (Documentos, Mesa, Downloads, iCloud, volumes de rede) | servidor (base de conhecimento, anexos) e `claude` (filho); o app usa o painel do sistema (`rfd`), que dispensa | 1º acesso à KB, muitas vezes silencioso (EPERM no log) | servidor, no start: lista a KB → diálogo sai de uma vez; se negado, aviso no log + notificação com o caminho de Ajustes |
+| Itens de Início / segundo plano | LaunchAgent `dev.will.will-ia` (BTM) | ao instalar | esperado; aparece em Ajustes → Geral → Itens de Início (atalho no cartão) |
+| Keychain ("will-ia quer usar suas informações confidenciais") | servidor (`keyring`: tokens e segredos) | **a cada binário novo** (cdhash) | assinatura estável: "Permitir sempre" vale para as próximas versões |
+| Rede local (macOS 15+) | servidor, só se escutar fora do loopback **e** falar com IPs da rede | 1º tráfego para a LAN; não há API para pedir antes | documentado; o bind sozinho não dispara |
+| Automação (AppleEvents) | setup (`osascript` em System Events ao remover Login Item antigo) | só em instalação legada | mantido; raro |
+| Acessibilidade / Monitoramento de entrada | **ninguém**: o atalho global usa Carbon `RegisterEventHotKey` (sem event tap) | — | — |
+| Gravação de tela, Câmera, Bluetooth | ninguém (a captura é da própria janela, via egui; áudio Bluetooth passa pelo CoreAudio sem TCC de Bluetooth) | — | — |
+
+**Por que pedia de novo a cada instalação:** TCC e Keychain guardam o *requisito designado* do app;
+binários ad-hoc do `cargo build` têm requisito `cdhash H"…"`, que muda a cada build. O
+`will-ia-setup` passou a assinar `will-ia`, `will-ia-app` e o bundle com uma identidade autoassinada
+criada uma vez (`<data_dir>/signing/`, keychain próprio, sem senha do usuário), o que fixa o requisito
+em `identifier "dev.will.will-ia" and certificate leaf = H"…"`. O log do instalador mostra o requisito
+antes/depois. Conferir: `codesign -dr - ~/Applications/will-ia.app`.
+
+**Validar após instalar:** 1) na primeira abertura do app aparecem os diálogos de microfone e
+notificações; 2) `codesign -dr - ~/Applications/will-ia.app/Contents/MacOS/will-ia` mostra
+`certificate leaf` (não `cdhash`); 3) `security find-identity -p codesigning
+"<data_dir>/signing/will-ia-signing.keychain-db"` lista "will-ia Local Signing"; 4) atualizar para a
+versão seguinte não deve pedir nada de novo; 5) `lsappinfo info -only type -app dev.will.will-ia`
+mostra o servidor como `UIElement` (ADR-0022).
 
 ## Limites conhecidos
 

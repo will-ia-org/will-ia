@@ -43,10 +43,30 @@ pub fn has_desktop() -> bool {
 }
 
 /// Abre o app (se já estiver aberto, ele mesmo só mostra a janela).
+///
+/// macOS dentro do bundle: pede a janela por ipc (`will-ia-app show`, sem
+/// NSApplication, logo sem "pulo" no Dock) e deixa o **LaunchServices** ativar ou
+/// lançar o `.app` (`open -a`). Lançar o binário direto fazia o app tentar se
+/// ativar sozinho, o que o macOS 14+ nega e transforma em ícone pulando (ADR-0022).
 pub fn open_app(extra: &[String]) -> anyhow::Result<u32> {
     let bin = app_binary().ok_or_else(|| {
         anyhow::anyhow!("will-ia-app não encontrado ao lado do will-ia nem no PATH")
     })?;
+    #[cfg(target_os = "macos")]
+    if let Some(bundle) = will_platform::macos::bundle_of(&bin) {
+        if extra.is_empty() {
+            // Já aberto: mostra a janela (ipc). Fechado: falha rápido e segue.
+            let _ = Command::new(&bin)
+                .arg("show")
+                .stdin(Stdio::null())
+                .stdout(Stdio::null())
+                .stderr(Stdio::null())
+                .status();
+        }
+        will_platform::macos::activate_bundle(&bundle, extra)?;
+        tracing::info!(bundle = %bundle.display(), "app ativado pelo LaunchServices");
+        return Ok(0);
+    }
     let mut cmd = Command::new(&bin);
     cmd.args(extra)
         .stdin(Stdio::null())
