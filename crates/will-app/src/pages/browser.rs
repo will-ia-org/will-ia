@@ -1014,7 +1014,28 @@ impl BrowserPage {
                 let ver = &v["version"];
                 ui.horizontal_wrapped(|ui| {
                     ui::dot(ui, Tone::Success);
-                    ui.label(RichText::new(ui::s(ver, "Browser")).font(ui::medium(13.5)));
+                    let browser = ui::s(ver, "Browser");
+                    ui.label(
+                        RichText::new(if browser.is_empty() {
+                            tr("navegador respondeu").to_string()
+                        } else {
+                            browser
+                        })
+                        .font(ui::medium(13.5)),
+                    );
+                    let authority = ui::s(ver, "authority");
+                    if !authority.is_empty() {
+                        ui.label(RichText::new(trf("em {}", &[&authority])).small());
+                    }
+                    let source = ui::s(ver, "source");
+                    if !source.is_empty() {
+                        let how = if source == "http" {
+                            tr("descoberta HTTP (/json/version do navegador)").to_string()
+                        } else {
+                            trf("{} — /json/* sintetizado pelo proxy", &[&source])
+                        };
+                        ui.label(RichText::new(how).small().weak());
+                    }
                     let ws = ui::s(ver, "webSocketDebuggerUrl");
                     if !ws.is_empty() {
                         ui.label(RichText::new(ws).monospace().small().weak());

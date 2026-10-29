@@ -67,11 +67,23 @@ pub async fn close(State(state): State<App>) -> ApiResult<Value> {
 
 pub async fn test_upstream(State(state): State<App>) -> ApiResult<Value> {
     let m = module(&state)?;
-    let v = m
+    let up = m
         .probe_upstream(std::time::Duration::from_secs(3))
         .await
         .map_err(bad)?;
-    Ok(Json(json!({ "ok": true, "version": v })))
+    // `version` mantém as chaves do `/json/version` do Chrome (a UI lê `Browser` e
+    // `webSocketDebuggerUrl`) e acrescenta como o navegador foi reconhecido.
+    Ok(Json(json!({
+        "ok": true,
+        "version": {
+            "Browser": up.browser.clone().unwrap_or_default(),
+            "webSocketDebuggerUrl": up.browser_ws,
+            "authority": up.authority,
+            "source": up.source,
+            "http_discovery": up.http_discovery,
+        },
+        "upstream": up,
+    })))
 }
 
 #[derive(serde::Deserialize, Default)]

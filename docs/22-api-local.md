@@ -163,7 +163,7 @@ Eventos relacionados no WS `/api/events`: `ScheduleFired { schedule_id, thread_i
 | POST | `/api/browser/traffic/clear` | `{ ok }` |
 | POST | `/api/browser/launch` | garante o upstream (lança o navegador se preciso) → `BrowserStatus`; `400` com o motivo |
 | POST | `/api/browser/close` | fecha o navegador lançado pelo serviço → `BrowserStatus` |
-| POST | `/api/browser/test/upstream` | `GET /json/version` direto no navegador → `{ ok, version }` (não lança) |
+| POST | `/api/browser/test/upstream` | `probe_upstream` (HTTP → WebSocket sem token → `DevToolsActivePort`; não lança) → `{ ok, version: { Browser, webSocketDebuggerUrl, authority, source, http_discovery }, upstream }` |
 | POST | `/api/browser/test/new-tab` | `{ url? }` (padrão `about:blank`) → `PUT /json/new` **pelo proxy** → `{ ok, target }` |
 | POST | `/api/browser/test/agent-browser` | `agent-browser --cdp http://127.0.0.1:<listen_port> --session will-ia-test open about:blank` → `{ ok, output }` (sempre `200`) |
 | GET | `/api/browser/install/status` | `InstallStatus { node, node_version, npm, npm_version, agent_browser, agent_browser_version, agent_browser_chrome, kb_path, skill_in_kb, skill_in_kb_path, warnings }` |

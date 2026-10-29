@@ -186,7 +186,7 @@ Ver [22](22-api-local.md). `503` `Browser CDP não iniciado` se o módulo não e
 | POST | `/api/browser/traffic/clear` | `{ ok }` |
 | POST | `/api/browser/launch` | garante o upstream (lança se preciso) → `BrowserStatus`; `400` com o motivo |
 | POST | `/api/browser/close` | fecha o navegador lançado por nós → `BrowserStatus` |
-| POST | `/api/browser/test/upstream` | `{ ok, version }` |
+| POST | `/api/browser/test/upstream` | `{ ok, version: { Browser, webSocketDebuggerUrl, authority, source, http_discovery }, upstream }` |
 | POST | `/api/browser/test/new-tab` | `{ url? }` → `{ ok, target }` |
 | POST | `/api/browser/test/agent-browser` | `{ ok, output }` (sempre `200`; `ok=false` traz a saída do erro) |
 | GET | `/api/browser/install/status` | `InstallStatus` |
