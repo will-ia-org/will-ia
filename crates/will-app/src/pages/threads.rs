@@ -1027,8 +1027,15 @@ impl ThreadsPage {
                                     .on_hover_text(tr(
                                     "Segure para falar; solte para transcrever no campo (Whisper).",
                                 ));
-                                let held = r.is_pointer_button_down_on();
-                                if held && !recording && !transcribing {
+                                // Começa ao pressionar sobre o botão; continua
+                                // enquanto o botão do mouse estiver pressionado em
+                                // QUALQUER lugar (não só sobre o botão) e só para ao
+                                // soltar de verdade. `is_pointer_button_down_on` é
+                                // frágil entre quadros (o rótulo muda a cada segundo),
+                                // então a parada usa o estado global do ponteiro.
+                                let pressed_on = r.is_pointer_button_down_on();
+                                let primary_down = ui.input(|i| i.pointer.primary_down());
+                                if pressed_on && !recording && !transcribing {
                                     let dev = cx.snap.settings.realtime.input_device.clone();
                                     let rec = crate::voice::audio::Recorder::start(dev.as_deref());
                                     if let Some(e) = &rec.error {
@@ -1036,16 +1043,20 @@ impl ThreadsPage {
                                     } else {
                                         self.dictation = Some(rec);
                                     }
-                                } else if !held && recording {
+                                } else if recording && !primary_down {
                                     if let Some(rec) = self.dictation.take() {
-                                        match rec.stop() {
-                                            Some(wav) => {
-                                                self.dictation_task =
-                                                    Some(cx.svc.call(move |c| async move {
-                                                        c.transcribe(wav, Some("pt")).await
-                                                    }));
+                                        if let Some(e) = rec.runtime_error() {
+                                            cx.toasts.error(trf("Microfone: {}", &[&e]));
+                                        } else {
+                                            match rec.stop() {
+                                                Some(wav) => {
+                                                    self.dictation_task =
+                                                        Some(cx.svc.call(move |c| async move {
+                                                            c.transcribe(wav, Some("pt")).await
+                                                        }));
+                                                }
+                                                None => cx.toasts.info(tr("Gravação muito curta.")),
                                             }
-                                            None => cx.toasts.info(tr("Gravação muito curta.")),
                                         }
                                     }
                                 }

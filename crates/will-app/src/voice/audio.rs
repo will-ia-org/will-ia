@@ -644,6 +644,8 @@ pub struct Recorder {
     _stream: Option<cpal::Stream>,
     buf: Arc<Mutex<Vec<i16>>>,
     pub error: Option<String>,
+    /// Erro do stream surgido durante a captura (dispositivo sumiu, formato).
+    runtime_error: Arc<Mutex<Option<String>>>,
     started: Instant,
 }
 
@@ -651,11 +653,13 @@ impl Recorder {
     pub fn start(input_name: Option<&str>) -> Self {
         let host = audio_host();
         let buf: Arc<Mutex<Vec<i16>>> = Arc::new(Mutex::new(Vec::new()));
+        let rt_err: Arc<Mutex<Option<String>>> = Arc::new(Mutex::new(None));
         let Some(dev) = find_device(&host, input_name, true) else {
             return Self {
                 _stream: None,
                 buf,
                 error: Some(tr("nenhum dispositivo de entrada").into()),
+                runtime_error: rt_err.clone(),
                 started: Instant::now(),
             };
         };
@@ -666,6 +670,7 @@ impl Recorder {
                     _stream: None,
                     buf,
                     error: Some(trf("microfone: {}", &[&e])),
+                    runtime_error: rt_err.clone(),
                     started: Instant::now(),
                 }
             }
@@ -693,7 +698,13 @@ impl Recorder {
                     g.push((s.clamp(-1.0, 1.0) * 32767.0) as i16);
                 }
             },
-            |e| tracing::warn!(error = %e, "gravador de ditado"),
+            {
+                let rt = rt_err.clone();
+                move |e| {
+                    tracing::warn!(error = %e, "gravador de ditado");
+                    *rt.lock() = Some(e.to_string());
+                }
+            },
             None,
         );
         match stream {
@@ -703,6 +714,7 @@ impl Recorder {
                     _stream: Some(s),
                     buf,
                     error: err,
+                    runtime_error: rt_err.clone(),
                     started: Instant::now(),
                 }
             }
@@ -710,6 +722,7 @@ impl Recorder {
                 _stream: None,
                 buf,
                 error: Some(trf("microfone: {}", &[&e])),
+                runtime_error: rt_err.clone(),
                 started: Instant::now(),
             },
         }
@@ -717,6 +730,11 @@ impl Recorder {
 
     pub fn elapsed_secs(&self) -> f32 {
         self.started.elapsed().as_secs_f32()
+    }
+
+    /// Erro surgido durante a captura (stream caiu), se houver.
+    pub fn runtime_error(&self) -> Option<String> {
+        self.runtime_error.lock().clone()
     }
 
     /// Para a captura e devolve o WAV (ou `None` se gravou quase nada).
