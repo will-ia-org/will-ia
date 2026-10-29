@@ -104,6 +104,8 @@ impl Nav {
     /// `users`, `general`, `engine`, `kb`, `voice`, `telegram`, `mcp`, `external`, `whatsapp`,
     /// `google`, `scheduler`, `browser-settings`, `network`. A tela de entrada
     /// (`connect`) não é uma página: aparece sozinha quando não há conexão.
+    /// Páginas com abas aceitam `pagina/aba` no `screenshot --nav` (o app
+    /// seleciona a aba com `ui::select_tab`; a chave da aba é a do `ui::Tab`).
     pub fn parse(s: &str) -> Option<Nav> {
         Some(match s {
             "dashboard" => Nav::Dashboard,

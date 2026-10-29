@@ -517,10 +517,22 @@ impl BrowserPage {
             ui.add_space(6.0);
         }
 
-        self.status_section(ui, cx);
-        self.install_section(ui, cx);
-        self.tests_section(ui, cx);
-        self.traffic_section(ui, cx);
+        let tab = ui::tabs(
+            ui,
+            "browser",
+            &[
+                ui::Tab::new("status", tr("Status")),
+                ui::Tab::new("install", tr("Instalação")),
+                ui::Tab::new("tests", tr("Testes")),
+                ui::Tab::new("traffic", tr("Tráfego CDP (ao vivo)")),
+            ],
+        );
+        match tab {
+            "install" => self.install_section(ui, cx),
+            "tests" => self.tests_section(ui, cx),
+            "traffic" => self.traffic_section(ui, cx),
+            _ => self.status_section(ui, cx),
+        }
     }
 
     // ---------- Status ----------

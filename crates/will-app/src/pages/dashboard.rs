@@ -10,6 +10,8 @@ use will_core::{Event, Module};
 
 #[derive(Default)]
 pub struct DashboardPage {
+    /// Permissões do macOS (microfone, notificações…): cartão e passagem inicial.
+    pub permissions: crate::permissions::Permissions,
     status: Loader<Value>,
     /// Contas Google (só para o rótulo "N conta(s)" na grade de módulos).
     google_accounts: Loader<Value>,
@@ -101,6 +103,8 @@ impl DashboardPage {
             tr("Início"),
             Some(tr("Estado do serviço nesta máquina.")),
         );
+
+        self.permissions.ui(ui, cx);
 
         let s = &cx.snap.settings;
         let kb_ok = cx.snap.modules.get(&Module::Engine).map(|m| !matches!(m, will_core::ModuleStatus::Degraded(d) if d.contains("base de conhecimento"))).unwrap_or(false) && s.kb.path.is_some();

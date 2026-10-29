@@ -344,6 +344,7 @@ impl ExternalPage {
                 self.show_import_json = !self.show_import_json;
             }
             if ui.button(tr("Ver .mcp.json")).on_hover_text(tr("Abre a seção Base de conhecimento, onde o arquivo gerado pode ser inspecionado.")).clicked() {
+                ui::select_tab(ui.ctx(), "kb", "status");
                 *cx.go = Some(Nav::Settings(SettingsSection::Kb));
             }
             if ui.button(tr("Atualizar")).clicked() {

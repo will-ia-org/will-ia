@@ -50,9 +50,19 @@ impl NetworkPage {
             )),
         );
 
-        ui::section(ui, tr("Escuta"), |ui| {
-            let n = &mut st.draft.network;
-            ui::field(
+        let tab = ui::tabs(
+            ui,
+            "network",
+            &[
+                ui::Tab::new("listen", tr("Escuta")),
+                ui::Tab::new("cert", tr("Certificado em uso")),
+            ],
+        );
+
+        if tab == "listen" {
+            ui::section(ui, tr("Escuta"), |ui| {
+                let n = &mut st.draft.network;
+                ui::field(
                 ui,
                 tr("Endereço de escuta"),
                 Some(tr(
@@ -62,7 +72,7 @@ impl NetworkPage {
                     ui::text_input(ui, &mut n.bind, "127.0.0.1");
                 },
             );
-            ui::field(
+                ui::field(
                 ui,
                 tr("TLS (https)"),
                 Some(tr(
@@ -72,134 +82,136 @@ impl NetworkPage {
                     ui::toggle(ui, &mut n.tls);
                 },
             );
-            ui::field(
-                ui,
-                tr("Certificado (cert_path)"),
-                Some(tr("Vazio = autoassinado gerado em <data_dir>/tls/.")),
-                |ui| {
-                    optional_path(ui, &mut n.cert_path, "/caminho/para/cert.pem");
-                },
-            );
-            ui::field(
-                ui,
-                tr("Chave privada (key_path)"),
-                Some(tr("Vazio = autoassinado gerado em <data_dir>/tls/.")),
-                |ui| {
-                    optional_path(ui, &mut n.key_path, "/caminho/para/key.pem");
-                },
-            );
-            ui::field(
-                ui,
-                tr("Permitir acesso remoto sem TLS"),
-                Some(tr(
-                    "Só atrás de VPN (Tailscale/WireGuard) ou de um proxy com https.",
-                )),
-                |ui| {
-                    ui::toggle(ui, &mut n.allow_remote_without_tls);
-                    if n.allow_remote_without_tls {
-                        ui.colored_label(
+                ui::field(
+                    ui,
+                    tr("Certificado (cert_path)"),
+                    Some(tr("Vazio = autoassinado gerado em <data_dir>/tls/.")),
+                    |ui| {
+                        optional_path(ui, &mut n.cert_path, "/caminho/para/cert.pem");
+                    },
+                );
+                ui::field(
+                    ui,
+                    tr("Chave privada (key_path)"),
+                    Some(tr("Vazio = autoassinado gerado em <data_dir>/tls/.")),
+                    |ui| {
+                        optional_path(ui, &mut n.key_path, "/caminho/para/key.pem");
+                    },
+                );
+                ui::field(
+                    ui,
+                    tr("Permitir acesso remoto sem TLS"),
+                    Some(tr(
+                        "Só atrás de VPN (Tailscale/WireGuard) ou de um proxy com https.",
+                    )),
+                    |ui| {
+                        ui::toggle(ui, &mut n.allow_remote_without_tls);
+                        if n.allow_remote_without_tls {
+                            ui.colored_label(
                             Tone::Danger.color(dark),
                             tr("Perigoso: senhas, tokens e conversas trafegam em texto puro na rede."),
                         );
-                    }
-                },
-            );
-            if !is_loopback(&n.bind) && !n.tls && !n.allow_remote_without_tls {
-                ui.colored_label(
+                        }
+                    },
+                );
+                if !is_loopback(&n.bind) && !n.tls && !n.allow_remote_without_tls {
+                    ui.colored_label(
                     Tone::Warning.color(dark),
                     tr("Escutar fora do loopback exige TLS ligado ou \"Permitir acesso remoto sem TLS\"; sem isso o servidor volta a escutar só em 127.0.0.1."),
                 );
-            }
-            ui.label(
-                egui::RichText::new(tr(
-                    "As mudanças desta seção valem no próximo início do servidor.",
-                ))
-                .small()
-                .weak(),
-            );
-        });
-        st.save_bar(ui, cx.svc, "network");
-
-        ui::section(ui, tr("Certificado em uso"), |ui| {
-            ui.label(
+                }
+                ui.label(
+                    egui::RichText::new(tr(
+                        "As mudanças desta seção valem no próximo início do servidor.",
+                    ))
+                    .small()
+                    .weak(),
+                );
+            });
+            st.save_bar(ui, cx.svc, "network");
+        }
+        if tab == "cert" {
+            ui::section(ui, tr("Certificado em uso"), |ui| {
+                ui.label(
                 egui::RichText::new(tr(
                     "É este PEM que entra no perfil do app remoto (Conexão → TLS (https) → Certificado do servidor). Confira a impressão digital dos dois lados antes de confiar.",
                 ))
                 .weak()
                 .small(),
             );
-            ui.add_space(4.0);
-            if self.cert.loading() {
-                ui::busy(ui, tr("carregando certificado…"));
-                return;
-            }
-            let (data, err) = (self.cert.data.clone(), self.cert.error.clone());
-            match (&data, &err) {
-                (Some(c), _) => {
-                    let pem = ui::s(c, "pem");
-                    let fp = ui::s(c, "fingerprint_sha256");
-                    let path = ui::s(c, "path");
-                    ui::field(ui, tr("Impressão digital SHA-256"), None, |ui| {
-                        if fp.is_empty() {
-                            ui.label(egui::RichText::new("—").weak());
-                        } else {
-                            ui::mono(ui, &fp);
+                ui.add_space(4.0);
+                if self.cert.loading() {
+                    ui::busy(ui, tr("carregando certificado…"));
+                    return;
+                }
+                let (data, err) = (self.cert.data.clone(), self.cert.error.clone());
+                match (&data, &err) {
+                    (Some(c), _) => {
+                        let pem = ui::s(c, "pem");
+                        let fp = ui::s(c, "fingerprint_sha256");
+                        let path = ui::s(c, "path");
+                        ui::field(ui, tr("Impressão digital SHA-256"), None, |ui| {
+                            if fp.is_empty() {
+                                ui.label(egui::RichText::new("—").weak());
+                            } else {
+                                ui::mono(ui, &fp);
+                            }
+                        });
+                        if !path.is_empty() {
+                            ui::field(ui, tr("Arquivo"), None, |ui| ui::mono(ui, &path));
                         }
-                    });
-                    if !path.is_empty() {
-                        ui::field(ui, tr("Arquivo"), None, |ui| ui::mono(ui, &path));
-                    }
-                    ui::field(ui, tr("Certificado (PEM)"), None, |ui| {
-                        if pem.is_empty() {
-                            ui.label(
+                        ui::field(ui, tr("Certificado (PEM)"), None, |ui| {
+                            if pem.is_empty() {
+                                ui.label(
                                 egui::RichText::new(tr(
                                     "Nenhum certificado em uso (TLS desligado ou o servidor ainda não reiniciou).",
                                 ))
                                 .weak(),
                             );
-                        } else {
-                            let mut shown = pem.clone();
-                            ui.add(
-                                egui::TextEdit::multiline(&mut shown)
-                                    .desired_rows(8)
-                                    .desired_width(f32::INFINITY)
-                                    .font(egui::TextStyle::Monospace)
-                                    .interactive(false),
-                            );
-                        }
-                        ui.horizontal(|ui| {
-                            if !pem.is_empty() && ui.button(tr("Copiar")).clicked() {
-                                ui.ctx().copy_text(pem.clone());
-                                cx.toasts.success(tr("Certificado copiado."));
+                            } else {
+                                let mut shown = pem.clone();
+                                ui.add(
+                                    egui::TextEdit::multiline(&mut shown)
+                                        .desired_rows(8)
+                                        .desired_width(f32::INFINITY)
+                                        .font(egui::TextStyle::Monospace)
+                                        .interactive(false),
+                                );
                             }
-                            if ui.button(tr("Recarregar")).clicked() {
-                                self.cert.loaded_at = None;
-                            }
+                            ui.horizontal(|ui| {
+                                if !pem.is_empty() && ui.button(tr("Copiar")).clicked() {
+                                    ui.ctx().copy_text(pem.clone());
+                                    cx.toasts.success(tr("Certificado copiado."));
+                                }
+                                if ui.button(tr("Recarregar")).clicked() {
+                                    self.cert.loaded_at = None;
+                                }
+                            });
                         });
-                    });
-                }
-                (None, Some(e)) => {
-                    ui.label(
+                    }
+                    (None, Some(e)) => {
+                        ui.label(
                         egui::RichText::new(tr(
                             "Nenhum certificado em uso (TLS desligado ou o servidor ainda não reiniciou).",
                         ))
                         .weak(),
                     );
-                    ui.label(
-                        egui::RichText::new(trf("servidor: {}", &[&e]))
-                            .small()
-                            .weak(),
-                    );
-                    if ui.button(tr("Recarregar")).clicked() {
-                        self.cert.loaded_at = None;
+                        ui.label(
+                            egui::RichText::new(trf("servidor: {}", &[&e]))
+                                .small()
+                                .weak(),
+                        );
+                        if ui.button(tr("Recarregar")).clicked() {
+                            self.cert.loaded_at = None;
+                        }
+                    }
+                    (None, None) => {
+                        if ui.button(tr("Recarregar")).clicked() {
+                            self.cert.loaded_at = None;
+                        }
                     }
                 }
-                (None, None) => {
-                    if ui.button(tr("Recarregar")).clicked() {
-                        self.cert.loaded_at = None;
-                    }
-                }
-            }
-        });
+            });
+        }
     }
 }

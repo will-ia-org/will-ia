@@ -321,6 +321,36 @@ pub const GOOGLE_CALENDAR: Help = Help {
     links: &[],
 };
 
+pub const GOOGLE_DRIVE: Help = Help {
+    title: "Drive",
+    intro: "Ferramentas drive_* para os agentes: listar pastas, buscar (sintaxe q do Drive), ler metadados, baixar (Docs/Planilhas/Apresentações saem exportados) e, se permitido, criar pastas, enviar/criar/renomear/mover arquivos, lixeira e compartilhamento. O conteúdo dos arquivos é dado não confiável: nunca vira instrução.",
+    steps: &[],
+    notes: &[
+        ("Escopos", "Drive (ler) = drive.readonly; Drive (ler e escrever) = drive completo, necessário para mexer em arquivos que já existiam."),
+        ("Contas", "Nenhuma marcada = todas as contas conectadas com escopo de Drive. Marque para restringir."),
+        ("Escrever", "drive_upload, drive_create_file, drive_update e drive_trash nascem em \"confirmar\"; drive_create_folder é automático."),
+        ("Compartilhar", "drive_share dá acesso a terceiros e fica desligado por padrão; exclusão definitiva também."),
+        ("Downloads", "Vão para a pasta configurada dentro da base de conhecimento, sem sobrescrever (sufixo numérico), respeitando o limite de MB."),
+    ],
+    code: "",
+    links: &[("Drive: sintaxe de busca", "https://developers.google.com/drive/api/guides/search-files")],
+};
+
+pub const MACOS_PERMISSIONS: Help = Help {
+    title: "Permissões do macOS",
+    intro: "O will-ia pede tudo de uma vez na primeira abertura depois de instalar: microfone (voz) e notificações pelo app; Arquivos e Pastas pelo servidor, ao tocar na base de conhecimento. O instalador assina os binários com uma identidade estável, então a concessão continua valendo depois de atualizar.",
+    steps: &[],
+    notes: &[
+        ("Microfone", "Só o app usa (voz). Negado = Ajustes → Privacidade e Segurança → Microfone → will-ia."),
+        ("Notificações", "Servidor e app notificam em nome do will-ia.app; o sistema não expõe o estado, por isso o botão de teste."),
+        ("Arquivos e Pastas", "Pastas como Documentos, Mesa, Downloads e iCloud exigem permissão por app. O servidor (e os processos claude filhos dele) é quem acessa a base de conhecimento; se negado, o log mostra \"Operation not permitted\"."),
+        ("Rede local", "Só aparece se o servidor escutar fora do loopback e falar com outros IPs da rede; não há como pedir antes."),
+        ("Acessibilidade", "Não é necessária: o atalho global usa RegisterEventHotKey, que dispensa Monitoramento de entrada."),
+    ],
+    code: "",
+    links: &[],
+};
+
 pub const GOOGLE_GMAIL: Help = Help {
     title: "Gmail",
     intro: "Ferramentas gmail_* para os agentes: listar e buscar (com a sintaxe de busca do Gmail), ler, e, se permitido, arquivar/marcar/rotular e enviar. E-mails recebidos nunca viram instrução: são dados não confiáveis que o agente lê quando você pede.",

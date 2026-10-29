@@ -966,26 +966,27 @@ impl ConnectPage {
                             )),
                         );
                         ui.add_space(6.0);
-                        ui.horizontal(|ui| {
-                            if ui
-                                .selectable_label(self.tab == LandingTab::Profiles, tr("Perfis"))
-                                .clicked()
-                            {
-                                self.tab = LandingTab::Profiles;
-                            }
-                            let form_label = if self.edit_id.is_some() {
-                                tr("Editar perfil")
-                            } else {
-                                tr("Novo perfil")
-                            };
-                            if ui
-                                .selectable_label(self.tab == LandingTab::Form, form_label)
-                                .clicked()
-                            {
-                                self.tab = LandingTab::Form;
-                            }
-                        });
-                        ui.separator();
+                        let form_label = if self.edit_id.is_some() {
+                            tr("Editar perfil")
+                        } else {
+                            tr("Novo perfil")
+                        };
+                        let selected = match self.tab {
+                            LandingTab::Profiles => "profiles",
+                            LandingTab::Form => "form",
+                        };
+                        match ui::tab_bar(
+                            ui,
+                            &[
+                                ui::Tab::new("profiles", tr("Perfis")),
+                                ui::Tab::new("form", form_label),
+                            ],
+                            selected,
+                        ) {
+                            Some("form") => self.tab = LandingTab::Form,
+                            Some(_) => self.tab = LandingTab::Profiles,
+                            None => {}
+                        }
                         match self.tab {
                             LandingTab::Profiles => {
                                 if cx.svc.has_profile() {

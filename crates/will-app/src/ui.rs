@@ -354,6 +354,9 @@ pub fn module_name(m: will_core::Module) -> &'static str {
         M::Google => tr("Conta Google"),
         M::Calendar => tr("Agenda"),
         M::Gmail => tr("Gmail"),
+        // Module::Drive chegou com o lote do Google Drive (backend); nome mínimo
+        // aqui só para o match ser exaustivo.
+        M::Drive => tr("Drive"),
         M::Scheduler => tr("Agendamentos"),
         M::Browser => tr("Browser CDP"),
     }
@@ -401,6 +404,146 @@ pub fn toggle(ui: &mut Ui, on: &mut bool) -> egui::Response {
     ui.painter()
         .circle_filled(egui::pos2(cx, rect.center().y), r - 3.0, Color32::WHITE);
     resp
+}
+
+// ---------- abas ----------
+
+/// Uma aba de [`tabs`]/[`tab_bar`]: chave estável (não traduzida; é o que o
+/// deep-link `pagina/aba` usa) + rótulo + bolinha de estado opcional.
+pub struct Tab {
+    pub key: &'static str,
+    pub label: String,
+    pub tone: Option<Tone>,
+}
+
+impl Tab {
+    pub fn new(key: &'static str, label: impl Into<String>) -> Self {
+        Self {
+            key,
+            label: label.into(),
+            tone: None,
+        }
+    }
+    pub fn tone(mut self, tone: Option<Tone>) -> Self {
+        self.tone = tone;
+        self
+    }
+}
+
+fn tabs_memory_id(page: &str) -> egui::Id {
+    egui::Id::unique(("will-tabs", page))
+}
+
+/// Aba guardada para `page` (memória do egui, dura a sessão do app).
+pub fn selected_tab(ctx: &egui::Context, page: &str) -> Option<String> {
+    ctx.data(|d| d.get_temp::<String>(tabs_memory_id(page)))
+}
+
+/// Seleciona a aba de uma página sem desenhar nada: deep-link ("ir para
+/// Configurações → Google → Gmail") e `screenshot --nav pagina/aba`.
+pub fn select_tab(ctx: &egui::Context, page: &str, key: &str) {
+    ctx.data_mut(|d| d.insert_temp(tabs_memory_id(page), key.to_string()));
+}
+
+/// Barra de abas com estado próprio por `page`: desenha, trata o clique e
+/// devolve a chave da aba ativa (a primeira quando nenhuma foi escolhida ou a
+/// guardada não existe mais). Cada página longa com seções independentes usa
+/// isto logo abaixo do título e desenha só a seção da aba ativa.
+pub fn tabs(ui: &mut Ui, page: &str, items: &[Tab]) -> &'static str {
+    let Some(first) = items.first() else {
+        return "";
+    };
+    let remembered = selected_tab(ui.ctx(), page);
+    let current = items
+        .iter()
+        .find(|t| remembered.as_deref() == Some(t.key))
+        .map(|t| t.key)
+        .unwrap_or(first.key);
+    match tab_bar(ui, items, current) {
+        Some(clicked) if clicked != current => {
+            select_tab(ui.ctx(), page, clicked);
+            clicked
+        }
+        _ => current,
+    }
+}
+
+/// Barra de abas sem estado: desenha com `selected` ativa e devolve a chave
+/// clicada neste quadro. Quebra linha quando a janela é estreita.
+pub fn tab_bar(ui: &mut Ui, items: &[Tab], selected: &str) -> Option<&'static str> {
+    let dark = ui.visuals().dark_mode;
+    let p = palette(dark);
+    let mut clicked = None;
+    ui.add_space(6.0);
+    let row = ui
+        .horizontal_wrapped(|ui| {
+            ui.spacing_mut().item_spacing = egui::vec2(4.0, 4.0);
+            for t in items {
+                let active = t.key == selected;
+                let font = if active {
+                    medium(14.0)
+                } else {
+                    egui::FontId::proportional(14.0)
+                };
+                let galley = ui.painter().layout_no_wrap(t.label.clone(), font, p.text);
+                let dot_w = if t.tone.is_some() { 14.0 } else { 0.0 };
+                let size = egui::vec2(galley.size().x + 28.0 + dot_w, 32.0);
+                let (rect, resp) = ui.allocate_exact_size(size, egui::Sense::click());
+                if ui.is_rect_visible(rect) {
+                    let fill = if active {
+                        p.accent.linear_multiply(if dark { 0.26 } else { 0.14 })
+                    } else if resp.hovered() {
+                        p.card_alt
+                    } else {
+                        Color32::TRANSPARENT
+                    };
+                    ui.painter().rect_filled(rect, 7.0, fill);
+                    if active {
+                        ui.painter().rect_filled(
+                            egui::Rect::from_min_max(
+                                egui::pos2(rect.left() + 10.0, rect.bottom() - 3.0),
+                                egui::pos2(rect.right() - 10.0, rect.bottom() - 1.0),
+                            ),
+                            1.0,
+                            p.accent,
+                        );
+                    }
+                    let mut x = rect.left() + 14.0;
+                    if let Some(tone) = t.tone {
+                        ui.painter().circle_filled(
+                            egui::pos2(x + 4.0, rect.center().y),
+                            4.0,
+                            tone.color(dark),
+                        );
+                        x += dot_w;
+                    }
+                    let color = if active || resp.hovered() {
+                        p.text
+                    } else {
+                        p.text_weak
+                    };
+                    ui.painter().galley(
+                        egui::pos2(x, rect.center().y - galley.size().y / 2.0),
+                        galley,
+                        color,
+                    );
+                }
+                let resp = resp.on_hover_cursor(egui::CursorIcon::PointingHand);
+                if resp.clicked() {
+                    clicked = Some(t.key);
+                }
+            }
+        })
+        .response;
+    // linha de base sob as abas
+    let r = row.rect;
+    ui.painter().hline(
+        r.left()..=r.right(),
+        r.bottom() + 2.0,
+        egui::Stroke::new(1.0, p.border),
+    );
+    ui.add_space(2.0);
+    clicked
 }
 
 pub fn heading(ui: &mut Ui, title: &str, description: Option<&str>) {

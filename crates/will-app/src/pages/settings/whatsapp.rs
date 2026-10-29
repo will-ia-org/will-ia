@@ -111,53 +111,63 @@ impl WhatsAppPage {
             .cloned()
             .unwrap_or_default();
 
-        ui::section(ui, tr("Contas"), |ui| {
-            if let Some(e) = &self.status.error {
-                ui::error_text(ui, e);
-            }
-            if let Some(s) = &status {
-                ui.horizontal(|ui| {
-                    let m = cx
-                        .snap
-                        .modules
-                        .get(&will_core::Module::WhatsApp)
-                        .cloned()
-                        .unwrap_or(will_core::ModuleStatus::Stopped);
-                    ui::badge(ui, &ui::module_label(&m), ui::tone_for_module(&m));
+        let tab = ui::tabs(
+            ui,
+            "whatsapp",
+            &[
+                ui::Tab::new("accounts", tr("Contas")),
+                ui::Tab::new("config", tr("Configuração")),
+            ],
+        );
+
+        if tab == "accounts" {
+            ui::section(ui, tr("Contas"), |ui| {
+                if let Some(e) = &self.status.error {
+                    ui::error_text(ui, e);
+                }
+                if let Some(s) = &status {
+                    ui.horizontal(|ui| {
+                        let m = cx
+                            .snap
+                            .modules
+                            .get(&will_core::Module::WhatsApp)
+                            .cloned()
+                            .unwrap_or(will_core::ModuleStatus::Stopped);
+                        ui::badge(ui, &ui::module_label(&m), ui::tone_for_module(&m));
+                        ui.label(
+                            egui::RichText::new(trf(
+                                "backend {} · índice total: {} chats, {} mensagens",
+                                &[
+                                    &ui::s(s, "backend"),
+                                    &ui::i(&s["index_total"], "chats"),
+                                    &ui::i(&s["index_total"], "messages"),
+                                ],
+                            ))
+                            .small()
+                            .weak(),
+                        );
+                        if ui.button(tr("atualizar")).clicked() {
+                            self.status.loaded_at = None;
+                        }
+                    });
+                }
+                if !enabled_saved {
                     ui.label(
-                        egui::RichText::new(trf(
-                            "backend {} · índice total: {} chats, {} mensagens",
-                            &[
-                                &ui::s(s, "backend"),
-                                &ui::i(&s["index_total"], "chats"),
-                                &ui::i(&s["index_total"], "messages"),
-                            ],
+                        egui::RichText::new(tr(
+                            "Habilite o módulo na configuração abaixo e salve para parear contas.",
                         ))
-                        .small()
                         .weak(),
                     );
-                    if ui.button(tr("atualizar")).clicked() {
-                        self.status.loaded_at = None;
-                    }
-                });
-            }
-            if !enabled_saved {
-                ui.label(
-                    egui::RichText::new(tr(
-                        "Habilite o módulo na configuração abaixo e salve para parear contas.",
-                    ))
-                    .weak(),
-                );
-            }
-            if accounts.is_empty() {
-                ui.label(egui::RichText::new(tr("Nenhuma conta pareada.")).weak());
-            }
-            for a in &accounts {
-                let id = ui::s(a, "id");
-                let label = ui::s(a, "label");
-                let state = ui::s(a, "state");
-                let busy = self.action_task.is_some() || self.pair_task.is_some();
-                egui::Frame::group(ui.style()).corner_radius(8.0).show(ui, |ui| {
+                }
+                if accounts.is_empty() {
+                    ui.label(egui::RichText::new(tr("Nenhuma conta pareada.")).weak());
+                }
+                for a in &accounts {
+                    let id = ui::s(a, "id");
+                    let label = ui::s(a, "label");
+                    let state = ui::s(a, "state");
+                    let busy = self.action_task.is_some() || self.pair_task.is_some();
+                    egui::Frame::group(ui.style()).corner_radius(8.0).show(ui, |ui| {
                     ui.set_width(ui.available_width());
                     ui.horizontal(|ui| {
                         let tone = match state.as_str() {
@@ -261,93 +271,93 @@ impl WhatsAppPage {
                         }
                     }
                 });
-            }
-            ui.add_space(6.0);
-            ui.horizontal(|ui| {
-                let busy = self.pair_task.is_some();
-                ui.add(
-                    egui::TextEdit::singleline(&mut self.new_label)
-                        .hint_text(tr("rótulo da nova conta (opcional)"))
-                        .desired_width(220.0),
-                );
-                if ui
-                    .add_enabled(
-                        !busy && enabled_saved,
-                        egui::Button::new(
-                            egui::RichText::new(tr("+ Nova conta por QR"))
-                                .color(egui::Color32::WHITE),
-                        )
-                        .fill(Tone::Success.color(true)),
-                    )
-                    .clicked()
-                {
-                    let label = if self.new_label.trim().is_empty() {
-                        None
-                    } else {
-                        Some(self.new_label.trim().to_string())
-                    };
-                    self.new_label.clear();
-                    self.pair_task = Some(cx.svc.call(move |c| async move {
-                        c.wa_pair(Some(json!({ "label": label }))).await
-                    }));
                 }
-                if ui
-                    .add_enabled(
-                        !busy && enabled_saved,
-                        egui::Button::new(tr("+ Nova conta por código")),
-                    )
-                    .clicked()
-                {
-                    self.show_code_pair = Some(String::new());
-                }
-                if busy {
-                    ui.spinner();
-                }
-            });
-            if let Some(target) = self.show_code_pair.clone() {
+                ui.add_space(6.0);
                 ui.horizontal(|ui| {
-                    ui.label(tr("Telefone com DDI, só dígitos:"));
+                    let busy = self.pair_task.is_some();
                     ui.add(
-                        egui::TextEdit::singleline(&mut self.phone)
-                            .hint_text("5511999998888")
-                            .desired_width(160.0),
+                        egui::TextEdit::singleline(&mut self.new_label)
+                            .hint_text(tr("rótulo da nova conta (opcional)"))
+                            .desired_width(220.0),
                     );
-                    self.phone.retain(|c| c.is_ascii_digit());
-                    let ok = self.phone.len() >= 8;
                     if ui
-                        .add_enabled(ok, egui::Button::new(tr("Gerar código")))
+                        .add_enabled(
+                            !busy && enabled_saved,
+                            egui::Button::new(
+                                egui::RichText::new(tr("+ Nova conta por QR"))
+                                    .color(egui::Color32::WHITE),
+                            )
+                            .fill(Tone::Success.color(true)),
+                        )
                         .clicked()
                     {
-                        let phone = Some(self.phone.clone());
-                        let account_id = if target.is_empty() {
-                            None
-                        } else {
-                            Some(target.clone())
-                        };
                         let label = if self.new_label.trim().is_empty() {
                             None
                         } else {
                             Some(self.new_label.trim().to_string())
                         };
+                        self.new_label.clear();
                         self.pair_task = Some(cx.svc.call(move |c| async move {
-                            c.wa_pair(Some(json!({
-                                "account_id": account_id,
-                                "phone": phone,
-                                "label": label,
-                            })))
-                            .await
+                            c.wa_pair(Some(json!({ "label": label }))).await
                         }));
                     }
-                    if ui.button(tr("Cancelar")).clicked() {
-                        self.show_code_pair = None;
+                    if ui
+                        .add_enabled(
+                            !busy && enabled_saved,
+                            egui::Button::new(tr("+ Nova conta por código")),
+                        )
+                        .clicked()
+                    {
+                        self.show_code_pair = Some(String::new());
+                    }
+                    if busy {
+                        ui.spinner();
                     }
                 });
-            }
-        });
+                if let Some(target) = self.show_code_pair.clone() {
+                    ui.horizontal(|ui| {
+                        ui.label(tr("Telefone com DDI, só dígitos:"));
+                        ui.add(
+                            egui::TextEdit::singleline(&mut self.phone)
+                                .hint_text("5511999998888")
+                                .desired_width(160.0),
+                        );
+                        self.phone.retain(|c| c.is_ascii_digit());
+                        let ok = self.phone.len() >= 8;
+                        if ui
+                            .add_enabled(ok, egui::Button::new(tr("Gerar código")))
+                            .clicked()
+                        {
+                            let phone = Some(self.phone.clone());
+                            let account_id = if target.is_empty() {
+                                None
+                            } else {
+                                Some(target.clone())
+                            };
+                            let label = if self.new_label.trim().is_empty() {
+                                None
+                            } else {
+                                Some(self.new_label.trim().to_string())
+                            };
+                            self.pair_task = Some(cx.svc.call(move |c| async move {
+                                c.wa_pair(Some(json!({
+                                    "account_id": account_id,
+                                    "phone": phone,
+                                    "label": label,
+                                })))
+                                .await
+                            }));
+                        }
+                        if ui.button(tr("Cancelar")).clicked() {
+                            self.show_code_pair = None;
+                        }
+                    });
+                }
+            });
 
-        if let Some((id, label)) = self.confirm_unlink.clone() {
-            let mut decided = None;
-            let m = egui::Modal::new(egui::Id::unique(("wa-unlink", &id))).show(ui.ctx(), |ui| {
+            if let Some((id, label)) = self.confirm_unlink.clone() {
+                let mut decided = None;
+                let m = egui::Modal::new(egui::Id::unique(("wa-unlink", &id))).show(ui.ctx(), |ui| {
                 ui.set_width(440.0);
                 ui.heading(trf("Desvincular '{}'", &[&label]));
                 ui.label(tr("Faz logout remoto (o telefone deixa de listar este aparelho) e apaga a sessão local."));
@@ -362,82 +372,84 @@ impl WhatsAppPage {
                     }
                 });
             });
-            if m.should_close() && decided.is_none() {
-                decided = Some(false);
-            }
-            if let Some(ok) = decided {
-                self.confirm_unlink = None;
-                if ok {
-                    let (clear, remove) = (self.clear_index, self.remove_account);
-                    self.action_task = Some((
-                        tr("Desvincular").into(),
-                        cx.svc.call(move |c| async move {
-                            c.wa_unlink(Some(json!({
-                                "account_id": id,
-                                "clear_index": clear,
-                                "remove": remove,
-                            })))
-                            .await
-                        }),
-                    ));
+                if m.should_close() && decided.is_none() {
+                    decided = Some(false);
+                }
+                if let Some(ok) = decided {
+                    self.confirm_unlink = None;
+                    if ok {
+                        let (clear, remove) = (self.clear_index, self.remove_account);
+                        self.action_task = Some((
+                            tr("Desvincular").into(),
+                            cx.svc.call(move |c| async move {
+                                c.wa_unlink(Some(json!({
+                                    "account_id": id,
+                                    "clear_index": clear,
+                                    "remove": remove,
+                                })))
+                                .await
+                            }),
+                        ));
+                    }
                 }
             }
         }
-
-        ui::section(ui, tr("Configuração"), |ui| {
-            let w = &mut st.draft.whatsapp;
-            ui::field(
-                ui,
-                tr("Habilitar módulo"),
-                Some(tr(
-                    "Sem isso nenhuma conta conecta e as ferramentas ficam indisponíveis.",
-                )),
-                |ui| {
-                    ui::toggle(ui, &mut w.enabled);
-                },
-            );
-            ui::field(
-                ui,
-                tr("Retenção do índice (dias)"),
-                Some(tr("Mensagens mais antigas são apagadas do índice local.")),
-                |ui| {
-                    ui::number(ui, &mut w.retention_days, 1..=3650);
-                },
-            );
-            ui::field(
-                ui,
-                tr("Limite de envio"),
-                Some(tr("Mensagens por janela de minutos, por conta.")),
-                |ui| {
-                    ui.horizontal(|ui| {
-                        ui::number(ui, &mut w.send_rate_limit_count, 1..=1000);
-                        ui.label(tr("msgs /"));
-                        ui::number(ui, &mut w.send_rate_limit_minutes, 1..=1440);
-                        ui.label(tr("min"));
-                    });
-                },
-            );
-            ui::field(
-                ui,
-                tr("Permitir números não salvos"),
-                Some(tr("Envio para telefones que não estão nos contatos.")),
-                |ui| {
-                    ui::toggle(ui, &mut w.allow_unsaved_numbers);
-                },
-            );
-            ui::field(ui, tr("Recibo de leitura em mark_read"), None, |ui| {
-                ui::toggle(ui, &mut w.send_read_receipts);
+        if tab == "config" {
+            ui::section(ui, tr("Configuração"), |ui| {
+                let w = &mut st.draft.whatsapp;
+                ui::field(
+                    ui,
+                    tr("Habilitar módulo"),
+                    Some(tr(
+                        "Sem isso nenhuma conta conecta e as ferramentas ficam indisponíveis.",
+                    )),
+                    |ui| {
+                        ui::toggle(ui, &mut w.enabled);
+                    },
+                );
+                ui::field(
+                    ui,
+                    tr("Retenção do índice (dias)"),
+                    Some(tr("Mensagens mais antigas são apagadas do índice local.")),
+                    |ui| {
+                        ui::number(ui, &mut w.retention_days, 1..=3650);
+                    },
+                );
+                ui::field(
+                    ui,
+                    tr("Limite de envio"),
+                    Some(tr("Mensagens por janela de minutos, por conta.")),
+                    |ui| {
+                        ui.horizontal(|ui| {
+                            ui::number(ui, &mut w.send_rate_limit_count, 1..=1000);
+                            ui.label(tr("msgs /"));
+                            ui::number(ui, &mut w.send_rate_limit_minutes, 1..=1440);
+                            ui.label(tr("min"));
+                        });
+                    },
+                );
+                ui::field(
+                    ui,
+                    tr("Permitir números não salvos"),
+                    Some(tr("Envio para telefones que não estão nos contatos.")),
+                    |ui| {
+                        ui::toggle(ui, &mut w.allow_unsaved_numbers);
+                    },
+                );
+                ui::field(ui, tr("Recibo de leitura em mark_read"), None, |ui| {
+                    ui::toggle(ui, &mut w.send_read_receipts);
+                });
+                ui::field(
+                    ui,
+                    tr("Pasta de mídia"),
+                    Some(tr("Relativa à base de conhecimento.")),
+                    |ui| {
+                        ui::text_input(ui, &mut w.media_dir, "inbox/whatsapp");
+                    },
+                );
             });
-            ui::field(
-                ui,
-                tr("Pasta de mídia"),
-                Some(tr("Relativa à base de conhecimento.")),
-                |ui| {
-                    ui::text_input(ui, &mut w.media_dir, "inbox/whatsapp");
-                },
-            );
-        });
-        st.save_bar(ui, cx.svc, "whatsapp");
+            st.save_bar(ui, cx.svc, "whatsapp");
+        }
     }
 }
 

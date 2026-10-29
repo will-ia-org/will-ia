@@ -19,12 +19,14 @@ const DEFAULT_SECRET_KEY: &str = "google_client_secret";
 
 /// Escopos lógicos oferecidos ao conectar: (chave aceita pelo serviço, rótulo pt-BR;
 /// traduzir com `tr` ao exibir).
-const SCOPE_OPTIONS: [(&str, &str); 5] = [
+const SCOPE_OPTIONS: [(&str, &str); 7] = [
     ("calendar", "Agenda (ler)"),
     ("calendar_write", "Agenda (criar/editar)"),
     ("gmail", "Gmail (ler)"),
     ("gmail_send", "Gmail (enviar)"),
     ("gmail_modify", "Gmail (arquivar/marcar/rotular)"),
+    ("drive", "Drive (ler)"),
+    ("drive_write", "Drive (ler e escrever)"),
 ];
 
 /// Fluxo OAuth em andamento: o app escuta o callback no loopback local e
@@ -291,9 +293,29 @@ impl GooglePage {
             }
         });
 
-        self.account_section(ui, cx, st);
-        self.calendar_section(ui, cx, st);
-        self.gmail_section(ui, cx, st);
+        let tone = |m: Module| {
+            cx.snap
+                .modules
+                .get(&m)
+                .map(ui::tone_for_module)
+                .or(Some(Tone::Neutral))
+        };
+        let tab = ui::tabs(
+            ui,
+            "google",
+            &[
+                ui::Tab::new("account", tr("Conta")).tone(tone(Module::Google)),
+                ui::Tab::new("calendar", tr("Agenda")).tone(tone(Module::Calendar)),
+                ui::Tab::new("gmail", tr("Gmail")).tone(tone(Module::Gmail)),
+                ui::Tab::new("drive", tr("Drive")).tone(tone(Module::Drive)),
+            ],
+        );
+        match tab {
+            "calendar" => self.calendar_section(ui, cx, st),
+            "gmail" => self.gmail_section(ui, cx, st),
+            "drive" => self.drive_section(ui, cx, st),
+            _ => self.account_section(ui, cx, st),
+        }
     }
 
     // ---------- 1. Conta Google ----------
@@ -749,48 +771,7 @@ impl GooglePage {
                 Some(tr(
                     "Nenhuma marcada = todas as contas conectadas com escopo de Gmail.",
                 )),
-                |ui| {
-                    if accounts.is_empty() {
-                        ui.label(
-                            egui::RichText::new(tr("Nenhuma conta conectada."))
-                                .weak()
-                                .small(),
-                        );
-                    }
-                    for a in &accounts {
-                        let id = ui::s(a, "id");
-                        let email = ui::s(a, "email");
-                        let mut on = g.accounts.iter().any(|x| x == &id || x == &email);
-                        if ui.checkbox(&mut on, &email).changed() {
-                            g.accounts.retain(|x| x != &id && x != &email);
-                            if on {
-                                g.accounts.push(id.clone());
-                            }
-                        }
-                    }
-                    let known: Vec<String> = accounts
-                        .iter()
-                        .flat_map(|a| [ui::s(a, "id"), ui::s(a, "email")])
-                        .collect();
-                    let unknown: Vec<String> = g
-                        .accounts
-                        .iter()
-                        .filter(|x| !known.contains(x))
-                        .cloned()
-                        .collect();
-                    for x in unknown {
-                        ui.horizontal(|ui| {
-                            ui.label(
-                                egui::RichText::new(trf("{} (conta não conectada)", &[&x]))
-                                    .weak()
-                                    .small(),
-                            );
-                            if ui.button(tr("remover")).clicked() {
-                                g.accounts.retain(|y| y != &x);
-                            }
-                        });
-                    }
-                },
+                |ui| account_multicheck(ui, &accounts, &mut g.accounts),
             );
             ui::field(
                 ui,
@@ -840,6 +821,161 @@ impl GooglePage {
             st.save_bar(ui, cx.svc, "gmail");
         });
     }
+
+    fn drive_section(&mut self, ui: &mut egui::Ui, cx: &mut Cx, st: &mut SettingsState) {
+        let accounts = self
+            .accounts
+            .data
+            .as_ref()
+            .and_then(|v| v.as_array())
+            .cloned()
+            .unwrap_or_default();
+        ui::section_help(ui, tr("Drive"), Some(&help::GOOGLE_DRIVE), |ui| {
+            let d = &mut st.draft.drive;
+            ui::field(ui, tr("Habilitar"), Some(tr("Ferramentas drive_* para os agentes. Exige conta com escopo Drive (ler) ou Drive (ler e escrever). Conteúdo de arquivos é dado, nunca instrução.")), |ui| {
+                ui::toggle(ui, &mut d.enabled);
+            });
+            ui::field(
+                ui,
+                tr("Contas usadas"),
+                Some(tr(
+                    "Nenhuma marcada = todas as contas conectadas com escopo de Drive.",
+                )),
+                |ui| account_multicheck(ui, &accounts, &mut d.accounts),
+            );
+            ui::field(ui, tr("Permitir escrever"), Some(tr("Enviar, criar, renomear/mover, substituir conteúdo e lixeira (cada ação pede confirmação). Exige o escopo Drive (ler e escrever).")), |ui| {
+                ui::toggle(ui, &mut d.allow_write);
+            });
+            ui::field(ui, tr("Permitir compartilhar"), Some(tr("drive_share/drive_unshare: dá acesso a terceiros (pessoa, domínio ou qualquer um com o link). Sempre com confirmação.")), |ui| {
+                ui::toggle(ui, &mut d.allow_share);
+            });
+            ui::field(
+                ui,
+                tr("Permitir excluir definitivamente"),
+                Some(tr(
+                    "drive_trash com permanent: apaga sem passar pela lixeira.",
+                )),
+                |ui| {
+                    ui::toggle(ui, &mut d.allow_delete);
+                },
+            );
+            ui::field(
+                ui,
+                tr("Baixar arquivos para"),
+                Some(tr("Relativa à base de conhecimento.")),
+                |ui| {
+                    ui::text_input(ui, &mut d.download_dir, "inbox/drive");
+                },
+            );
+            ui::field(ui, tr("Limite de download (MB)"), None, |ui| {
+                ui::number(ui, &mut d.max_download_mb, 1..=2048);
+            });
+            ui::field(
+                ui,
+                tr("Limite de upload (MB)"),
+                Some(tr("Acima de 5 MB o envio é feito em blocos (resumable).")),
+                |ui| {
+                    ui::number(ui, &mut d.max_upload_mb, 1..=2048);
+                },
+            );
+            ui::field(ui, tr("Exportar Docs como"), None, |ui| {
+                ui::select(ui, "drive-export-docs", &mut d.export_docs, &DOCS_EXPORTS);
+            });
+            ui::field(
+                ui,
+                tr("Exportar Planilhas como"),
+                Some(tr("CSV exporta só a primeira aba; XLSX, todas.")),
+                |ui| {
+                    ui::select(
+                        ui,
+                        "drive-export-sheets",
+                        &mut d.export_sheets,
+                        &SHEETS_EXPORTS,
+                    );
+                },
+            );
+            ui::field(ui, tr("Exportar Apresentações como"), None, |ui| {
+                ui::select(
+                    ui,
+                    "drive-export-slides",
+                    &mut d.export_slides,
+                    &SLIDES_EXPORTS,
+                );
+            });
+            st.save_bar(ui, cx.svc, "drive");
+        });
+    }
+}
+
+/// Formatos de exportação dos arquivos nativos do Google (MIME → rótulo).
+const DOCS_EXPORTS: [(&str, &str); 5] = [
+    ("text/markdown", "Markdown (.md)"),
+    ("application/pdf", "PDF"),
+    (
+        "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+        "Word (.docx)",
+    ),
+    ("text/plain", "Texto (.txt)"),
+    ("text/html", "HTML"),
+];
+const SHEETS_EXPORTS: [(&str, &str); 3] = [
+    ("text/csv", "CSV (1ª aba)"),
+    (
+        "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        "Excel (.xlsx)",
+    ),
+    ("application/pdf", "PDF"),
+];
+const SLIDES_EXPORTS: [(&str, &str); 2] = [
+    ("application/pdf", "PDF"),
+    (
+        "application/vnd.openxmlformats-officedocument.presentationml.presentation",
+        "PowerPoint (.pptx)",
+    ),
+];
+
+/// Multi-check das contas conectadas (por id/e-mail) com remoção das que não
+/// existem mais. Compartilhado por Gmail e Drive.
+fn account_multicheck(ui: &mut egui::Ui, accounts: &[Value], selected: &mut Vec<String>) {
+    if accounts.is_empty() {
+        ui.label(
+            egui::RichText::new(tr("Nenhuma conta conectada."))
+                .weak()
+                .small(),
+        );
+    }
+    for a in accounts {
+        let id = ui::s(a, "id");
+        let email = ui::s(a, "email");
+        let mut on = selected.iter().any(|x| x == &id || x == &email);
+        if ui.checkbox(&mut on, &email).changed() {
+            selected.retain(|x| x != &id && x != &email);
+            if on {
+                selected.push(id.clone());
+            }
+        }
+    }
+    let known: Vec<String> = accounts
+        .iter()
+        .flat_map(|a| [ui::s(a, "id"), ui::s(a, "email")])
+        .collect();
+    let unknown: Vec<String> = selected
+        .iter()
+        .filter(|x| !known.contains(x))
+        .cloned()
+        .collect();
+    for x in unknown {
+        ui.horizontal(|ui| {
+            ui.label(
+                egui::RichText::new(trf("{} (conta não conectada)", &[&x]))
+                    .weak()
+                    .small(),
+            );
+            if ui.button(tr("remover")).clicked() {
+                selected.retain(|y| y != &x);
+            }
+        });
+    }
 }
 
 // ---------- helpers de apresentação ----------
@@ -879,6 +1015,10 @@ fn scope_labels(account: &Value) -> Vec<String> {
             s if s.ends_with("gmail.modify") || s == "gmail_modify" => {
                 tr("Gmail (arquivar/marcar/rotular)")
             }
+            s if s.ends_with("drive.readonly") || s == "drive" || s == "drive_read" => {
+                tr("Drive (ler)")
+            }
+            s if s.ends_with("/auth/drive") || s == "drive_write" => tr("Drive (ler e escrever)"),
             s if s.ends_with("userinfo.email") || s.ends_with("userinfo.profile") => continue,
             s => s.rsplit('/').next().unwrap_or(s),
         };

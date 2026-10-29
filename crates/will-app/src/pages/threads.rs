@@ -6,7 +6,7 @@ use super::Cx;
 use crate::i18n::{tr, trf};
 use crate::service::{Loader, Service, Task};
 use crate::ui::{self, Tone};
-use serde_json::Value;
+use serde_json::{json, Value};
 use std::collections::HashMap;
 use std::sync::Arc;
 use will_core::{EngineDelta, Event, ThreadId, ThreadStatus, ThreadSummary, TurnResult};
@@ -38,6 +38,99 @@ struct LiveTurn {
     started: Option<std::time::Instant>,
 }
 
+/// Mensagem que o usuário acabou de enviar, mostrada no chat **antes** de o
+/// servidor confirmar (eco otimista). Some quando o turno real aparece na lista.
+#[derive(Clone, Debug)]
+struct Echo {
+    local_id: u64,
+    text: String,
+    files: Vec<std::path::PathBuf>,
+    sent_at: chrono::DateTime<chrono::Utc>,
+    /// `turn_id` devolvido pelo `POST …/messages` (quando já respondeu).
+    turn_id: Option<String>,
+    /// Instante em que o servidor aceitou: uma lista carregada depois disso já
+    /// contém o turno, então o eco pode sair mesmo sem casar o id.
+    acked_at: Option<std::time::Instant>,
+    /// Falha no envio: o balão fica com aviso e botões "Reenviar"/"Descartar".
+    error: Option<String>,
+}
+
+/// Prompt visível de um turno da API (sem a nota de anexo).
+fn turn_prompt_display(t: &Value) -> String {
+    t.get("prompt_display")
+        .and_then(|v| v.as_str())
+        .map(str::to_string)
+        .unwrap_or_else(|| ui::s(t, "prompt"))
+}
+
+/// Remove os ecos que a lista de turnos (recém-carregada em `loaded_at`) já
+/// cobre: pelo `turn_id`, por uma lista mais nova que a confirmação, ou — sem
+/// confirmação ainda — por um turno com o mesmo texto iniciado depois do envio
+/// (a lista pode ter sido recarregada por `TurnStarted` antes do POST voltar).
+/// Ecos com erro ficam até o usuário reenviar ou descartar.
+fn reconcile_echoes(echoes: &mut Vec<Echo>, turns: &[Value], loaded_at: std::time::Instant) {
+    echoes.retain(|e| {
+        if e.error.is_some() {
+            return true;
+        }
+        if let Some(id) = &e.turn_id {
+            if turns.iter().any(|t| ui::s(t, "id") == *id) {
+                return false;
+            }
+        }
+        if e.acked_at.is_some_and(|a| loaded_at > a) {
+            return false;
+        }
+        let tol = chrono::Duration::seconds(15);
+        let matched = turns.iter().any(|t| {
+            turn_prompt_display(t).trim() == e.text.trim()
+                && turn_dt(t, "started_at").is_some_and(|dt| dt >= e.sent_at - tol)
+        });
+        !matched
+    });
+}
+
+/// Tipo MIME aproximado pela extensão (só para a miniatura do eco).
+fn guess_mime(path: &std::path::Path) -> &'static str {
+    match path
+        .extension()
+        .and_then(|e| e.to_str())
+        .map(|e| e.to_ascii_lowercase())
+        .as_deref()
+    {
+        Some("jpg" | "jpeg") => "image/jpeg",
+        Some("png") => "image/png",
+        Some("gif") => "image/gif",
+        Some("webp") => "image/webp",
+        Some("pdf") => "application/pdf",
+        Some("txt" | "md") => "text/plain",
+        _ => "application/octet-stream",
+    }
+}
+
+/// Texto e anexos ainda não enviados de uma thread.
+#[derive(Clone, Debug, Default)]
+struct Draft {
+    text: String,
+    files: Vec<std::path::PathBuf>,
+}
+
+/// Junta a transcrição ao que já estava no rascunho (um espaço entre eles).
+fn merge_dictation(draft: &str, text: &str) -> String {
+    let mut out = draft.to_string();
+    if !out.is_empty() && !out.ends_with(char::is_whitespace) {
+        out.push(' ');
+    }
+    out.push_str(text);
+    out
+}
+
+/// O que o usuário pediu num eco com erro.
+enum EchoAction {
+    Resend(u64),
+    Discard(u64),
+}
+
 #[derive(Default)]
 pub struct ThreadsPage {
     list: Loader<Value>,
@@ -50,7 +143,18 @@ pub struct ThreadsPage {
     input: String,
     /// Arquivos escolhidos (botão Anexar ou arrastar-e-soltar) ainda não enviados.
     pending_files: Vec<std::path::PathBuf>,
-    send_task: Option<Task<Value>>,
+    /// Envios em voo: thread de origem, id do eco e a tarefa (um por thread).
+    send_tasks: Vec<(ThreadId, u64, Task<Value>)>,
+    /// Rascunho (texto + anexos pendentes) das threads que não estão abertas;
+    /// o da thread aberta vive em `input`/`pending_files` (ver `sync_draft`).
+    drafts: HashMap<ThreadId, Draft>,
+    /// Thread a que `input`/`pending_files` pertencem neste momento.
+    draft_for: Option<ThreadId>,
+    /// Ecos otimistas por thread (mensagens enviadas e ainda não refletidas na lista).
+    echoes: HashMap<ThreadId, Vec<Echo>>,
+    next_echo: u64,
+    /// Forçar a rolagem até o fim no próximo quadro (acabou de enviar).
+    scroll_bottom: bool,
     action_task: Option<(&'static str, Task<Value>)>,
     create_task: Option<Task<Value>>,
     rename_buf: Option<String>,
@@ -60,7 +164,10 @@ pub struct ThreadsPage {
     focus_input: bool,
     /// Ditado (botão "Falar" segurado): gravador ativo e transcrição em voo.
     dictation: Option<crate::voice::audio::Recorder>,
-    dictation_task: Option<Task<Value>>,
+    /// Thread em que o "Falar" foi pressionado: a transcrição vai para ELA,
+    /// mesmo que o usuário abra outra thread enquanto o áudio é transcrito.
+    dictation_for: Option<ThreadId>,
+    dictation_task: Option<(ThreadId, Task<Value>)>,
     /// "Ouvir resumo" de uma resposta: resumo → TTS → reprodução (um por vez).
     speak: Option<SpeakJob>,
     /// Roteiros/áudios já gerados por turno (memória + disco): ouvir de novo não
@@ -466,6 +573,11 @@ impl ThreadsPage {
                 if l.started.is_none() {
                     l.started = Some(std::time::Instant::now());
                 }
+                // O turno já está gravado: recarrega a lista para o balão do
+                // usuário aparecer antes da resposta (e não só no fim do turno).
+                if self.selected == Some(*thread_id) {
+                    self.turns.loaded_at = None;
+                }
             }
             Event::MessageAccepted {
                 thread_id,
@@ -481,6 +593,9 @@ impl ThreadsPage {
                 let l = self.live.entry(*thread_id).or_default();
                 if l.started.is_none() {
                     l.started = Some(std::time::Instant::now());
+                }
+                if self.selected == Some(*thread_id) {
+                    self.turns.loaded_at = None;
                 }
             }
             Event::TurnDelta {
@@ -574,10 +689,42 @@ impl ThreadsPage {
         }
     }
 
+    /// Mantém `input`/`pending_files` presos à thread aberta: ao trocar de
+    /// thread, o que estava sendo escrito vai para `drafts` e o rascunho da
+    /// nova thread (se houver) volta para a caixa.
+    fn sync_draft(&mut self) {
+        if self.selected == self.draft_for {
+            return;
+        }
+        if let Some(prev) = self.draft_for {
+            let d = Draft {
+                text: std::mem::take(&mut self.input),
+                files: std::mem::take(&mut self.pending_files),
+            };
+            if d.text.is_empty() && d.files.is_empty() {
+                self.drafts.remove(&prev);
+            } else {
+                self.drafts.insert(prev, d);
+            }
+        } else {
+            self.input.clear();
+            self.pending_files.clear();
+        }
+        if let Some(cur) = self.selected {
+            if let Some(d) = self.drafts.remove(&cur) {
+                self.input = d.text;
+                self.pending_files = d.files;
+            }
+        }
+        self.draft_for = self.selected;
+    }
+
     fn poll(&mut self, cx: &mut Cx) {
+        self.sync_draft();
         self.poll_speak(cx);
-        if let Some(t) = &self.dictation_task {
+        if let Some((tid, t)) = &self.dictation_task {
             if let Some(r) = t.take() {
+                let tid = *tid;
                 self.dictation_task = None;
                 match r {
                     Ok(v) => {
@@ -589,17 +736,31 @@ impl ThreadsPage {
                             .to_string();
                         if text.is_empty() {
                             cx.toasts.info(tr("Não entendi nada no áudio."));
-                        } else {
-                            if !self.input.is_empty() && !self.input.ends_with(char::is_whitespace)
-                            {
-                                self.input.push(' ');
-                            }
-                            self.input.push_str(&text);
-                            self.focus_input = true;
-                            // "Falar" é falar E enviar: ao soltar, a transcrição vai direto
-                            // pra thread (junto com o que já estava no campo). Se um envio
+                        } else if self.selected == Some(tid) {
+                            // "Falar" é falar E enviar: a transcrição vai direto pra
+                            // thread, junto com o que já estava no campo. Se um envio
                             // ainda está em voo, `send` não faz nada e o texto fica no campo.
+                            self.input = merge_dictation(&self.input, &text);
+                            self.focus_input = true;
                             self.send(cx);
+                        } else {
+                            // O usuário abriu outra thread enquanto transcrevia: a fala
+                            // vai para a thread ORIGINAL (com o rascunho dela), sem
+                            // tocar na caixa da thread aberta.
+                            let d = self.drafts.remove(&tid).unwrap_or_default();
+                            let merged = merge_dictation(&d.text, &text);
+                            if !self.send_to(cx, tid, merged.clone(), d.files.clone()) {
+                                self.drafts.insert(
+                                    tid,
+                                    Draft {
+                                        text: merged,
+                                        files: d.files,
+                                    },
+                                );
+                                cx.toasts.info(tr(
+                                    "A transcrição ficou no rascunho da thread onde você falou.",
+                                ));
+                            }
                         }
                     }
                     Err(e) => cx.toasts.error(trf("Transcrição falhou: {}", &[&e])),
@@ -622,18 +783,55 @@ impl ThreadsPage {
                 self.reload_turns(cx, id);
             }
         }
-        self.turns.poll();
-        if let Some(t) = &self.send_task {
-            if let Some(r) = t.take() {
-                self.send_task = None;
-                match r {
-                    Ok(v) => {
-                        if ui::b(&v, "mid_turn") {
-                            cx.toasts.info(tr("Entregue no meio do turno."));
-                        }
-                    }
-                    Err(e) => cx.toasts.error(e),
+        if self.turns.poll() {
+            if let (Some(id), Some(loaded_at)) = (self.turns_for, self.turns.loaded_at) {
+                if let Some(echoes) = self.echoes.get_mut(&id) {
+                    let turns = self
+                        .turns
+                        .data
+                        .as_ref()
+                        .and_then(|v| v.as_array())
+                        .cloned()
+                        .unwrap_or_default();
+                    reconcile_echoes(echoes, &turns, loaded_at);
                 }
+            }
+        }
+        // Envios concluídos: cada um reconcilia na SUA thread de origem.
+        let mut done: Vec<(ThreadId, u64, Result<Value, String>)> = Vec::new();
+        self.send_tasks.retain(|(tid, eid, t)| match t.take() {
+            None => true,
+            Some(r) => {
+                done.push((*tid, *eid, r));
+                false
+            }
+        });
+        for (tid, eid, r) in done {
+            let echo = self
+                .echoes
+                .get_mut(&tid)
+                .and_then(|v| v.iter_mut().find(|e| e.local_id == eid));
+            match r {
+                Ok(v) => {
+                    if let Some(e) = echo {
+                        e.turn_id = v
+                            .get("turn_id")
+                            .and_then(|x| x.as_str())
+                            .map(str::to_string);
+                        e.acked_at = Some(std::time::Instant::now());
+                    }
+                    // A lista é recarregada para trocar o eco pelo turno real.
+                    if self.selected == Some(tid) {
+                        self.turns.loaded_at = None;
+                    }
+                    if ui::b(&v, "mid_turn") {
+                        cx.toasts.info(tr("Entregue no meio do turno."));
+                    }
+                }
+                Err(e) => match echo {
+                    Some(echo) => echo.error = Some(e),
+                    None => cx.toasts.error(e),
+                },
             }
         }
         if let Some((what, t)) = &self.action_task {
@@ -704,16 +902,46 @@ impl ThreadsPage {
         }
     }
 
+    /// Envia o que está na caixa para a thread aberta.
     fn send(&mut self, cx: &mut Cx) {
         let Some(id) = self.selected else { return };
         let text = self.input.trim().to_string();
-        if (text.is_empty() && self.pending_files.is_empty()) || self.send_task.is_some() {
+        if (text.is_empty() && self.pending_files.is_empty()) || self.sending(id) {
             return;
+        }
+        let files = std::mem::take(&mut self.pending_files);
+        let draft = std::mem::take(&mut self.input);
+        if !self.send_to(cx, id, text, files.clone()) {
+            // recusado antes de sair (ex.: anexo grande demais): nada se perde
+            self.input = draft;
+            self.pending_files = files;
+        }
+        self.focus_input = true;
+    }
+
+    /// Há um envio em voo para esta thread.
+    fn sending(&self, id: ThreadId) -> bool {
+        self.send_tasks.iter().any(|(t, _, _)| *t == id)
+    }
+
+    /// Envia `text` + `files` para a thread `id` (não precisa ser a aberta):
+    /// cria o eco otimista nela e dispara o POST. Devolve `false` se recusou
+    /// (envio em voo para a mesma thread ou anexo acima do limite remoto).
+    fn send_to(
+        &mut self,
+        cx: &mut Cx,
+        id: ThreadId,
+        text: String,
+        files: Vec<std::path::PathBuf>,
+    ) -> bool {
+        let text = text.trim().to_string();
+        if (text.is_empty() && files.is_empty()) || self.sending(id) {
+            return false;
         }
         let local = cx.snap.server_is_local;
         if !local {
             // Remoto: os bytes sobem pela API; recusa antes de mexer no estado.
-            let too_big = self.pending_files.iter().find(|p| {
+            let too_big = files.iter().find(|p| {
                 std::fs::metadata(p)
                     .map(|m| m.len() > UPLOAD_MAX_BYTES)
                     .unwrap_or(false)
@@ -724,13 +952,27 @@ impl ThreadsPage {
                     "{} passa de 64 MiB; esse é o limite de envio para o servidor.",
                     &[&name],
                 ));
-                return;
+                return false;
             }
         }
-        self.input.clear();
-        let files: Vec<std::path::PathBuf> = std::mem::take(&mut self.pending_files);
         let sid = id.to_string();
-        self.send_task = Some(if local {
+        // Eco otimista: a mensagem entra no chat agora; a lista real a substitui
+        // quando o servidor confirmar.
+        self.next_echo += 1;
+        let eid = self.next_echo;
+        self.echoes.entry(id).or_default().push(Echo {
+            local_id: eid,
+            text: text.clone(),
+            files: files.clone(),
+            sent_at: chrono::Utc::now(),
+            turn_id: None,
+            acked_at: None,
+            error: None,
+        });
+        if self.selected == Some(id) {
+            self.scroll_bottom = true;
+        }
+        let task = if local {
             // Loopback: o servidor lê os arquivos do mesmo disco.
             let attachments: Vec<String> = files.iter().map(|p| p.display().to_string()).collect();
             cx.svc
@@ -758,8 +1000,36 @@ impl ThreadsPage {
                 }
                 c.send_message(&sid, &text, paths).await
             })
-        });
-        self.focus_input = true;
+        };
+        self.send_tasks.push((id, eid, task));
+        true
+    }
+
+    /// "Reenviar" num eco com erro: devolve texto e anexos à caixa de entrada.
+    fn echo_action(&mut self, thread: ThreadId, what: EchoAction) {
+        let Some(list) = self.echoes.get_mut(&thread) else {
+            return;
+        };
+        let (id, resend) = match what {
+            EchoAction::Resend(id) => (id, true),
+            EchoAction::Discard(id) => (id, false),
+        };
+        let Some(pos) = list.iter().position(|e| e.local_id == id) else {
+            return;
+        };
+        let e = list.remove(pos);
+        if resend {
+            if !self.input.trim().is_empty() {
+                self.input.push('\n');
+            }
+            self.input.push_str(&e.text);
+            for f in e.files {
+                if !self.pending_files.contains(&f) {
+                    self.pending_files.push(f);
+                }
+            }
+            self.focus_input = true;
+        }
     }
 
     fn action(&mut self, cx: &Cx, id: ThreadId, what: &'static str) {
@@ -1033,6 +1303,9 @@ impl ThreadsPage {
             .cloned()
             .unwrap_or_default();
         let notes = self.notes.get(&t.id).cloned().unwrap_or_default();
+        let echoes: Vec<Echo> = self.echoes.get(&t.id).cloned().unwrap_or_default();
+        let mut echo_actions: Vec<EchoAction> = Vec::new();
+        let scroll_bottom = std::mem::take(&mut self.scroll_bottom);
         let live = self
             .live
             .get(&t.id)
@@ -1154,6 +1427,14 @@ impl ThreadsPage {
                         }
                     });
                 }
+                // Mensagens recém-enviadas, ainda sem turno na lista (eco otimista).
+                for e in &echoes {
+                    ui.push_id(("echo", e.local_id), |ui| {
+                        if let Some(a) = echo_bubble(ui, pal, &mut acx, e) {
+                            echo_actions.push(a);
+                        }
+                    });
+                }
                 for n in &notes {
                     ui.horizontal(|ui| {
                         ui.add_space(8.0);
@@ -1168,7 +1449,13 @@ impl ThreadsPage {
                     });
                 }
                 ui.add_space(8.0);
+                if scroll_bottom {
+                    ui.scroll_to_cursor(Some(egui::Align::BOTTOM));
+                }
             });
+        for a in echo_actions {
+            self.echo_action(t.id, a);
+        }
 
         // "Ouvir resumo": começar (resumo no servidor) ou parar (solta o player).
         if let Some((turn_id, text)) = speak_ui.request.take() {
@@ -1226,7 +1513,7 @@ impl ThreadsPage {
 
         // entrada: anexos pendentes + caixa de texto + Anexar/Enviar
         let mut send_now = false;
-        let busy = self.send_task.is_some();
+        let busy = self.sending(t.id);
         let pal2 = ui::palette(ui.visuals().dark_mode);
         let bottom = ui.scope(|ui| {
             ui.add_space(6.0);
@@ -1341,8 +1628,10 @@ impl ThreadsPage {
                             );
                             if voice_ready {
                                 let recording = self.dictation.is_some();
-                                let transcribing =
-                                    self.dictation_task.as_ref().is_some_and(|t| t.pending());
+                                let transcribing = self
+                                    .dictation_task
+                                    .as_ref()
+                                    .is_some_and(|(_, t)| t.pending());
                                 let label = if recording {
                                     trf(
                                         "● {}s",
@@ -1392,6 +1681,7 @@ impl ThreadsPage {
                                         cx.toasts.error(e.clone());
                                     } else {
                                         self.dictation = Some(rec);
+                                        self.dictation_for = Some(t.id);
                                     }
                                 } else if recording && !primary_down {
                                     if let Some(rec) = self.dictation.take() {
@@ -1400,10 +1690,14 @@ impl ThreadsPage {
                                         } else {
                                             match rec.stop() {
                                                 Some(wav) => {
-                                                    self.dictation_task =
-                                                        Some(cx.svc.call(move |c| async move {
+                                                    let for_thread =
+                                                        self.dictation_for.take().unwrap_or(t.id);
+                                                    self.dictation_task = Some((
+                                                        for_thread,
+                                                        cx.svc.call(move |c| async move {
                                                             c.transcribe(wav, Some("pt")).await
-                                                        }));
+                                                        }),
+                                                    ));
                                                 }
                                                 None => cx.toasts.info(tr("Gravação muito curta.")),
                                             }
@@ -1625,6 +1919,95 @@ fn user_bubble(
             });
     });
     ui.add_space(if last { 6.0 } else { 2.0 });
+}
+
+/// Balão de uma mensagem ainda não confirmada pelo servidor: o mesmo balão do
+/// usuário, esmaecido, com "enviando…" no rodapé; em erro, o motivo e os botões
+/// "Reenviar"/"Descartar". Devolve a ação clicada.
+fn echo_bubble(
+    ui: &mut egui::Ui,
+    pal: &ui::Palette,
+    acx: &mut AttachCx<'_>,
+    e: &Echo,
+) -> Option<EchoAction> {
+    let atts: Vec<Value> = e
+        .files
+        .iter()
+        .map(|p| {
+            let name = p
+                .file_name()
+                .and_then(|n| n.to_str())
+                .unwrap_or("arquivo")
+                .to_string();
+            let size = std::fs::metadata(p).map(|m| m.len()).unwrap_or(0);
+            json!({
+                "name": name,
+                "mime": guess_mime(p),
+                "path": p.display().to_string(),
+                "size": size,
+            })
+        })
+        .collect();
+    // Remoto: os caminhos são desta máquina, não do servidor — sem miniatura,
+    // só o chip; em loopback o balão lê o arquivo direto.
+    let turn = if acx.local {
+        json!({ "prompt_display": e.text, "attachments": atts })
+    } else {
+        let names: Vec<String> = atts
+            .iter()
+            .map(|a| format!("📎 {}", ui::s(a, "name")))
+            .collect();
+        let mut text = e.text.clone();
+        if !names.is_empty() {
+            if !text.is_empty() {
+                text.push('\n');
+            }
+            text.push_str(&names.join("\n"));
+        }
+        json!({ "prompt_display": text, "attachments": [] })
+    };
+    let failed = e.error.is_some();
+    ui.scope(|ui| {
+        if !failed {
+            ui.set_opacity(0.62);
+        }
+        user_bubble(ui, pal, acx, &turn, None, GroupPos::Single, None);
+    });
+    let mut action = None;
+    ui.with_layout(egui::Layout::right_to_left(egui::Align::Min), |ui| {
+        ui.add_space(8.0);
+        match &e.error {
+            None => {
+                ui.ctx()
+                    .request_repaint_after(std::time::Duration::from_millis(250));
+                ui.label(
+                    egui::RichText::new(tr("enviando…"))
+                        .size(11.0)
+                        .color(pal.text_weak),
+                );
+                ui.add(egui::Spinner::new().size(10.0));
+            }
+            Some(err) => {
+                if ui.small_button(tr("Descartar")).clicked() {
+                    action = Some(EchoAction::Discard(e.local_id));
+                }
+                if ui.small_button(tr("Reenviar")).clicked() {
+                    action = Some(EchoAction::Resend(e.local_id));
+                }
+                ui.add(
+                    egui::Label::new(
+                        egui::RichText::new(trf("não enviada: {}", &[err]))
+                            .size(11.0)
+                            .color(Tone::Danger.color(ui.visuals().dark_mode)),
+                    )
+                    .truncate(),
+                )
+                .on_hover_text(err);
+            }
+        }
+    });
+    ui.add_space(6.0);
+    action
 }
 
 /// Tamanho legível de um arquivo.
@@ -2088,3 +2471,129 @@ fn timeline_dot(ui: &mut egui::Ui, x_pad: f32, color: egui::Color32) {
 
 #[allow(dead_code)]
 fn _assert_types(_: TurnResult) {}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn echo(id: u64, text: &str) -> Echo {
+        Echo {
+            local_id: id,
+            text: text.into(),
+            files: vec![],
+            sent_at: chrono::Utc::now(),
+            turn_id: None,
+            acked_at: None,
+            error: None,
+        }
+    }
+
+    fn turn(id: &str, prompt: &str, started: chrono::DateTime<chrono::Utc>) -> Value {
+        json!({ "id": id, "prompt": prompt, "prompt_display": prompt, "started_at": started.to_rfc3339() })
+    }
+
+    #[test]
+    fn reconcile_drops_echo_when_turn_id_is_listed() {
+        let mut e = echo(1, "oi");
+        e.turn_id = Some("t1".into());
+        let mut echoes = vec![e, echo(2, "outra")];
+        let turns = vec![turn("t1", "oi", chrono::Utc::now())];
+        reconcile_echoes(&mut echoes, &turns, std::time::Instant::now());
+        assert_eq!(echoes.len(), 1);
+        assert_eq!(echoes[0].local_id, 2);
+    }
+
+    #[test]
+    fn reconcile_drops_echo_when_list_is_newer_than_ack() {
+        let mut e = echo(1, "oi");
+        e.turn_id = Some("t-sumido".into());
+        e.acked_at = Some(std::time::Instant::now() - std::time::Duration::from_secs(1));
+        let mut echoes = vec![e];
+        reconcile_echoes(&mut echoes, &[], std::time::Instant::now());
+        assert!(echoes.is_empty());
+        // lista mais velha que a confirmação: o eco fica
+        let mut e = echo(1, "oi");
+        e.turn_id = Some("t-sumido".into());
+        e.acked_at = Some(std::time::Instant::now());
+        let mut echoes = vec![e];
+        reconcile_echoes(
+            &mut echoes,
+            &[],
+            std::time::Instant::now() - std::time::Duration::from_secs(5),
+        );
+        assert_eq!(echoes.len(), 1);
+    }
+
+    #[test]
+    fn reconcile_matches_by_text_before_ack() {
+        // o POST ainda não voltou, mas `TurnStarted` já recarregou a lista
+        let mut echoes = vec![echo(1, "  manda ver  ")];
+        let turns = vec![turn("t9", "manda ver", chrono::Utc::now())];
+        reconcile_echoes(&mut echoes, &turns, std::time::Instant::now());
+        assert!(echoes.is_empty());
+        // mesmo texto, mas turno antigo: não é este envio
+        let mut echoes = vec![echo(1, "manda ver")];
+        let old = chrono::Utc::now() - chrono::Duration::minutes(10);
+        let turns = vec![turn("t0", "manda ver", old)];
+        reconcile_echoes(&mut echoes, &turns, std::time::Instant::now());
+        assert_eq!(echoes.len(), 1);
+    }
+
+    #[test]
+    fn reconcile_keeps_failed_echo() {
+        let mut e = echo(1, "oi");
+        e.error = Some("500".into());
+        e.turn_id = Some("t1".into());
+        let mut echoes = vec![e];
+        let turns = vec![turn("t1", "oi", chrono::Utc::now())];
+        reconcile_echoes(&mut echoes, &turns, std::time::Instant::now());
+        assert_eq!(echoes.len(), 1);
+    }
+
+    #[test]
+    fn dictation_merges_with_a_single_space() {
+        assert_eq!(merge_dictation("", "oi"), "oi");
+        assert_eq!(merge_dictation("antes", "oi"), "antes oi");
+        assert_eq!(merge_dictation("antes ", "oi"), "antes oi");
+        assert_eq!(merge_dictation("linha\n", "oi"), "linha\noi");
+    }
+
+    #[test]
+    fn drafts_follow_the_selected_thread() {
+        let a = ThreadId::new();
+        let b = ThreadId::new();
+        let mut p = ThreadsPage {
+            selected: Some(a),
+            ..Default::default()
+        };
+        p.sync_draft();
+        p.input = "rascunho da A".into();
+        p.pending_files.push("/tmp/x.png".into());
+        // abre B: a caixa esvazia e o rascunho da A fica guardado
+        p.selected = Some(b);
+        p.sync_draft();
+        assert!(p.input.is_empty() && p.pending_files.is_empty());
+        assert_eq!(p.drafts[&a].text, "rascunho da A");
+        p.input = "B".into();
+        // volta para A: o rascunho dela volta (texto + anexo) e o de B fica guardado
+        p.selected = Some(a);
+        p.sync_draft();
+        assert_eq!(p.input, "rascunho da A");
+        assert_eq!(p.pending_files.len(), 1);
+        assert_eq!(p.drafts[&b].text, "B");
+        assert!(!p.drafts.contains_key(&a));
+        // sem troca, nada muda
+        p.sync_draft();
+        assert_eq!(p.input, "rascunho da A");
+    }
+
+    #[test]
+    fn mime_by_extension() {
+        assert_eq!(guess_mime(std::path::Path::new("a/b.JPG")), "image/jpeg");
+        assert_eq!(guess_mime(std::path::Path::new("x.png")), "image/png");
+        assert_eq!(
+            guess_mime(std::path::Path::new("sem-ext")),
+            "application/octet-stream"
+        );
+    }
+}
