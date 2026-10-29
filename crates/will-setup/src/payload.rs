@@ -11,6 +11,7 @@ pub const VERSION: &str = env!("CARGO_PKG_VERSION");
 #[cfg(target_os = "macos")]
 pub const MACOS_INFO_PLIST: &str = include_str!("../../../packaging/macos/Info.plist");
 /// Info.plist do bundle auxiliar do servidor (`Contents/Library/LoginItems/will-ia Server.app`).
+#[cfg(target_os = "macos")]
 pub const MACOS_SERVER_INFO_PLIST: &str =
     include_str!("../../../packaging/macos/Server-Info.plist");
 
