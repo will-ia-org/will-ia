@@ -800,10 +800,8 @@ pub fn clean_mail_text(raw: &str) -> String {
             continue;
         }
         let t = l.trim();
-        if t.starts_with("http://") || t.starts_with("https://") {
-            if !t.contains(' ') {
-                continue;
-            }
+        if (t.starts_with("http://") || t.starts_with("https://")) && !t.contains(' ') {
+            continue;
         }
         // colapsa espaços internos repetidos (colunas de tabela)
         let mut collapsed = String::with_capacity(l.len());
