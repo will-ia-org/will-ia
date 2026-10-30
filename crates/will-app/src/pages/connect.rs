@@ -514,14 +514,14 @@ impl ConnectPage {
             ui.add_space(10.0);
             ui::field(ui, tr("Nova senha"), None, |ui| {
                 ui.add(
-                    egui::TextEdit::singleline(&mut self.pw_new)
+                    egui::TextEdit::singleline(&mut self.pw_new).margin(crate::ui::input_margin())
                         .password(true)
                         .desired_width(f32::INFINITY),
                 );
             });
             ui::field(ui, tr("Confirmar senha"), None, |ui| {
                 let r = ui.add(
-                    egui::TextEdit::singleline(&mut self.pw_confirm)
+                    egui::TextEdit::singleline(&mut self.pw_confirm).margin(crate::ui::input_margin())
                         .password(true)
                         .desired_width(f32::INFINITY),
                 );
@@ -853,7 +853,7 @@ impl ConnectPage {
                     Some(tr("Guardada no perfil para reconectar sem digitar de novo (fica em claro no profiles.json do cliente).")),
                     |ui| {
                         let r = ui.add(
-                            egui::TextEdit::singleline(&mut self.password)
+                            egui::TextEdit::singleline(&mut self.password).margin(crate::ui::input_margin())
                                 .password(true)
                                 .desired_width(f32::INFINITY),
                         );
@@ -888,7 +888,7 @@ impl ConnectPage {
                     tr("Token de sessão"),
                     Some(tr("Opcional: o token local da API (`will-ia info`) para quem não usa conta. Entrar preenche este campo sozinho.")),
                     |ui| {
-                        ui.add(egui::TextEdit::singleline(&mut self.token).password(true).desired_width(f32::INFINITY));
+                        ui.add(egui::TextEdit::singleline(&mut self.token).margin(crate::ui::input_margin()).password(true).desired_width(f32::INFINITY));
                     },
                 );
                 ui.add_space(6.0);

@@ -452,14 +452,23 @@ pub async fn wa_chats(State(state): State<App>, Query(q): Query<WaChatsQuery>) -
             let mut seen = std::collections::HashSet::new();
             match needle {
                 None => {
-                    for c in state
+                    let list = state
                         .storage
                         .wa_list_chats(&acc.id, "", limit)
                         .await
-                        .unwrap_or_default()
-                    {
+                        .unwrap_or_default();
+                    let jids: Vec<String> = list.iter().map(|c| c.jid.clone()).collect();
+                    let phones = state
+                        .storage
+                        .wa_contact_phones(&acc.id, &jids)
+                        .await
+                        .unwrap_or_default();
+                    for c in list {
                         if seen.insert(c.jid.clone()) {
-                            chats.push(json!({ "account_id": c.account_id, "jid": c.jid, "name": c.name, "is_group": c.is_group, "last_message_at": c.last_message_at }));
+                            let phone = phones.get(&c.jid).cloned().or_else(|| {
+                                c.jid.strip_suffix("@s.whatsapp.net").map(|p| p.to_string())
+                            });
+                            chats.push(json!({ "account_id": c.account_id, "jid": c.jid, "name": c.name, "is_group": c.is_group, "last_message_at": c.last_message_at, "phone": phone }));
                         }
                     }
                 }

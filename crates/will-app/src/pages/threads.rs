@@ -1201,7 +1201,11 @@ impl ThreadsPage {
         ui.horizontal(|ui| {
             match &mut self.rename_buf {
                 Some(buf) => {
-                    let r = ui.add(egui::TextEdit::singleline(buf).desired_width(260.0));
+                    let r = ui.add(
+                        egui::TextEdit::singleline(buf)
+                            .margin(crate::ui::input_margin())
+                            .desired_width(260.0),
+                    );
                     let enter = r.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
                     if ui.button(tr("OK")).clicked() || enter {
                         let title = buf.clone();
@@ -1585,7 +1589,7 @@ impl ThreadsPage {
                         };
                         let r = ui.add_sized(
                             [text_w, 54.0],
-                            egui::TextEdit::multiline(&mut self.input)
+                            egui::TextEdit::multiline(&mut self.input).margin(crate::ui::input_margin())
                                 .frame(egui::Frame::NONE)
                                 .desired_rows(2)
                                 .hint_text(hint),

@@ -69,7 +69,7 @@ impl KbPage {
             ui.horizontal(|ui| {
                 let w = (ui.available_width() - 56.0).max(200.0);
                 let r = ui.add(
-                    egui::TextEdit::singleline(&mut self.browse_input)
+                    egui::TextEdit::singleline(&mut self.browse_input).margin(crate::ui::input_margin())
                         .desired_width(w)
                         .hint_text("/home/you/will-kb"),
                 );
@@ -261,6 +261,7 @@ impl KbPage {
                             if ui
                                 .add(
                                     egui::TextEdit::singleline(&mut path)
+                                        .margin(crate::ui::input_margin())
                                         .desired_width(w)
                                         .hint_text("/home/you/will-kb"),
                                 )

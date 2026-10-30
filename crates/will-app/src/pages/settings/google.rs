@@ -391,7 +391,7 @@ impl GooglePage {
                     ui.horizontal(|ui| {
                         let g = &mut st.draft.google;
                         let mut text = g.redirect_port.map(|p| p.to_string()).unwrap_or_default();
-                        if ui.add(egui::TextEdit::singleline(&mut text).hint_text(tr("aleatória")).desired_width(100.0)).changed() {
+                        if ui.add(egui::TextEdit::singleline(&mut text).margin(crate::ui::input_margin()).hint_text(tr("aleatória")).desired_width(100.0)).changed() {
                             g.redirect_port = text.trim().parse().ok();
                         }
                         if let Some(p) = g.redirect_port {

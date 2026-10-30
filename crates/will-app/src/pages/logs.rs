@@ -359,6 +359,7 @@ impl LogsPage {
             ui.spacing_mut().item_spacing = egui::vec2(8.0, 6.0);
             let resp = ui.add(
                 egui::TextEdit::singleline(&mut self.filter)
+                    .margin(crate::ui::input_margin())
                     .desired_width(260.0)
                     .hint_text(tr("filtrar texto (mensagem ou módulo)")),
             );

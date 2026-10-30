@@ -513,6 +513,7 @@ impl TriggersPage {
                     let w = (ui.available_width() - 150.0).max(120.0);
                     ui.add(
                         egui::TextEdit::singleline(&mut c.glob)
+                            .margin(crate::ui::input_margin())
                             .desired_width(w)
                             .hint_text("*@xpto.com"),
                     );
@@ -690,7 +691,7 @@ impl TriggersPage {
                         .show(|ui| {
                             ui.set_min_width(360.0);
                             let r = ui.add(
-                                egui::TextEdit::singleline(query)
+                                egui::TextEdit::singleline(query).margin(crate::ui::input_margin())
                                     .hint_text(tr("buscar por nome ou telefone…"))
                                     .desired_width(f32::INFINITY),
                             );

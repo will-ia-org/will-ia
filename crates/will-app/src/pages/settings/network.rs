@@ -172,6 +172,7 @@ impl NetworkPage {
                                 let mut shown = pem.clone();
                                 ui.add(
                                     egui::TextEdit::multiline(&mut shown)
+                                        .margin(crate::ui::input_margin())
                                         .desired_rows(8)
                                         .desired_width(f32::INFINITY)
                                         .font(egui::TextStyle::Monospace)

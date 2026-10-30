@@ -179,7 +179,7 @@ impl WhatsAppPage {
                         ui::dot(ui, tone);
                         match &mut self.rename {
                             Some((rid, buf)) if rid == &id => {
-                                ui.add(egui::TextEdit::singleline(buf).desired_width(200.0));
+                                ui.add(egui::TextEdit::singleline(buf).margin(crate::ui::input_margin()).desired_width(200.0));
                                 if ui.button(tr("OK")).clicked() {
                                     let new_label = buf.clone();
                                     let id2 = id.clone();
@@ -277,6 +277,7 @@ impl WhatsAppPage {
                     let busy = self.pair_task.is_some();
                     ui.add(
                         egui::TextEdit::singleline(&mut self.new_label)
+                            .margin(crate::ui::input_margin())
                             .hint_text(tr("rótulo da nova conta (opcional)"))
                             .desired_width(220.0),
                     );
@@ -319,6 +320,7 @@ impl WhatsAppPage {
                         ui.label(tr("Telefone com DDI, só dígitos:"));
                         ui.add(
                             egui::TextEdit::singleline(&mut self.phone)
+                                .margin(crate::ui::input_margin())
                                 .hint_text("5511999998888")
                                 .desired_width(160.0),
                         );

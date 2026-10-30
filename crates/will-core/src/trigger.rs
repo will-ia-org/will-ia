@@ -320,7 +320,10 @@ mod tests {
             assert_eq!(serde_json::from_str::<TriggerSource>(&j).unwrap(), src);
             assert_eq!(TriggerSource::parse(src.as_str()), Some(src));
         }
-        assert_eq!(TriggerSource::parse("whats_app"), Some(TriggerSource::WhatsApp));
+        assert_eq!(
+            TriggerSource::parse("whats_app"),
+            Some(TriggerSource::WhatsApp)
+        );
     }
 
     #[test]

@@ -452,6 +452,7 @@ impl SchedulesPage {
                                 let w = (ui.available_width() * 0.4).clamp(140.0, 260.0);
                                 let r = ui.add(
                                     egui::TextEdit::singleline(&mut f.cron)
+                                        .margin(crate::ui::input_margin())
                                         .hint_text("0 8 * * *")
                                         .font(egui::TextStyle::Monospace)
                                         .desired_width(w),
@@ -475,6 +476,7 @@ impl SchedulesPage {
                         |ui| {
                             let r = ui.add(
                                 egui::TextEdit::singleline(&mut f.run_at)
+                                    .margin(crate::ui::input_margin())
                                     .hint_text("2026-12-31T09:00")
                                     .font(egui::TextStyle::Monospace)
                                     .desired_width(260.0),

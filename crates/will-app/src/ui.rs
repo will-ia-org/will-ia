@@ -727,9 +727,16 @@ pub fn text_context_menu(resp: &egui::Response) {
     });
 }
 
+/// Respiro interno padrão dos campos de texto (placeholder e cursor não
+/// encostam na borda). Todo `TextEdit` do app passa por aqui.
+pub fn input_margin() -> egui::Margin {
+    egui::Margin::symmetric(8, 6)
+}
+
 pub fn text_input(ui: &mut Ui, value: &mut String, hint: &str) -> egui::Response {
     let r = ui.add(
         egui::TextEdit::singleline(value)
+            .margin(input_margin())
             .hint_text(hint)
             .desired_width(f32::INFINITY),
     );
@@ -740,6 +747,7 @@ pub fn text_input(ui: &mut Ui, value: &mut String, hint: &str) -> egui::Response
 pub fn text_area(ui: &mut Ui, value: &mut String, rows: usize) -> egui::Response {
     let r = ui.add(
         egui::TextEdit::multiline(value)
+            .margin(input_margin())
             .desired_rows(rows)
             .desired_width(f32::INFINITY),
     );
@@ -759,6 +767,7 @@ pub fn optional_number(ui: &mut Ui, value: &mut Option<f64>, hint: &str) {
     let mut text = value.map(|v| v.to_string()).unwrap_or_default();
     let r = ui.add(
         egui::TextEdit::singleline(&mut text)
+            .margin(input_margin())
             .hint_text(hint)
             .desired_width(120.0),
     );
@@ -771,6 +780,7 @@ pub fn optional_u32(ui: &mut Ui, value: &mut Option<u32>, hint: &str) {
     let mut text = value.map(|v| v.to_string()).unwrap_or_default();
     let r = ui.add(
         egui::TextEdit::singleline(&mut text)
+            .margin(input_margin())
             .hint_text(hint)
             .desired_width(120.0),
     );
@@ -816,6 +826,7 @@ pub fn select(ui: &mut Ui, id: &str, value: &mut String, options: &[(&str, &str)
 pub fn lines_editor(ui: &mut Ui, buf: &mut String, rows: usize) -> egui::Response {
     let r = ui.add(
         egui::TextEdit::multiline(buf)
+            .margin(input_margin())
             .desired_rows(rows)
             .desired_width(f32::INFINITY)
             .font(egui::TextStyle::Monospace),
@@ -891,6 +902,7 @@ impl SecretField {
             let w = (ui.available_width() - 270.0).max(160.0);
             let r = ui.add(
                 egui::TextEdit::singleline(&mut self.input)
+                    .margin(input_margin())
                     .password(!self.reveal)
                     .hint_text(hint)
                     .desired_width(w),
@@ -1121,6 +1133,7 @@ pub fn optional_i64(ui: &mut Ui, value: &mut Option<i64>, hint: &str) {
     let mut text = value.map(|v| v.to_string()).unwrap_or_default();
     let r = ui.add(
         egui::TextEdit::singleline(&mut text)
+            .margin(input_margin())
             .hint_text(hint)
             .desired_width(160.0),
     );

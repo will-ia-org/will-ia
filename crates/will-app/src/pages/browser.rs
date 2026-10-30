@@ -1061,6 +1061,7 @@ impl BrowserPage {
                 let w = (ui.available_width() * 0.4).clamp(160.0, 360.0);
                 let r = ui.add(
                     egui::TextEdit::singleline(&mut self.test_tab_url)
+                        .margin(crate::ui::input_margin())
                         .hint_text("about:blank")
                         .font(egui::TextStyle::Monospace)
                         .desired_width(w),
@@ -1169,6 +1170,7 @@ impl BrowserPage {
                 ui.spacing_mut().item_spacing = egui::vec2(8.0, 6.0);
                 let r = ui.add(
                     egui::TextEdit::singleline(&mut self.traffic_filter)
+                        .margin(crate::ui::input_margin())
                         .desired_width(240.0)
                         .hint_text(tr("filtrar (método ou conteúdo)")),
                 );

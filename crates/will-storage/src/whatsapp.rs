@@ -102,6 +102,33 @@ impl Storage {
         Ok(())
     }
 
+    /// Telefones conhecidos para os JIDs dados (`wa_contacts.phone`), para
+    /// mostrar número em vez de LID nas listas.
+    pub async fn wa_contact_phones(
+        &self,
+        account_id: &str,
+        jids: &[String],
+    ) -> Result<std::collections::HashMap<String, String>> {
+        let mut out = std::collections::HashMap::new();
+        for chunk in jids.chunks(200) {
+            let placeholders = vec!["?"; chunk.len()].join(",");
+            let mut q = sqlx::query(sqlx::AssertSqlSafe(format!(
+                "SELECT jid, phone FROM wa_contacts WHERE account_id = ? AND phone IS NOT NULL AND jid IN ({placeholders})"
+            )))
+            .bind(account_id);
+            for j in chunk {
+                q = q.bind(j);
+            }
+            for r in q.fetch_all(&self.pool).await? {
+                let jid: String = r.get("jid");
+                if let Some(p) = r.get::<Option<String>, _>("phone") {
+                    out.insert(jid, p);
+                }
+            }
+        }
+        Ok(out)
+    }
+
     pub async fn wa_search_contacts(
         &self,
         account_id: &str,

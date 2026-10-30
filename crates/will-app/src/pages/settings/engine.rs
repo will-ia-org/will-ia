@@ -343,7 +343,7 @@ impl EnginePage {
                             ui::text_input(ui, &mut self.new_label, tr("rótulo"));
                         });
                         ui::field(ui, tr("Token"), Some(tr("Saída de `claude setup-token` (sk-ant-oat01-…). Vai para o cofre de segredos, nunca para o banco.")), |ui| {
-                    ui.add(egui::TextEdit::singleline(&mut self.new_token).password(true).desired_width(f32::INFINITY));
+                    ui.add(egui::TextEdit::singleline(&mut self.new_token).margin(crate::ui::input_margin()).password(true).desired_width(f32::INFINITY));
                 });
                         // pré-aviso barato: mesmo sufixo de um token já listado (a verificação
                         // real, por impressão digital, é do servidor: 409 se repetido).
@@ -441,7 +441,11 @@ impl EnginePage {
                     |ui| {
                         ui.horizontal(|ui| {
                             let w = (ui.available_width() - 110.0).max(160.0);
-                            ui.add(egui::TextEdit::singleline(&mut e.claude_bin).desired_width(w));
+                            ui.add(
+                                egui::TextEdit::singleline(&mut e.claude_bin)
+                                    .margin(crate::ui::input_margin())
+                                    .desired_width(w),
+                            );
                             if ui.button(tr("Verificar")).clicked() {
                                 self.check
                                     .start(cx.svc.call(|c| async move { c.engine_check().await }));

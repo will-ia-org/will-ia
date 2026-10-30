@@ -747,6 +747,7 @@ fn kv_editor(ui: &mut egui::Ui, id: &str, server: &str, rows: &mut Vec<KvRow>) {
             for (i, r) in rows.iter_mut().enumerate() {
                 ui.add(
                     egui::TextEdit::singleline(&mut r.key)
+                        .margin(crate::ui::input_margin())
                         .hint_text(tr("CHAVE"))
                         .desired_width(180.0),
                 );
@@ -759,6 +760,7 @@ fn kv_editor(ui: &mut egui::Ui, id: &str, server: &str, rows: &mut Vec<KvRow>) {
                 };
                 ui.add(
                     egui::TextEdit::singleline(&mut r.value)
+                        .margin(crate::ui::input_margin())
                         .password(r.secret)
                         .hint_text(hint)
                         .desired_width(260.0),

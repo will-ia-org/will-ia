@@ -295,6 +295,7 @@ impl ApprovalsPage {
         ui.horizontal(|ui| {
             let r = ui.add(
                 egui::TextEdit::singleline(&mut self.filter_text)
+                    .margin(crate::ui::input_margin())
                     .hint_text(tr("Filtrar por resumo ou ferramenta"))
                     .desired_width(280.0),
             );

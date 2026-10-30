@@ -431,6 +431,7 @@ impl UsersPage {
                             |ui| {
                                 ui.add(
                                     egui::TextEdit::singleline(&mut f.password)
+                                        .margin(crate::ui::input_margin())
                                         .password(true)
                                         .desired_width(f32::INFINITY),
                                 );
@@ -444,6 +445,7 @@ impl UsersPage {
                             |ui| {
                                 ui.add(
                                     egui::TextEdit::singleline(&mut f.password)
+                                        .margin(crate::ui::input_margin())
                                         .password(true)
                                         .desired_width(f32::INFINITY),
                                 );
