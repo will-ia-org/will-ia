@@ -55,6 +55,11 @@ enum LiveItem {
         text: String,
         at: std::time::Instant,
     },
+    /// Mensagem do usuário aceita no meio do turno (steering).
+    User {
+        text: String,
+        at: std::time::Instant,
+    },
 }
 
 #[derive(Clone, Default)]
@@ -145,6 +150,17 @@ impl LiveTurn {
         self.items
             .iter()
             .filter(|i| matches!(i, LiveItem::Tool { .. }))
+            .count()
+    }
+
+    /// Subagentes (`Task`/`Agent`) ainda sem resultado — seguem em segundo plano
+    /// mesmo depois de o turno responder.
+    fn open_tasks(&self) -> usize {
+        self.items
+            .iter()
+            .filter(
+                |i| matches!(i, LiveItem::Tool { name, result: None, .. } if is_task_tool(name)),
+            )
             .count()
     }
 
@@ -294,6 +310,9 @@ pub struct ThreadsPage {
     /// Linhas do tempo de turnos já concluídos (id do turno → atividade), mantidas
     /// em memória para a faixa recolhida acima da resposta.
     done_live: HashMap<String, LiveTurn>,
+    /// Último turno concluído por thread (para anexar resultados tardios de
+    /// subagentes e mostrar "em segundo plano" na lista).
+    done_by_thread: HashMap<ThreadId, String>,
     /// Triggers por thread alvo (id → "nome (fonte)"), para o ícone de raio.
     triggers: Loader<Value>,
     trigger_map: HashMap<String, Vec<String>>,
@@ -682,6 +701,15 @@ fn turn_info_body(ui: &mut egui::Ui, pal: &ui::Palette, turn: &Value) {
 }
 
 impl ThreadsPage {
+    /// Subagentes ainda rodando em segundo plano no último turno da thread.
+    fn background_tasks(&self, thread: &ThreadId) -> usize {
+        self.done_by_thread
+            .get(thread)
+            .and_then(|tid| self.done_live.get(tid))
+            .map(|l| l.open_tasks())
+            .unwrap_or(0)
+    }
+
     fn reload_list(&mut self, cx: &Cx) {
         self.list
             .start(cx.svc.call(|c| async move { c.threads().await }));
@@ -738,15 +766,27 @@ impl ThreadsPage {
                 mid_turn,
                 ..
             } => {
-                if *mid_turn {
-                    self.notes
-                        .entry(*thread_id)
-                        .or_default()
-                        .push(tr("mensagem entregue no meio do turno (steering)").into());
-                }
+                let steer_text = if *mid_turn {
+                    // texto do eco mais recente desta thread (mensagem do app);
+                    // de outros canais não há texto: entra só a marca
+                    self.echoes
+                        .get(thread_id)
+                        .and_then(|v| v.last())
+                        .map(|e| e.text.clone())
+                        .unwrap_or_default()
+                } else {
+                    String::new()
+                };
                 let l = self.live.entry(*thread_id).or_default();
                 if l.started.is_none() {
                     l.started = Some(std::time::Instant::now());
+                }
+                if *mid_turn {
+                    l.flush_text();
+                    l.items.push(LiveItem::User {
+                        text: steer_text,
+                        at: std::time::Instant::now(),
+                    });
                 }
                 if self.selected == Some(*thread_id) {
                     self.turns.loaded_at = None;
@@ -755,6 +795,22 @@ impl ThreadsPage {
             Event::TurnDelta {
                 thread_id, delta, ..
             } => {
+                // Resultado tardio (subagente em segundo plano) depois de o turno
+                // responder: anexa à atividade já recolhida, sem reabrir "trabalhando".
+                if !self.live.contains_key(thread_id) {
+                    if let EngineDelta::ToolResult { .. } = delta {
+                        if let Some(done) = self
+                            .done_by_thread
+                            .get(thread_id)
+                            .and_then(|tid| self.done_live.get_mut(tid))
+                        {
+                            if done.open_tasks() > 0 || done.tools_running() > 0 {
+                                done.push(delta);
+                                return;
+                            }
+                        }
+                    }
+                }
                 let l = self.live.entry(*thread_id).or_default();
                 l.push(delta);
             }
@@ -764,6 +820,7 @@ impl ThreadsPage {
                     l.finished_secs = Some(l.started.map(|s| s.elapsed().as_secs()).unwrap_or(0));
                     if let Some(tid) = l.turn_id.clone() {
                         if !l.items.is_empty() {
+                            self.done_by_thread.insert(*thread_id, tid.clone());
                             self.done_live.insert(tid, l);
                         }
                     }
@@ -1275,7 +1332,7 @@ impl ThreadsPage {
                             ui.set_width(ui.available_width());
                             ui.spacing_mut().item_spacing = egui::vec2(6.0, 0.0);
                             ui.horizontal(|ui| {
-                                if self.live.contains_key(&t.id) || t.pending > 0 || t.status == ThreadStatus::Running {
+                                if self.live.contains_key(&t.id) || t.pending > 0 || t.status == ThreadStatus::Running || self.background_tasks(&t.id) > 0 {
                                     ui::pulse_dot(ui);
                                 } else {
                                     ui::dot(ui, status_tone(t));
@@ -1423,8 +1480,16 @@ impl ThreadsPage {
                     // Título truncado: um nome longo não pode empurrar o "i" nem
                     // invadir os botões alinhados à direita.
                     let w = (ui.available_width() - 490.0).max(160.0);
-                    if self.live.contains_key(&t.id) || t.pending > 0 {
+                    let bg = self.background_tasks(&t.id);
+                    if self.live.contains_key(&t.id) || t.pending > 0 || bg > 0 {
                         ui::pulse_dot(ui);
+                    }
+                    if bg > 0 {
+                        ui::badge(
+                            ui,
+                            &trf("{} subagente(s) em segundo plano", &[&bg]),
+                            Tone::Warning,
+                        );
                     }
                     origin_icon(ui, pal, t);
                     if let Some(names) = self.trigger_map.get(&t.id.to_string()) {
@@ -2579,8 +2644,16 @@ fn live_card(
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                     let total = live.tools_total();
                     let running = live.tools_running();
-                    if running > 0 {
-                        ui::badge(ui, &trf("{} em andamento", &[&running]), Tone::Info);
+                    let tasks = live.open_tasks();
+                    if tasks > 0 {
+                        ui::badge(ui, &trf("{} subagente(s)", &[&tasks]), Tone::Warning);
+                    }
+                    if running > tasks {
+                        ui::badge(
+                            ui,
+                            &trf("{} em andamento", &[&(running - tasks)]),
+                            Tone::Info,
+                        );
                     }
                     if total > 0 {
                         ui.label(
@@ -2685,6 +2758,15 @@ fn activity_strip(
                         );
                         if failed {
                             ui::badge(ui, tr("com falha"), Tone::Danger);
+                        }
+                        let bg = done.open_tasks();
+                        if bg > 0 {
+                            ui::pulse_dot(ui);
+                            ui::badge(
+                                ui,
+                                &trf("{} subagente(s) em segundo plano", &[&bg]),
+                                Tone::Warning,
+                            );
                         }
                     });
                     if full_row_click(ui, &header.response.rect, ("activity-hdr", turn_id))
@@ -2920,6 +3002,43 @@ fn live_item(
                 });
             });
         }
+        LiveItem::User { text, at } => {
+            ui.horizontal(|ui| {
+                timeline_mark(
+                    ui,
+                    Tone::Info.color(dark),
+                    Some(crate::icons::SEND),
+                    MARK_H / 2.0,
+                );
+                ui.scope(|ui| {
+                    ui.set_opacity(enter_alpha(*at));
+                    egui::Frame::new()
+                        .fill(Tone::Info.color(dark).linear_multiply(if dark {
+                            0.25
+                        } else {
+                            0.12
+                        }))
+                        .corner_radius(8.0)
+                        .inner_margin(egui::Margin::symmetric(8, 4))
+                        .show(ui, |ui| {
+                            let shown = if text.trim().is_empty() {
+                                tr("mensagem entregue no meio do turno").to_string()
+                            } else {
+                                text.split_whitespace().collect::<Vec<_>>().join(" ")
+                            };
+                            ui.add(
+                                egui::Label::new(
+                                    egui::RichText::new(format!("{} {}", tr("você:"), shown))
+                                        .size(12.0)
+                                        .color(pal.text),
+                                )
+                                .truncate(),
+                            )
+                            .on_hover_text(text);
+                        });
+                });
+            });
+        }
         LiveItem::Status { text, at } => {
             ui.horizontal(|ui| {
                 timeline_mark(ui, pal.text_weak, None, MARK_H / 2.0);
@@ -3051,6 +3170,11 @@ fn tool_details(
             });
     }
     ui.add_space(2.0);
+}
+
+/// Ferramenta que delega a um subagente (pode continuar em segundo plano).
+fn is_task_tool(name: &str) -> bool {
+    matches!(name, "Task" | "Agent")
 }
 
 /// Ícone, nome curto e servidor MCP (se houver) de uma ferramenta.
