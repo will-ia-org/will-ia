@@ -25,10 +25,23 @@ fn tid(s: &str) -> Result<TriggerId, ApiError> {
 pub async fn list(State(state): State<App>) -> ApiResult<Value> {
     let m = module(&state)?;
     let list = m.list().await.map_err(super::internal)?;
+    #[cfg(feature = "google")]
+    let gmail_accounts: Vec<Value> = {
+        use will_triggers::MailSource;
+        crate::modules::gmail_source(&state)
+            .accounts()
+            .await
+            .into_iter()
+            .map(|(id, email)| json!({ "id": id, "email": email }))
+            .collect()
+    };
+    #[cfg(not(feature = "google"))]
+    let gmail_accounts: Vec<Value> = Vec::new();
     Ok(Json(json!({
         "triggers": list,
         "enabled": m.enabled(),
-        "gmail_available": m.has_mail_source(),
+        "gmail_available": m.has_mail_source() && !gmail_accounts.is_empty(),
+        "gmail_accounts": gmail_accounts,
         "sources": [
             { "id": "whatsapp", "label": "WhatsApp", "fields": will_core::TriggerSource::WhatsApp.fields() },
             { "id": "gmail", "label": "E-mail (Gmail)", "fields": will_core::TriggerSource::Gmail.fields() },

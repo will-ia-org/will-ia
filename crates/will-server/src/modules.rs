@@ -51,6 +51,19 @@ impl will_triggers::MailSource for GmailSource {
             .ok_or_else(|| "módulo Google não iniciado".to_string())?;
         g.gmail_poll(account, query, max).await
     }
+
+    async fn accounts(&self) -> Vec<(String, String)> {
+        let Some(g) = self.0.google.read().clone() else {
+            return Vec::new();
+        };
+        g.list_accounts()
+            .await
+            .unwrap_or_default()
+            .into_iter()
+            .filter(|a| a.scopes.iter().any(|s| s.contains("gmail")))
+            .map(|a| (a.id, a.email))
+            .collect()
+    }
 }
 
 #[cfg(feature = "google")]

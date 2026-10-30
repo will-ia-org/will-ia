@@ -38,6 +38,18 @@ pub trait MailSource: Send + Sync {
         query: &str,
         max: u64,
     ) -> Result<Vec<Value>, String>;
+    /// Contas conectadas com Gmail: `(id, e-mail)`.
+    async fn accounts(&self) -> Vec<(String, String)>;
+}
+
+/// `account` da trigger casa com uma conta conectada (id ou e-mail, sem
+/// distinção de maiúsculas)? Vazio = qualquer.
+fn account_known(account: &str, accounts: &[(String, String)]) -> bool {
+    let a = account.trim();
+    a.is_empty()
+        || accounts
+            .iter()
+            .any(|(id, email)| id.eq_ignore_ascii_case(a) || email.eq_ignore_ascii_case(a))
 }
 
 pub struct TriggersDeps {
@@ -238,7 +250,25 @@ impl TriggersModule {
             groups.entry(key).or_default().push(t);
         }
         let mut fired = 0usize;
+        let accounts = mail.accounts().await;
         for ((account, query), triggers) in groups {
+            if !account_known(&account, &accounts) {
+                // Conta inexistente: pausa com motivo visível (a UI mostra em
+                // amarelo) em vez de falhar em silêncio a cada varredura.
+                let reason = format!(
+                    "conta Google '{account}' não conectada ao Gmail — para filtrar remetente use a condição from"
+                );
+                for t in triggers {
+                    tracing::warn!(trigger = %t.id, account = %account, "triggers: {reason}; pausada");
+                    let _ = self
+                        .deps
+                        .storage
+                        .record_trigger_run(t.id, None, false, Some(&reason), None, Some(&reason))
+                        .await;
+                }
+                self.deps.bus.emit(Event::TriggersChanged);
+                continue;
+            }
             let items = match mail
                 .poll(
                     Some(account.as_str()).filter(|a| !a.is_empty()),
@@ -455,8 +485,13 @@ impl TriggersModule {
             .as_deref()
             .and_then(TriggerSource::parse)
             .ok_or("fonte inválida (whatsapp | gmail)")?;
-        if source == TriggerSource::Gmail && self.deps.mail.is_none() {
-            return Err("fonte Gmail indisponível: conecte uma conta Google com Gmail".into());
+        if source == TriggerSource::Gmail {
+            let Some(mail) = &self.deps.mail else {
+                return Err("fonte Gmail indisponível: conecte uma conta Google com Gmail".into());
+            };
+            if let Some(f) = &input.filter {
+                self.check_gmail_account(mail, &f.account).await?;
+            }
         }
         let thread_id = Self::parse_thread(input.thread_id.as_deref())?;
         let (origin, session) = match thread_id {
@@ -520,6 +555,11 @@ impl TriggersModule {
         if let Some(f) = input.filter {
             t.filter = f;
         }
+        if t.source == TriggerSource::Gmail {
+            if let Some(mail) = &self.deps.mail {
+                self.check_gmail_account(mail, &t.filter.account).await?;
+            }
+        }
         if let Some(c) = input.cooldown_secs {
             t.cooldown_secs = c;
         }
@@ -556,6 +596,23 @@ impl TriggersModule {
             .map_err(|e| e.to_string())?;
         self.deps.bus.emit(Event::TriggersChanged);
         self.view(t).await
+    }
+
+    async fn check_gmail_account(
+        &self,
+        mail: &Arc<dyn MailSource>,
+        account: &str,
+    ) -> Result<(), String> {
+        let accounts = mail.accounts().await;
+        if account_known(account, &accounts) {
+            return Ok(());
+        }
+        let known: Vec<&str> = accounts.iter().map(|(_, e)| e.as_str()).collect();
+        Err(format!(
+            "conta Google '{}' não conectada ao Gmail (conectadas: {}). Para filtrar por remetente/domínio use uma condição `from`, ex.: *@devmania*",
+            account.trim(),
+            if known.is_empty() { "nenhuma".to_string() } else { known.join(", ") }
+        ))
     }
 
     pub async fn delete(&self, id: TriggerId) -> Result<(), String> {
@@ -809,6 +866,15 @@ mod tests {
             ..Default::default()
         };
         assert!(f.matches(&ev));
+    }
+
+    #[test]
+    fn account_matching() {
+        let accs = vec![("id1".to_string(), "will@gmail.com".to_string())];
+        assert!(account_known("", &accs));
+        assert!(account_known("WILL@gmail.com", &accs));
+        assert!(account_known("id1", &accs));
+        assert!(!account_known("@devmania", &accs));
     }
 
     #[test]
