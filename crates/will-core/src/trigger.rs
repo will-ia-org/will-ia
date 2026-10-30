@@ -19,8 +19,10 @@ use serde::{Deserialize, Serialize};
 
 /// De onde vem o evento.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
+#[serde(rename_all = "lowercase")]
 pub enum TriggerSource {
+    /// JSON: `"whatsapp"` (não `whats_app`), igual a [`TriggerSource::as_str`].
+    #[serde(rename = "whatsapp")]
     WhatsApp,
     Gmail,
 }
@@ -34,7 +36,7 @@ impl TriggerSource {
     }
     pub fn parse(s: &str) -> Option<Self> {
         match s.trim().to_ascii_lowercase().as_str() {
-            "whatsapp" | "wa" => Some(TriggerSource::WhatsApp),
+            "whatsapp" | "whats_app" | "wa" => Some(TriggerSource::WhatsApp),
             "gmail" | "email" | "e-mail" | "mail" => Some(TriggerSource::Gmail),
             _ => None,
         }
@@ -309,6 +311,17 @@ pub fn fired_message(t: &Trigger, ev: &TriggerEvent, fired_at_local: &str) -> St
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn source_json_matches_as_str() {
+        for src in [TriggerSource::WhatsApp, TriggerSource::Gmail] {
+            let j = serde_json::to_string(&src).unwrap();
+            assert_eq!(j, format!("\"{}\"", src.as_str()));
+            assert_eq!(serde_json::from_str::<TriggerSource>(&j).unwrap(), src);
+            assert_eq!(TriggerSource::parse(src.as_str()), Some(src));
+        }
+        assert_eq!(TriggerSource::parse("whats_app"), Some(TriggerSource::WhatsApp));
+    }
 
     #[test]
     fn glob_basics() {
