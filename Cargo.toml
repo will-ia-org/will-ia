@@ -41,7 +41,7 @@ default-members = [
 ]
 
 [workspace.package]
-version = "0.1.9"
+version = "0.1.10"
 edition = "2021"
 license = "MIT"
 repository = "https://github.com/will-ia-org/will-ia"
