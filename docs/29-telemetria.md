@@ -124,21 +124,41 @@ o passo 1 de novo e atualize o segredo do repositório (`gh secret set WILL_TELE
 | POST | `/api/telemetry/test` | envia um evento agora; `{ ok, message }` |
 | GET | `/api/telemetry/client-config` | destino para o app (`logs_url`, `traces_url`, `headers`, `bearer`, `level`, `label`, `instance_id`); admin |
 
+## Dashboard "will-ia — Operação" (Axiom)
+
+Criado em 2026-10-30 na org `will-ia` (`app.axiom.co/will-ia-1dhc/dashboards`), 14 painéis: instâncias
+ativas, turnos, erros e avisos (indicadores); eventos por nível; erros/avisos por módulo; uso por módulo
+e spans por tipo (pizzas); mensagens por canal; duração dos turnos p50/p95; custo Claude por instância;
+ferramentas mais chamadas; instâncias (última atividade, versão, IP); quedas e relatórios de falha.
+A definição está em `docs/telemetria/axiom-dashboard-operacao.json` (campo `dashboard` do
+`GET /api/v2/dashboards/uid/<uid>`); para recriar/atualizar, faça `PUT /api/v2/dashboards/uid/<uid>`
+com `{ "dashboard": {...}, "version": <int64 atual> }` e o cabeçalho `X-AXIOM-ORG-ID`. O grid tem
+12 colunas (`layout[]: {i, x, y, w, h}`).
+
+Mapeamento de campos no Axiom (ingest OTLP): logs → `body`, `severity_text`, `attributes.<campo>`;
+spans → `name`, `duration` (timespan), `status.code` (`OK`/`Error`), `attributes.custom.<campo>`
+(mapa; acesse com `['attributes.custom'].modulo`); resource → `service.instance.id`,
+`service.version`, `resource.host.name`, `resource.os.type`, `resource.process`, `resource.label`,
+`resource.net.public_ip`. Campos ainda inexistentes no dataset quebram a consulta: use
+`column_ifexists('attributes.x', '')`.
+
 ## Consultas úteis no Axiom (APL)
 
 ```kusto
-// módulo mais usado (spans por nome:módulo nos heartbeats da última semana)
-['will-ia'] | where kind == "heartbeat" | where _time > ago(7d)
-| project-keep ['spans.*'] | summarize sum(*)
+// módulo mais usado (spans, sem o ruído das chamadas de API do app)
+['will-ia'] | where isnotempty(name) and name != 'api'
+| summarize count() by modulo = tostring(['attributes.custom'].module) | order by count_ desc
 
 // erros por instância e módulo
-['will-ia'] | where level == "error" | summarize count() by instance_id, module | order by count_ desc
+['will-ia'] | where severity_text == 'ERROR'
+| summarize count() by ['resource.label'], ['attributes.module'] | order by count_ desc
 
-// um turno do início ao fim
-['will-ia'] | where turn_id == "<id>" | order by _time asc
+// um turno do início ao fim (logs + spans com o mesmo trace)
+['will-ia'] | where ['attributes.turn_id'] == '<id>' or trace_id == '<trace>' | order by _time asc
 
 // quedas (relatórios de falha)
-['will-ia'] | where kind == "file" and file_kind == "fatal" | project _time, host, version, content
+['will-ia'] | where tostring(column_ifexists('attributes.kind','')) == 'file'
+| project _time, ['resource.label'], ['service.version'], ['attributes.file_kind'], ['attributes.content']
 ```
 
 ## Privacidade
