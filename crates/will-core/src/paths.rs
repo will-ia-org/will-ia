@@ -131,6 +131,11 @@ impl AppPaths {
         self.data_dir.join("secrets.enc")
     }
 
+    /// Chave-mestra do cofre cifrado (`FileMasterKey`), base64 em arquivo 0600.
+    pub fn master_key_file(&self) -> PathBuf {
+        self.data_dir.join("secrets.key")
+    }
+
     pub fn session_token_file(&self) -> PathBuf {
         self.data_dir.join("ui-session.token")
     }

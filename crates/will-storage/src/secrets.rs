@@ -1,11 +1,12 @@
 //! Armazenamento de segredos.
 //!
-//! - **macOS** (ADR-0024): `EncryptedFileStore` — os segredos ficam em **um**
-//!   arquivo cifrado (`secrets.enc`, XChaCha20-Poly1305) e só a **chave-mestra**
-//!   mora no Keychain, como um único item. Com um item por segredo (modelo
-//!   antigo), cada binário novo disparava um diálogo "quer usar suas informações
-//!   confidenciais" **por item** (20+ de uma vez). Itens antigos migram sozinhos
-//!   na primeira leitura e são apagados do Keychain.
+//! - **macOS** (ADR-0024 + adendo): `EncryptedFileStore` — os segredos ficam em
+//!   **um** arquivo cifrado (`secrets.enc`, XChaCha20-Poly1305) e a **chave-mestra**
+//!   fica em `secrets.key` (0600), fora do Keychain. O Keychain não entra mais no
+//!   caminho normal: ele amarra a ACL de cada item à assinatura do binário, e cada
+//!   leitura de item antigo virava um diálogo de senha. Itens antigos (um por
+//!   segredo) migram sozinhos na primeira leitura; a chave-mestra que chegou a
+//!   morar no Keychain (`will-ia`/`master-key`) é copiada para o arquivo uma vez.
 //! - **Linux/Windows**: `KeyringStore`, um item por segredo (Secret Service /
 //!   Credential Manager não amarram ACL à assinatura do binário).
 //! - Fallback: arquivo JSON 0600 no diretório de dados (com aviso), para
@@ -160,7 +161,79 @@ pub trait MasterKeySource: Send + Sync {
 }
 
 /// Chave-mestra como **um só** item do keyring (`will-ia` / `master-key`), em base64.
+/// Modelo anterior ao adendo da ADR-0024; hoje só é lido para migrar a chave
+/// para o arquivo (`FileMasterKey`).
 pub struct KeyringMasterKey;
+
+impl KeyringMasterKey {
+    /// Lê a chave se ela existir no keyring; nunca cria.
+    pub async fn load_existing() -> Result<Option<[u8; KEY_LEN]>, String> {
+        tokio::task::spawn_blocking(|| {
+            let entry = keyring::Entry::new(SERVICE, MASTER_KEY_USER).map_err(|e| e.to_string())?;
+            match entry.get_password() {
+                Ok(b64) => decode_key(&b64).map(Some),
+                Err(keyring::Error::NoEntry) => Ok(None),
+                Err(e) => Err(e.to_string()),
+            }
+        })
+        .await
+        .map_err(|e| e.to_string())?
+    }
+}
+
+fn decode_key(b64: &str) -> Result<[u8; KEY_LEN], String> {
+    let bytes = BASE64_STANDARD
+        .decode(b64.trim())
+        .map_err(|e| format!("chave-mestra inválida: {e}"))?;
+    bytes
+        .try_into()
+        .map_err(|_| "chave-mestra com tamanho errado".to_string())
+}
+
+/// Chave-mestra num **arquivo 0600** ao lado do cofre (`secrets.key`, base64).
+/// Sem keyring no caminho: zero diálogos. A proteção é a do próprio usuário
+/// do SO (permissões + FileVault), o mesmo modelo de `gh`, `rclone`, `aws` e
+/// `gcloud`. Na primeira vez, se já houver chave no Keychain (modelo anterior),
+/// ela é copiada para o arquivo para o cofre existente continuar legível.
+pub struct FileMasterKey {
+    path: PathBuf,
+}
+
+impl FileMasterKey {
+    pub fn new(path: PathBuf) -> Self {
+        Self { path }
+    }
+}
+
+#[async_trait::async_trait]
+impl MasterKeySource for FileMasterKey {
+    async fn load_or_create(&self) -> Result<[u8; KEY_LEN], String> {
+        match std::fs::read_to_string(&self.path) {
+            Ok(b64) => {
+                return decode_key(&b64).map_err(|e| format!("{}: {e}", self.path.display()))
+            }
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+            Err(e) => return Err(format!("{}: {e}", self.path.display())),
+        }
+        let key: [u8; KEY_LEN] = if cfg!(target_os = "macos") {
+            match KeyringMasterKey::load_existing().await {
+                Ok(Some(k)) => {
+                    tracing::info!("chave-mestra copiada do Keychain para o arquivo");
+                    k
+                }
+                Ok(None) => rand::random(),
+                Err(e) => {
+                    tracing::warn!(error = %e, "não li a chave-mestra do Keychain; gerando uma nova (cofre antigo, se existir, fica ilegível)");
+                    rand::random()
+                }
+            }
+        } else {
+            rand::random()
+        };
+        write_private(&self.path, BASE64_STANDARD.encode(key).as_bytes())?;
+        Ok(key)
+    }
+}
 
 #[async_trait::async_trait]
 impl MasterKeySource for KeyringMasterKey {
@@ -168,14 +241,7 @@ impl MasterKeySource for KeyringMasterKey {
         tokio::task::spawn_blocking(|| {
             let entry = keyring::Entry::new(SERVICE, MASTER_KEY_USER).map_err(|e| e.to_string())?;
             match entry.get_password() {
-                Ok(b64) => {
-                    let bytes = BASE64_STANDARD
-                        .decode(b64.trim())
-                        .map_err(|e| format!("chave-mestra inválida no keyring: {e}"))?;
-                    bytes
-                        .try_into()
-                        .map_err(|_| "chave-mestra no keyring com tamanho errado".to_string())
-                }
+                Ok(b64) => decode_key(&b64).map_err(|e| format!("{e} (keyring)")),
                 Err(keyring::Error::NoEntry) => {
                     let key: [u8; KEY_LEN] = rand::random();
                     entry
@@ -314,7 +380,11 @@ fn write_private(path: &Path, bytes: &[u8]) -> Result<(), String> {
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent).map_err(|e| e.to_string())?;
     }
-    let tmp = path.with_extension("enc.tmp");
+    let name = path
+        .file_name()
+        .map(|n| n.to_string_lossy().into_owned())
+        .unwrap_or_else(|| "secrets".to_string());
+    let tmp = path.with_file_name(format!("{name}.tmp"));
     std::fs::write(&tmp, bytes).map_err(|e| e.to_string())?;
     #[cfg(unix)]
     {
@@ -343,7 +413,9 @@ impl SecretStore for EncryptedFileStore {
         m.insert(key.to_string(), v.expose_secret().to_string());
         self.save(m).await?;
         if let Err(e) = legacy.delete(key).await {
-            tracing::warn!(key, error = %e, "segredo migrado, mas o item antigo do keyring ficou");
+            // macOS recusa apagar item cujo "dono" é outro binário (errSecInvalidOwnerEdit).
+            // Inofensivo: o cofre é lido primeiro; o item só sobra no Keychain Access.
+            tracing::info!(key, error = %e, "segredo migrado; o item antigo ficou no keyring (pode apagar no Acesso às Chaves)");
         } else {
             tracing::info!(key, "segredo migrado do keyring para o cofre cifrado");
         }
@@ -364,22 +436,27 @@ impl SecretStore for EncryptedFileStore {
         Ok(())
     }
     fn backend(&self) -> &'static str {
-        "keychain + arquivo cifrado"
+        "arquivo cifrado (chave-mestra em arquivo)"
     }
 }
 
-/// Escolhe o backend uma vez: macOS → cofre cifrado (chave-mestra no Keychain);
+/// Escolhe o backend uma vez: macOS → cofre cifrado com chave-mestra em arquivo
+/// (`FileMasterKey`; o Keychain só é consultado para migrar itens antigos);
 /// outros SOs → keyring por item; sem keyring → arquivo JSON 0600 (com aviso).
 pub struct AutoSecretStore {
     inner: Arc<dyn SecretStore>,
 }
 
 impl AutoSecretStore {
-    pub async fn new(fallback_file: PathBuf, encrypted_file: PathBuf, force_file: bool) -> Self {
+    pub async fn new(
+        fallback_file: PathBuf,
+        encrypted_file: PathBuf,
+        master_key_file: PathBuf,
+        force_file: bool,
+    ) -> Self {
         if !force_file {
             if cfg!(target_os = "macos") {
-                // Um único diálogo do Keychain (a chave-mestra), em vez de um por segredo.
-                let master = KeyringMasterKey;
+                let master = FileMasterKey::new(master_key_file);
                 match master.load_or_create().await {
                     Ok(_) => {
                         return Self {
@@ -391,7 +468,7 @@ impl AutoSecretStore {
                         };
                     }
                     Err(e) => {
-                        tracing::warn!(error = %e, "chave-mestra no Keychain indisponível; usando arquivo de segredos (0600)");
+                        tracing::warn!(error = %e, "chave-mestra em arquivo indisponível; usando arquivo de segredos (0600)");
                     }
                 }
             } else {
@@ -567,6 +644,26 @@ mod tests {
     }
 
     #[cfg(unix)]
+    #[tokio::test]
+    async fn file_master_key_is_created_once_and_private() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("secrets.key");
+        let src = FileMasterKey::new(path.clone());
+        let a = src.load_or_create().await.expect("cria");
+        let b = FileMasterKey::new(path.clone())
+            .load_or_create()
+            .await
+            .expect("relê");
+        assert_eq!(a, b);
+        assert!(!dir.path().join("secrets.key.tmp").exists());
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let mode = std::fs::metadata(&path).expect("meta").permissions().mode() & 0o777;
+            assert_eq!(mode, 0o600);
+        }
+    }
+
     #[tokio::test]
     async fn file_is_private() {
         use std::os::unix::fs::PermissionsExt;

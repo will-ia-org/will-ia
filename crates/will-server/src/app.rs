@@ -176,6 +176,7 @@ pub async fn start(opts: RunOptions) -> anyhow::Result<ServerHandle> {
         will_storage::AutoSecretStore::new(
             paths.secrets_file(),
             paths.encrypted_secrets_file(),
+            paths.master_key_file(),
             force_file,
         )
         .await,
