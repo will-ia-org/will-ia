@@ -1811,6 +1811,8 @@ pub static TABLE: &[(&str, &str)] = &[
     ("Triggers desligadas nas configurações: nada dispara.", "Triggers disabled in settings: nothing fires."),
     ("Nova trigger", "New trigger"),
     ("carregando conversas…", "loading chats…"),
+    ("carregando atividade…", "loading activity…"),
+    ("Atividade do turno: {}", "Turn activity: {}"),
     ("{} subagente(s) em segundo plano", "{} subagent(s) in the background"),
     ("{} subagente(s)", "{} subagent(s)"),
     ("mensagem entregue no meio do turno", "message delivered mid-turn"),

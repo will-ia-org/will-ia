@@ -360,6 +360,25 @@ impl Storage {
         Ok(out)
     }
 
+    /// Quantos eventos (`turn_events`) cada turno da thread tem — para a UI
+    /// saber que há atividade a mostrar sem baixar os eventos.
+    pub async fn count_turn_events(
+        &self,
+        thread_id: ThreadId,
+    ) -> Result<std::collections::HashMap<String, i64>> {
+        let rows = sqlx::query(
+            "SELECT e.turn_id AS turn_id, COUNT(*) AS n FROM turn_events e \
+             JOIN turns t ON t.id = e.turn_id WHERE t.thread_id = ? GROUP BY e.turn_id",
+        )
+        .bind(thread_id.to_string())
+        .fetch_all(&self.pool)
+        .await?;
+        Ok(rows
+            .iter()
+            .map(|r| (r.get::<String, _>("turn_id"), r.get::<i64, _>("n")))
+            .collect())
+    }
+
     pub async fn list_turn_events(&self, turn_id: TurnId) -> Result<Vec<TurnEventRecord>> {
         let rows = sqlx::query("SELECT * FROM turn_events WHERE turn_id = ? ORDER BY id")
             .bind(turn_id.to_string())

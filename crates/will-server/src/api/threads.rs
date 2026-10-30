@@ -51,13 +51,20 @@ pub async fn turns(
     Path(id): Path<String>,
     Query(q): Query<Limit>,
 ) -> ApiResult<Value> {
+    let thread = tid(&id)?;
     let rows = state
         .storage
-        .list_turns(tid(&id)?, q.limit.unwrap_or(100).min(1000))
+        .list_turns(thread, q.limit.unwrap_or(100).min(1000))
         .await?;
+    let events = state
+        .storage
+        .count_turn_events(thread)
+        .await
+        .unwrap_or_default();
     let out: Vec<Value> = rows
         .into_iter()
         .map(|r| {
+            let events = events.get(&r.id.to_string()).copied().unwrap_or(0);
             // Turno absorvido por outro (mensagem enviada no meio do turno):
             // não tem resposta própria; `merged_into` aponta o turno pai.
             let merged = r.error_kind.as_deref() == Some("merged");
@@ -74,6 +81,7 @@ pub async fn turns(
                 "result": text.as_ref().map(|t| json!({"text": t, "is_error": r.is_error, "cost_usd": r.cost_usd, "duration_ms": r.duration_ms, "model": r.model})),
                 "text": text, "is_error": r.is_error, "error_kind": r.error_kind, "merged_into": merged_into, "cost_usd": r.cost_usd, "duration_ms": r.duration_ms, "model": r.model,
                 "error": if r.is_error { text.clone() } else { None },
+                "events": events,
             })
         })
         .collect();

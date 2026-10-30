@@ -313,6 +313,9 @@ pub struct ThreadsPage {
     /// Último turno concluído por thread (para anexar resultados tardios de
     /// subagentes e mostrar "em segundo plano" na lista).
     done_by_thread: HashMap<ThreadId, String>,
+    /// Eventos de turnos antigos sendo baixados do servidor (id do turno → tarefa),
+    /// para reconstruir a faixa de atividade retroativamente.
+    loading_events: HashMap<String, Task<Value>>,
     /// Triggers por thread alvo (id → "nome (fonte)"), para o ícone de raio.
     triggers: Loader<Value>,
     trigger_map: HashMap<String, Vec<String>>,
@@ -701,6 +704,34 @@ fn turn_info_body(ui: &mut egui::Ui, pal: &ui::Palette, turn: &Value) {
 }
 
 impl ThreadsPage {
+    /// Mensagens aceitas no meio do turno `parent` (turnos mesclados), com horário.
+    fn merged_user_turns(&self, parent: &str) -> Vec<(chrono::DateTime<chrono::Utc>, String)> {
+        self.turns
+            .data
+            .as_ref()
+            .and_then(|v| v.as_array())
+            .map(|arr| {
+                arr.iter()
+                    .filter(|t| ui::s(t, "merged_into") == parent)
+                    .filter_map(|t| {
+                        let at = turn_dt(t, "started_at")?;
+                        Some((at, ui::s(t, "prompt_display")))
+                    })
+                    .collect()
+            })
+            .unwrap_or_default()
+    }
+
+    fn turn_duration_secs(&self, turn_id: &str) -> Option<u64> {
+        self.turns
+            .data
+            .as_ref()
+            .and_then(|v| v.as_array())
+            .and_then(|arr| arr.iter().find(|t| ui::s(t, "id") == turn_id))
+            .and_then(|t| t.get("duration_ms").and_then(|d| d.as_u64()))
+            .map(|ms| ms / 1000)
+    }
+
     /// Subagentes ainda rodando em segundo plano no último turno da thread.
     fn background_tasks(&self, thread: &ThreadId) -> usize {
         self.done_by_thread
@@ -938,6 +969,24 @@ impl ThreadsPage {
     fn poll(&mut self, cx: &mut Cx) {
         self.sync_draft();
         self.poll_speak(cx);
+        // eventos de turnos antigos → linha do tempo reconstruída
+        let mut done_ids = Vec::new();
+        for (tid, t) in &self.loading_events {
+            if let Some(r) = t.take() {
+                done_ids.push((tid.clone(), r));
+            }
+        }
+        for (tid, r) in done_ids {
+            self.loading_events.remove(&tid);
+            match r {
+                Ok(v) => {
+                    let merged = self.merged_user_turns(&tid);
+                    let live = live_from_events(&v, &merged, self.turn_duration_secs(&tid));
+                    self.done_live.insert(tid, live);
+                }
+                Err(e) => cx.toasts.error(trf("Atividade do turno: {}", &[&e])),
+            }
+        }
         if self.triggers.stale(std::time::Duration::from_secs(120)) {
             self.triggers
                 .start(cx.svc.call(|c| async move { c.triggers().await }));
@@ -1670,9 +1719,41 @@ impl ThreadsPage {
                         }
                         let text = ui::s(turn, "text");
                         let is_err = ui::b(turn, "is_error");
-                        // atividade do turno (ferramentas, falas intermediárias), recolhida
-                        if let Some(done) = self.done_live.get(&ui::s(turn, "id")) {
-                            activity_strip(ui, pal, &mut self.md_cache, done, &ui::s(turn, "id"));
+                        // atividade do turno (ferramentas, falas intermediárias), recolhida:
+                        // em memória (turno desta sessão) ou reconstruída dos eventos
+                        // gravados no servidor ao expandir
+                        let turn_key = ui::s(turn, "id");
+                        let events_n = turn.get("events").and_then(|e| e.as_u64()).unwrap_or(0);
+                        if let Some(done) = self.done_live.get(&turn_key) {
+                            activity_strip(ui, pal, &mut self.md_cache, done, &turn_key, false);
+                        } else if events_n > 0 && !turn_key.is_empty() {
+                            let loading = self.loading_events.contains_key(&turn_key);
+                            let placeholder = LiveTurn {
+                                turn_id: Some(turn_key.clone()),
+                                items: Vec::new(),
+                                text: String::new(),
+                                started: None,
+                                finished_secs: turn
+                                    .get("duration_ms")
+                                    .and_then(|d| d.as_u64())
+                                    .map(|ms| ms / 1000),
+                            };
+                            let wants = activity_strip(
+                                ui,
+                                pal,
+                                &mut self.md_cache,
+                                &placeholder,
+                                &turn_key,
+                                loading,
+                            );
+                            if wants && !loading {
+                                let id = turn_key.clone();
+                                self.loading_events.insert(
+                                    turn_key.clone(),
+                                    cx.svc
+                                        .call(move |c| async move { c.turn_events(&id).await }),
+                                );
+                            }
                         }
                         if is_err {
                             let msg = if text.is_empty() {
@@ -2700,7 +2781,9 @@ fn activity_strip(
     cache: &mut egui_commonmark::CommonMarkCache,
     done: &LiveTurn,
     turn_id: &str,
-) {
+    loading: bool,
+) -> bool {
+    let mut wants_load = false;
     let dark = ui.visuals().dark_mode;
     let key = egui::Id::unique(("activity-open", turn_id));
     let mut open = ui.ctx().data(|d| d.get_temp::<bool>(key)).unwrap_or(false);
@@ -2751,6 +2834,9 @@ fn activity_strip(
                         if let Some(secs) = done.finished_secs {
                             parts.push(format!("{secs} s"));
                         }
+                        if loading {
+                            parts.push(tr("carregando…").to_string());
+                        }
                         ui.label(
                             egui::RichText::new(parts.join(" · "))
                                 .size(11.5)
@@ -2777,6 +2863,11 @@ fn activity_strip(
                     }
                     if open {
                         ui.add_space(6.0);
+                        if done.items.is_empty() {
+                            // ainda não baixado do servidor
+                            wants_load = true;
+                            ui::busy(ui, tr("carregando atividade…"));
+                        }
                         ui.vertical(|ui| {
                             for (idx, item) in done.items.iter().enumerate() {
                                 live_item(ui, pal, cache, dark, idx, item, true);
@@ -2787,6 +2878,99 @@ fn activity_strip(
         });
     });
     ui.add_space(4.0);
+    wants_load && !loading
+}
+
+/// Reconstrói a linha do tempo de um turno antigo a partir dos eventos gravados
+/// no servidor (`GET /api/turns/{id}/events`: `{at, kind, payload}` com o
+/// `EngineDelta` serializado) e dos turnos mesclados (mensagens no meio do
+/// turno). Os instantes são recriados relativos a agora para manter as
+/// durações das ferramentas.
+fn live_from_events(
+    events: &Value,
+    merged: &[(chrono::DateTime<chrono::Utc>, String)],
+    finished_secs: Option<u64>,
+) -> LiveTurn {
+    let now_dt = chrono::Utc::now();
+    let now = std::time::Instant::now();
+    let to_instant = |dt: chrono::DateTime<chrono::Utc>| -> std::time::Instant {
+        let back = (now_dt - dt).to_std().unwrap_or_default();
+        now.checked_sub(back).unwrap_or(now)
+    };
+    // (horário, delta ou mensagem do usuário)
+    enum Row {
+        Delta(EngineDelta),
+        User(String),
+    }
+    let mut rows: Vec<(chrono::DateTime<chrono::Utc>, Row)> = Vec::new();
+    if let Some(arr) = events.as_array() {
+        for e in arr {
+            let Some(at) = e
+                .get("at")
+                .and_then(|a| a.as_str())
+                .and_then(|a| chrono::DateTime::parse_from_rfc3339(a).ok())
+                .map(|a| a.with_timezone(&chrono::Utc))
+            else {
+                continue;
+            };
+            let Some(delta) = e
+                .get("payload")
+                .cloned()
+                .and_then(|p| serde_json::from_value::<EngineDelta>(p).ok())
+            else {
+                continue;
+            };
+            rows.push((at, Row::Delta(delta)));
+        }
+    }
+    for (at, text) in merged {
+        rows.push((*at, Row::User(text.clone())));
+    }
+    rows.sort_by_key(|(at, _)| *at);
+    let mut live = LiveTurn {
+        finished_secs,
+        ..Default::default()
+    };
+    for (at, row) in rows {
+        let inst = to_instant(at);
+        match row {
+            Row::Delta(d) => {
+                live.push(&d);
+                // o `push` carimba `now`; recoloca o horário real
+                match live.items.last_mut() {
+                    Some(LiveItem::Say { at, .. })
+                    | Some(LiveItem::Status { at, .. })
+                    | Some(LiveItem::Think { at, .. })
+                    | Some(LiveItem::User { at, .. }) => *at = inst,
+                    Some(LiveItem::Tool { at, .. }) if matches!(d, EngineDelta::ToolUse { .. }) => {
+                        *at = inst
+                    }
+                    _ => {}
+                }
+                if let EngineDelta::ToolResult { .. } = d {
+                    if let Some(LiveItem::Tool { done_at, .. }) =
+                        live.items.iter_mut().rev().find(|i| {
+                            matches!(
+                                i,
+                                LiveItem::Tool {
+                                    done_at: Some(_),
+                                    ..
+                                }
+                            )
+                        })
+                    {
+                        *done_at = Some(inst);
+                    }
+                }
+            }
+            Row::User(text) => {
+                live.flush_text();
+                live.items.push(LiveItem::User { text, at: inst });
+            }
+        }
+    }
+    live.flush_text();
+    live
 }
 
 /// Área de clique que cobre a **linha inteira** (toda a largura do `ui`) na
