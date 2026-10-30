@@ -107,6 +107,10 @@ struct Pending {
     accepted: bool,
     started_emitted: bool,
     started_at: Instant,
+    /// Span `turn` do turno: UM por mensagem, vivo da entrada na fila até o
+    /// `result` (ou descarte). Todos os eventos do turno saem dentro dele; a
+    /// duração do span é a duração real do turno.
+    span: tracing::Span,
 }
 
 struct Proc {
@@ -201,10 +205,10 @@ impl Runner {
 
     /// Span `turn` da cabeça da fila (turno corrente), se houver.
     fn current_turn_span(&self) -> tracing::Span {
-        match self.pending.front() {
-            Some(p) => self.turn_span(p.turn_id, &p.source),
-            None => tracing::Span::none(),
-        }
+        self.pending
+            .front()
+            .map(|p| p.span.clone())
+            .unwrap_or_else(tracing::Span::none)
     }
 
     fn sync_shared(&self) {
@@ -285,6 +289,7 @@ impl Runner {
                     accepted: false,
                     started_emitted: false,
                     started_at: Instant::now(),
+                    span: span.clone(),
                 });
                 *self.shared.last_used.lock() = Some(Instant::now());
                 if let Err(e) = self.write_stdin(&line).await {
@@ -599,8 +604,8 @@ impl Runner {
                     let p = &mut self.pending[i];
                     p.accepted = true;
                     let tid = p.turn_id;
-                    let source = p.source.clone();
-                    self.turn_span(tid, &source).in_scope(|| {
+                    let span = p.span.clone();
+                    span.in_scope(|| {
                         tracing::debug!(mid_turn, "mensagem ecoada pelo claude (aceita)")
                     });
                     self.emit(EngineEvent::Accepted {
@@ -724,7 +729,7 @@ impl Runner {
                         .and_then(|u| u.get(k))
                         .and_then(|v| v.as_u64())
                 };
-                self.turn_span(head.turn_id, &head.source).in_scope(|| {
+                head.span.in_scope(|| {
                     tracing::info!(
                         is_error = result.is_error,
                         cost_usd = result.cost_usd.unwrap_or(0.0),
@@ -760,10 +765,9 @@ impl Runner {
                 // Sem replay (versões antigas), considerar aceita ao ver atividade.
                 p.accepted = true;
                 let tid = p.turn_id;
-                let source = p.source.clone();
+                let span = p.span.clone();
                 let wait_ms = p.started_at.elapsed().as_millis() as u64;
-                self.turn_span(tid, &source)
-                    .in_scope(|| tracing::debug!(wait_ms, "turno começou (primeira atividade)"));
+                span.in_scope(|| tracing::debug!(wait_ms, "turno começou (primeira atividade)"));
                 self.emit(EngineEvent::TurnStarted {
                     thread: self.thread,
                     turn_id: tid,
@@ -778,7 +782,7 @@ impl Runner {
 
     /// Descarta um turno pendente com log no span dele.
     fn drop_pending(&self, q: Pending, reason: &str) {
-        self.turn_span(q.turn_id, &q.source).in_scope(|| {
+        q.span.in_scope(|| {
             tracing::warn!(
                 reason,
                 accepted = q.accepted,
@@ -836,20 +840,24 @@ impl Runner {
             self.emit(EngineEvent::StaleSession {
                 thread: self.thread,
             });
-            let msgs: Vec<SendRequest> = self
+            let msgs: Vec<(SendRequest, tracing::Span)> = self
                 .pending
                 .drain(..)
-                .map(|q| SendRequest {
-                    turn_id: q.turn_id,
-                    text: q.text,
-                    source: q.source,
+                .map(|q| {
+                    (
+                        SendRequest {
+                            turn_id: q.turn_id,
+                            text: q.text,
+                            source: q.source,
+                        },
+                        q.span,
+                    )
                 })
                 .collect();
-            let first_turn = msgs.first().map(|m| m.turn_id);
+            let first_turn = msgs.first().map(|(m, _)| m.turn_id);
             if self.spawn_process(first_turn).await.is_ok() {
-                for m in msgs {
+                for (m, span) in msgs {
                     let line = user_message_line(&m.text);
-                    let span = self.turn_span(m.turn_id, &m.source);
                     match self.write_stdin(&line).await {
                         Ok(()) => {
                             span.in_scope(|| {
@@ -866,6 +874,7 @@ impl Runner {
                                 accepted: false,
                                 started_emitted: false,
                                 started_at: Instant::now(),
+                                span: span.clone(),
                             });
                         }
                         Err(e) => {
@@ -881,8 +890,8 @@ impl Runner {
                     }
                 }
             } else {
-                for m in msgs {
-                    self.turn_span(m.turn_id, &m.source).in_scope(|| {
+                for (m, span) in msgs {
+                    span.in_scope(|| {
                         tracing::error!("respawn falhou após sessão expirada; turno descartado")
                     });
                     self.emit(EngineEvent::Dropped {

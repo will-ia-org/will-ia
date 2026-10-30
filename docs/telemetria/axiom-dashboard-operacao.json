@@ -1,617 +1,842 @@
 {
- "charts": [
-  {
-   "datasetId": "will-ia",
-   "id": "c1ea933d-2d11-41cc-bbb7-883df00e22e4",
-   "name": "Eventos por nível",
-   "numSeries": 1,
-   "overrideDashboardCompareAgainst": false,
-   "overrideDashboardTimeRange": false,
-   "query": {
-    "apl": "['will-ia'] | where isnotempty(severity_text) | summarize count() by bin_auto(_time), severity_text",
-    "queryOptions": {
-     "against": "",
-     "aggChartOpts": "{\"__default__\":{\"colors\":{\"assignment\":\"series-name\",\"palette\":\"polychrome\",\"type\":\"categorical\"},\"legend\":\"bottom\"},\"count_\":{}}",
-     "containsTimeFilter": "false",
-     "editorContent": "['will-ia'] | where isnotempty(severity_text) | summarize count() by bin_auto(_time), severity_text",
-     "openIntervals": "shown",
-     "quickRange": "30m",
-     "timeSeriesView": "charts"
-    }
+ "createdAt": "2026-10-30T04:34:15.945Z",
+ "createdBy": "willguitaradmfar@gmail.com",
+ "dashboard": {
+  "charts": [
+   {
+    "datasetId": "will-ia",
+    "id": "c1ea933d-2d11-41cc-bbb7-883df00e22e4",
+    "modified": 1793334923101,
+    "name": "Eventos por nível",
+    "numSeries": 1,
+    "overrideDashboardCompareAgainst": false,
+    "overrideDashboardTimeRange": false,
+    "query": {
+     "apl": "['will-ia'] | where isnotempty(severity_text) | summarize count() by bin_auto(_time), severity_text",
+     "queryOptions": {
+      "against": "",
+      "aggChartOpts": "{\"__default__\":{\"colors\":{\"assignment\":\"series-name\",\"palette\":\"polychrome\",\"type\":\"categorical\"},\"legend\":\"bottom\"},\"count_\":{}}",
+      "containsTimeFilter": "false",
+      "editorContent": "['will-ia'] | where isnotempty(severity_text) | summarize count() by bin_auto(_time), severity_text",
+      "endTime": "2026-10-30T04:34:40.038Z",
+      "openIntervals": "shown",
+      "quickRange": "30m",
+      "startTime": "2026-10-30T04:04:40.037Z",
+      "timeSeriesView": "charts"
+     }
+    },
+    "type": "TimeSeries"
    },
-   "type": "TimeSeries"
-  },
-  {
-   "colorScheme": "Blue",
-   "datasetId": "will-ia",
-   "id": "9bd4d755-d993-43e3-aa95-4c4910567226",
-   "invertTheme": true,
-   "name": "Instalações (servidores)",
-   "numSeries": 1,
-   "overrideDashboardCompareAgainst": false,
-   "overrideDashboardTimeRange": false,
-   "query": {
-    "apl": "['will-ia'] | where ['resource.process'] == 'server' | summarize dcount(['service.instance.id'])",
-    "queryOptions": {
-     "against": "",
-     "aggChartOpts": "{\"avg_properties.query_cost_gbms\":{\"displayNull\":\"zero\"},\"dcount_service.instance.id\":{}}",
-     "containsTimeFilter": "false",
-     "editorContent": "['will-ia'] | where ['resource.process'] == 'server' | summarize dcount(['service.instance.id'])",
-     "quickRange": "30m"
-    }
+   {
+    "colorScheme": "Blue",
+    "datasetId": "will-ia",
+    "id": "9bd4d755-d993-43e3-aa95-4c4910567226",
+    "invertTheme": true,
+    "modified": 1793334973083,
+    "name": "Instalações (servidores)",
+    "numSeries": 1,
+    "overrideDashboardCompareAgainst": false,
+    "overrideDashboardTimeRange": false,
+    "query": {
+     "apl": "['will-ia'] | where ['resource.process'] == 'server' | summarize dcount(['service.instance.id'])",
+     "queryOptions": {
+      "against": "",
+      "aggChartOpts": "{\"avg_properties.query_cost_gbms\":{\"displayNull\":\"zero\"},\"dcount_service.instance.id\":{}}",
+      "containsTimeFilter": "false",
+      "editorContent": "['will-ia'] | where ['resource.process'] == 'server' | summarize dcount(['service.instance.id'])",
+      "endTime": "2026-10-30T04:36:05.126Z",
+      "quickRange": "30m",
+      "startTime": "2026-10-30T04:06:05.126Z"
+     }
+    },
+    "showChart": false,
+    "type": "Statistic"
    },
-   "showChart": false,
-   "type": "Statistic"
-  },
-  {
-   "colorScheme": "Blue",
-   "datasetId": "will-ia",
-   "id": "4b268bad-4b2b-4dca-9860-adaae7b61985",
-   "invertTheme": true,
-   "name": "Turnos",
-   "numSeries": 1,
-   "overrideDashboardCompareAgainst": false,
-   "overrideDashboardTimeRange": false,
-   "query": {
-    "apl": "['will-ia'] | where name == 'turn' | summarize count()",
-    "queryOptions": {
-     "against": "",
-     "aggChartOpts": "{\"avg_properties.query_cost_gbms\":{\"displayNull\":\"zero\"},\"count_\":{}}",
-     "containsTimeFilter": "false",
-     "editorContent": "['will-ia'] | where name == 'turn' | summarize count()",
-     "quickRange": "30m"
-    }
+   {
+    "colorScheme": "Blue",
+    "datasetId": "will-ia",
+    "id": "4b268bad-4b2b-4dca-9860-adaae7b61985",
+    "invertTheme": true,
+    "modified": 1793334986729,
+    "name": "Turnos",
+    "numSeries": 1,
+    "overrideDashboardCompareAgainst": false,
+    "overrideDashboardTimeRange": false,
+    "query": {
+     "apl": "['will-ia'] | where body == 'turno concluído' | summarize count()",
+     "queryOptions": {
+      "against": "",
+      "aggChartOpts": "{\"avg_properties.query_cost_gbms\":{\"displayNull\":\"zero\"},\"count_\":{}}",
+      "containsTimeFilter": "false",
+      "editorContent": "['will-ia'] | where body == 'turno concluído' | summarize count()",
+      "endTime": "2026-10-30T04:36:18.783Z",
+      "quickRange": "30m",
+      "startTime": "2026-10-30T04:06:18.783Z"
+     }
+    },
+    "showChart": false,
+    "type": "Statistic"
    },
-   "showChart": false,
-   "type": "Statistic"
-  },
-  {
-   "colorScheme": "Blue",
-   "datasetId": "will-ia",
-   "id": "7403ff52-2310-4aca-aed1-6b73b50834db",
-   "invertTheme": true,
-   "name": "Erros",
-   "numSeries": 1,
-   "overrideDashboardCompareAgainst": false,
-   "overrideDashboardTimeRange": false,
-   "query": {
-    "apl": "['will-ia'] | where severity_text == 'ERROR' | summarize count()",
-    "queryOptions": {
-     "against": "",
-     "aggChartOpts": "{\"avg_properties.query_cost_gbms\":{\"displayNull\":\"zero\"},\"count_\":{}}",
-     "containsTimeFilter": "false",
-     "editorContent": "['will-ia'] | where severity_text == 'ERROR' | summarize count()",
-     "quickRange": "30m"
-    }
+   {
+    "colorScheme": "Blue",
+    "datasetId": "will-ia",
+    "id": "7403ff52-2310-4aca-aed1-6b73b50834db",
+    "invertTheme": true,
+    "modified": 1793335000562,
+    "name": "Erros",
+    "numSeries": 1,
+    "overrideDashboardCompareAgainst": false,
+    "overrideDashboardTimeRange": false,
+    "query": {
+     "apl": "['will-ia'] | where severity_text == 'ERROR' | summarize count()",
+     "queryOptions": {
+      "against": "",
+      "aggChartOpts": "{\"avg_properties.query_cost_gbms\":{\"displayNull\":\"zero\"},\"count_\":{}}",
+      "containsTimeFilter": "false",
+      "editorContent": "['will-ia'] | where severity_text == 'ERROR' | summarize count()",
+      "endTime": "2026-10-30T04:36:32.568Z",
+      "quickRange": "30m",
+      "startTime": "2026-10-30T04:06:32.568Z"
+     }
+    },
+    "showChart": false,
+    "type": "Statistic"
    },
-   "showChart": false,
-   "type": "Statistic"
-  },
-  {
-   "colorScheme": "Blue",
-   "datasetId": "will-ia",
-   "id": "5dbd9b28-fc3e-41b0-8670-3c12582d7431",
-   "invertTheme": true,
-   "name": "Avisos",
-   "numSeries": 1,
-   "overrideDashboardCompareAgainst": false,
-   "overrideDashboardTimeRange": false,
-   "query": {
-    "apl": "['will-ia'] | where severity_text == 'WARN' | summarize count()",
-    "queryOptions": {
-     "against": "",
-     "aggChartOpts": "{\"avg_properties.query_cost_gbms\":{\"displayNull\":\"zero\"},\"count_\":{}}",
-     "containsTimeFilter": "false",
-     "editorContent": "['will-ia'] | where severity_text == 'WARN' | summarize count()",
-     "quickRange": "30m"
-    }
+   {
+    "colorScheme": "Blue",
+    "datasetId": "will-ia",
+    "id": "5dbd9b28-fc3e-41b0-8670-3c12582d7431",
+    "invertTheme": true,
+    "modified": 1793335014347,
+    "name": "Avisos",
+    "numSeries": 1,
+    "overrideDashboardCompareAgainst": false,
+    "overrideDashboardTimeRange": false,
+    "query": {
+     "apl": "['will-ia'] | where severity_text == 'WARN' | summarize count()",
+     "queryOptions": {
+      "against": "",
+      "aggChartOpts": "{\"avg_properties.query_cost_gbms\":{\"displayNull\":\"zero\"},\"count_\":{}}",
+      "containsTimeFilter": "false",
+      "editorContent": "['will-ia'] | where severity_text == 'WARN' | summarize count()",
+      "endTime": "2026-10-30T04:36:45.984Z",
+      "quickRange": "30m",
+      "startTime": "2026-10-30T04:06:45.984Z"
+     }
+    },
+    "showChart": false,
+    "type": "Statistic"
    },
-   "showChart": false,
-   "type": "Statistic"
-  },
-  {
-   "datasetId": "will-ia",
-   "id": "fc1967c1-86f5-4552-993e-17dc5213389d",
-   "name": "Erros e avisos por módulo",
-   "numSeries": 1,
-   "overrideDashboardCompareAgainst": false,
-   "overrideDashboardTimeRange": false,
-   "query": {
-    "apl": "['will-ia'] | where severity_text in ('ERROR','WARN') | summarize count() by bin_auto(_time), ['attributes.module']",
-    "queryOptions": {
-     "against": "",
-     "aggChartOpts": "{\"__default__\":{\"colors\":{\"assignment\":\"series-name\",\"palette\":\"polychrome\",\"type\":\"categorical\"},\"legend\":\"bottom\"},\"count_\":{}}",
-     "containsTimeFilter": "false",
-     "editorContent": "['will-ia'] | where severity_text in ('ERROR','WARN') | summarize count() by bin_auto(_time), ['attributes.module']",
-     "openIntervals": "shown",
-     "quickRange": "30m",
-     "timeSeriesView": "charts"
-    }
+   {
+    "datasetId": "will-ia",
+    "id": "fc1967c1-86f5-4552-993e-17dc5213389d",
+    "modified": 1793335039577,
+    "name": "Erros e avisos por módulo",
+    "numSeries": 1,
+    "overrideDashboardCompareAgainst": false,
+    "overrideDashboardTimeRange": false,
+    "query": {
+     "apl": "['will-ia'] | where severity_text in ('ERROR','WARN') | summarize count() by bin_auto(_time), ['attributes.module']",
+     "queryOptions": {
+      "against": "",
+      "aggChartOpts": "{\"__default__\":{\"colors\":{\"assignment\":\"series-name\",\"palette\":\"polychrome\",\"type\":\"categorical\"},\"legend\":\"bottom\"},\"count_\":{}}",
+      "containsTimeFilter": "false",
+      "editorContent": "['will-ia'] | where severity_text in ('ERROR','WARN') | summarize count() by bin_auto(_time), ['attributes.module']",
+      "endTime": "2026-10-30T04:37:09.510Z",
+      "openIntervals": "shown",
+      "quickRange": "30m",
+      "startTime": "2026-10-30T04:07:09.510Z",
+      "timeSeriesView": "charts"
+     }
+    },
+    "type": "TimeSeries"
    },
-   "type": "TimeSeries"
-  },
-  {
-   "datasetId": "will-ia",
-   "id": "69cf0a63-228e-47ff-9912-d7b230df2b0c",
-   "name": "Uso por módulo (spans)",
-   "numSeries": 1,
-   "overrideDashboardCompareAgainst": false,
-   "overrideDashboardTimeRange": false,
-   "query": {
-    "apl": "['will-ia'] | where isnotempty(name) and name != 'api' | summarize count() by modulo = tostring(['attributes.custom'].module)",
-    "queryOptions": {
-     "against": "",
-     "aggChartOpts": "{\"__default__\":{\"colors\":{\"assignment\":\"series-name\",\"palette\":\"polychrome\",\"type\":\"categorical\"}},\"count_\":{}}",
-     "containsTimeFilter": "false",
-     "editorContent": "['will-ia'] | where isnotempty(name) and name != 'api' | summarize count() by modulo = tostring(['attributes.custom'].module)",
-     "quickRange": "30m",
-     "timeSeriesView": "charts"
-    }
+   {
+    "datasetId": "will-ia",
+    "id": "69cf0a63-228e-47ff-9912-d7b230df2b0c",
+    "modified": 1793335053111,
+    "name": "Uso por módulo (spans)",
+    "numSeries": 1,
+    "overrideDashboardCompareAgainst": false,
+    "overrideDashboardTimeRange": false,
+    "query": {
+     "apl": "['will-ia'] | where isnotempty(name) and name != 'api' | summarize count() by modulo = tostring(['attributes.custom'].module)",
+     "queryOptions": {
+      "against": "",
+      "aggChartOpts": "{\"__default__\":{\"colors\":{\"assignment\":\"series-name\",\"palette\":\"polychrome\",\"type\":\"categorical\"}},\"count_\":{}}",
+      "containsTimeFilter": "false",
+      "editorContent": "['will-ia'] | where isnotempty(name) and name != 'api' | summarize count() by modulo = tostring(['attributes.custom'].module)",
+      "endTime": "2026-10-30T04:37:25.079Z",
+      "quickRange": "30m",
+      "startTime": "2026-10-30T04:07:25.079Z",
+      "timeSeriesView": "charts"
+     }
+    },
+    "type": "Pie"
    },
-   "type": "Pie"
-  },
-  {
-   "datasetId": "will-ia",
-   "id": "56424e6b-af25-4cda-985f-54d27c085fe5",
-   "name": "Spans por tipo (turnos, ferramentas, mensagens…)",
-   "numSeries": 1,
-   "overrideDashboardCompareAgainst": false,
-   "overrideDashboardTimeRange": false,
-   "query": {
-    "apl": "['will-ia'] | where isnotempty(name) and name != 'api' | summarize count() by name",
-    "queryOptions": {
-     "against": "",
-     "aggChartOpts": "{\"__default__\":{\"colors\":{\"assignment\":\"series-name\",\"palette\":\"polychrome\",\"type\":\"categorical\"}},\"count_\":{}}",
-     "containsTimeFilter": "false",
-     "editorContent": "['will-ia'] | where isnotempty(name) and name != 'api' | summarize count() by name",
-     "quickRange": "30m",
-     "timeSeriesView": "charts"
-    }
+   {
+    "datasetId": "will-ia",
+    "id": "56424e6b-af25-4cda-985f-54d27c085fe5",
+    "modified": 1793335067376,
+    "name": "Spans por tipo (turnos, ferramentas, mensagens…)",
+    "numSeries": 1,
+    "overrideDashboardCompareAgainst": false,
+    "overrideDashboardTimeRange": false,
+    "query": {
+     "apl": "['will-ia'] | where isnotempty(name) and name != 'api' | summarize count() by name",
+     "queryOptions": {
+      "against": "",
+      "aggChartOpts": "{\"__default__\":{\"colors\":{\"assignment\":\"series-name\",\"palette\":\"polychrome\",\"type\":\"categorical\"}},\"count_\":{}}",
+      "containsTimeFilter": "false",
+      "editorContent": "['will-ia'] | where isnotempty(name) and name != 'api' | summarize count() by name",
+      "endTime": "2026-10-30T04:37:39.001Z",
+      "quickRange": "30m",
+      "startTime": "2026-10-30T04:07:39.001Z",
+      "timeSeriesView": "charts"
+     }
+    },
+    "type": "Pie"
    },
-   "type": "Pie"
-  },
-  {
-   "datasetId": "will-ia",
-   "id": "0ad749ce-b659-4ff4-89c6-913312279bcf",
-   "name": "Mensagens recebidas por canal",
-   "numSeries": 1,
-   "overrideDashboardCompareAgainst": false,
-   "overrideDashboardTimeRange": false,
-   "query": {
-    "apl": "['will-ia'] | where name == 'inbound' | summarize count() by bin_auto(_time), canal = tostring(['attributes.custom'].channel)",
-    "queryOptions": {
-     "against": "",
-     "aggChartOpts": "{\"__default__\":{\"colors\":{\"assignment\":\"series-name\",\"palette\":\"polychrome\",\"type\":\"categorical\"},\"legend\":\"bottom\"},\"count_\":{}}",
-     "containsTimeFilter": "false",
-     "editorContent": "['will-ia'] | where name == 'inbound' | summarize count() by bin_auto(_time), canal = tostring(['attributes.custom'].channel)",
-     "openIntervals": "shown",
-     "quickRange": "30m",
-     "timeSeriesView": "charts"
-    }
+   {
+    "datasetId": "will-ia",
+    "id": "0ad749ce-b659-4ff4-89c6-913312279bcf",
+    "modified": 1793335082869,
+    "name": "Turnos por canal",
+    "numSeries": 1,
+    "overrideDashboardCompareAgainst": false,
+    "overrideDashboardTimeRange": false,
+    "query": {
+     "apl": "['will-ia'] | where body == 'turno concluído' | summarize count() by bin_auto(_time), canal=tostring(['attributes.channel'])",
+     "queryOptions": {
+      "against": "",
+      "aggChartOpts": "{\"__default__\":{\"colors\":{\"assignment\":\"series-name\",\"palette\":\"polychrome\",\"type\":\"categorical\"},\"legend\":\"bottom\"},\"count_\":{}}",
+      "containsTimeFilter": "false",
+      "editorContent": "['will-ia'] | where body == 'turno concluído' | summarize count() by bin_auto(_time), canal=tostring(['attributes.channel'])",
+      "endTime": "2026-10-30T04:37:52.819Z",
+      "openIntervals": "shown",
+      "quickRange": "30m",
+      "startTime": "2026-10-30T04:07:52.819Z",
+      "timeSeriesView": "charts"
+     }
+    },
+    "type": "TimeSeries"
    },
-   "type": "TimeSeries"
-  },
-  {
-   "datasetId": "will-ia",
-   "id": "9c9eba7b-cb80-409a-98d6-e937b9e634b1",
-   "name": "Turnos: duração p50 / p95",
-   "numSeries": 2,
-   "overrideDashboardCompareAgainst": false,
-   "overrideDashboardTimeRange": false,
-   "query": {
-    "apl": "['will-ia'] | where name == 'turn' | summarize p50=percentile(duration, 50), p95=percentile(duration, 95) by bin_auto(_time)",
-    "queryOptions": {
-     "against": "",
-     "aggChartOpts": "{\"__default__\":{\"colors\":{\"assignment\":\"series-name\",\"palette\":\"polychrome\",\"type\":\"categorical\"},\"legend\":\"bottom\"},\"p50\":{},\"p95\":{}}",
-     "containsTimeFilter": "false",
-     "editorContent": "['will-ia'] | where name == 'turn' | summarize p50=percentile(duration, 50), p95=percentile(duration, 95) by bin_auto(_time)",
-     "openIntervals": "shown",
-     "quickRange": "30m",
-     "timeSeriesView": "charts"
-    }
+   {
+    "datasetId": "will-ia",
+    "id": "9c9eba7b-cb80-409a-98d6-e937b9e634b1",
+    "modified": 1793335098119,
+    "name": "Turnos: duração p50 / p95 (s)",
+    "numSeries": 2,
+    "overrideDashboardCompareAgainst": false,
+    "overrideDashboardTimeRange": false,
+    "query": {
+     "apl": "['will-ia'] | where body == 'turno concluído' | summarize p50_s=percentile(['attributes.duration_ms'], 50) / 1000.0, p95_s=percentile(['attributes.duration_ms'], 95) / 1000.0 by bin_auto(_time)",
+     "queryOptions": {
+      "against": "",
+      "aggChartOpts": "{\"p50_s\":{},\"p95_s\":{}}",
+      "containsTimeFilter": "false",
+      "editorContent": "['will-ia'] | where body == 'turno concluído' | summarize p50_s=percentile(['attributes.duration_ms'], 50) / 1000.0, p95_s=percentile(['attributes.duration_ms'], 95) / 1000.0 by bin_auto(_time)",
+      "endTime": "2026-10-30T04:38:08.019Z",
+      "openIntervals": "shown",
+      "quickRange": "30m",
+      "startTime": "2026-10-30T04:08:08.019Z",
+      "timeSeriesView": "charts"
+     }
+    },
+    "type": "TimeSeries"
    },
-   "type": "TimeSeries"
-  },
-  {
-   "datasetId": "will-ia",
-   "id": "233a55e9-8e1e-4440-8a46-d18e735d552f",
-   "name": "Custo Claude (USD) por instância",
-   "numSeries": 1,
-   "overrideDashboardCompareAgainst": false,
-   "overrideDashboardTimeRange": false,
-   "query": {
-    "apl": "['will-ia'] | where isnotempty(['attributes.cost_usd']) | summarize sum(['attributes.cost_usd']) by bin_auto(_time), ['resource.label']",
-    "queryOptions": {
-     "against": "",
-     "aggChartOpts": "{\"__default__\":{\"colors\":{\"assignment\":\"series-name\",\"palette\":\"polychrome\",\"type\":\"categorical\"},\"legend\":\"bottom\"},\"sum_attributes.cost_usd\":{}}",
-     "containsTimeFilter": "false",
-     "editorContent": "['will-ia'] | where isnotempty(['attributes.cost_usd']) | summarize sum(['attributes.cost_usd']) by bin_auto(_time), ['resource.label']",
-     "openIntervals": "shown",
-     "quickRange": "30m",
-     "timeSeriesView": "charts"
-    }
+   {
+    "datasetId": "will-ia",
+    "id": "233a55e9-8e1e-4440-8a46-d18e735d552f",
+    "modified": 1793335113021,
+    "name": "Custo Claude (USD) por instância",
+    "numSeries": 1,
+    "overrideDashboardCompareAgainst": false,
+    "overrideDashboardTimeRange": false,
+    "query": {
+     "apl": "['will-ia'] | where body == 'turno concluído' | summarize custo_usd=sum(['attributes.cost_usd']) by bin_auto(_time), ['resource.label']",
+     "queryOptions": {
+      "against": "",
+      "aggChartOpts": "{\"custo_usd\":{}}",
+      "containsTimeFilter": "false",
+      "editorContent": "['will-ia'] | where body == 'turno concluído' | summarize custo_usd=sum(['attributes.cost_usd']) by bin_auto(_time), ['resource.label']",
+      "endTime": "2026-10-30T04:38:22.864Z",
+      "openIntervals": "shown",
+      "quickRange": "30m",
+      "startTime": "2026-10-30T04:08:22.864Z",
+      "timeSeriesView": "charts"
+     }
+    },
+    "type": "TimeSeries"
    },
-   "type": "TimeSeries"
-  },
-  {
-   "datasetId": "will-ia",
-   "id": "2a30a2a4-568c-4ccd-9ceb-2a8458d7905d",
-   "name": "Ferramentas mais chamadas",
-   "numSeries": 3,
-   "overrideDashboardCompareAgainst": false,
-   "overrideDashboardTimeRange": false,
-   "query": {
-    "apl": "['will-ia'] | where name == 'tool_call' | summarize chamadas=count(), erros=countif(['status.code'] != 'OK'), p95=percentile(duration, 95) by ferramenta = tostring(['attributes.custom'].tool) | order by chamadas desc | limit 30",
-    "queryOptions": {
-     "against": "",
-     "aggChartOpts": "{\"chamadas\":{},\"erros\":{},\"p95_ms\":{}}",
-     "containsTimeFilter": "false",
-     "editorContent": "['will-ia'] | where name == 'tool_call' | summarize chamadas=count(), erros=countif(['status.code'] != 'OK'), p95=percentile(duration, 95) by ferramenta = tostring(['attributes.custom'].tool) | order by chamadas desc | limit 30",
-     "quickRange": "30m"
-    }
+   {
+    "datasetId": "will-ia",
+    "id": "2a30a2a4-568c-4ccd-9ceb-2a8458d7905d",
+    "modified": 1793335177620,
+    "name": "Ferramentas mais chamadas",
+    "numSeries": 4,
+    "overrideDashboardCompareAgainst": false,
+    "overrideDashboardTimeRange": false,
+    "query": {
+     "apl": "['will-ia'] | where isnotempty(name) | summarize chamadas=countif(name == 'tool_call'), erros=countif(name == 'tool_call' and ['status.code'] != 'OK'), p50_ms=percentileif(toint(['attributes.custom'].duration_ms), 50, name == 'tool_call'), p95_ms=percentileif(toint(['attributes.custom'].duration_ms), 95, name == 'tool_call') by ferramenta=iff(name == 'tool_call', tostring(['attributes.custom'].tool), '— sem chamadas na janela —') | order by chamadas desc | limit 31",
+     "queryOptions": {
+      "against": "",
+      "aggChartOpts": "{\"chamadas\":{},\"erros\":{},\"p50_ms\":{},\"p95_ms\":{}}",
+      "containsTimeFilter": "false",
+      "editorContent": "['will-ia'] | where isnotempty(name) | summarize chamadas=countif(name == 'tool_call'), erros=countif(name == 'tool_call' and ['status.code'] != 'OK'), p50_ms=percentileif(toint(['attributes.custom'].duration_ms), 50, name == 'tool_call'), p95_ms=percentileif(toint(['attributes.custom'].duration_ms), 95, name == 'tool_call') by ferramenta=iff(name == 'tool_call', tostring(['attributes.custom'].tool), '— sem chamadas na janela —') | order by chamadas desc | limit 31",
+      "endTime": "2026-10-30T04:38:46.557Z",
+      "quickRange": "30m",
+      "startTime": "2026-10-30T04:08:46.557Z"
+     }
+    },
+    "tableSettings": {
+     "columns": [],
+     "settings": {
+      "fitColumns": false,
+      "fontSize": "12px",
+      "hideNulls": true,
+      "highlightSeverity": true,
+      "showEvent": true,
+      "showFieldList": false,
+      "showHistory": false,
+      "showRaw": true,
+      "showSavedQueries": false,
+      "showTimestamp": true,
+      "wrapLines": true
+     }
+    },
+    "type": "Table"
    },
-   "tableSettings": {
-    "columns": [],
-    "settings": {
-     "fitColumns": false,
-     "fontSize": "12px",
-     "hideNulls": true,
-     "highlightSeverity": true,
-     "showEvent": true,
-     "showFieldList": false,
-     "showHistory": false,
-     "showRaw": true,
-     "showSavedQueries": false,
-     "showTimestamp": true,
-     "wrapLines": true
-    }
+   {
+    "datasetId": "will-ia",
+    "id": "df7807d6-1751-401f-93ee-9c0e91518e55",
+    "modified": 1793335200317,
+    "name": "Instâncias (última atividade)",
+    "numSeries": 3,
+    "overrideDashboardCompareAgainst": false,
+    "overrideDashboardTimeRange": false,
+    "query": {
+     "apl": "['will-ia'] | extend maquina = coalesce(['resource.server.instance.id'], ['service.instance.id']) | summarize ultimo=max(_time), eventos=count(), erros=countif(severity_text == 'ERROR'), versao=max(['service.version']), ip=max(['resource.net.public_ip']), rotulo=max(['resource.label']), host=max(['resource.host.name']), so=max(['resource.os.type']), processos=dcount(['resource.process']) by maquina | order by ultimo desc",
+     "queryOptions": {
+      "against": "",
+      "aggChartOpts": "{\"erros\":{},\"eventos\":{},\"ultimo\":{}}",
+      "containsTimeFilter": "false",
+      "editorContent": "['will-ia'] | extend maquina = coalesce(['resource.server.instance.id'], ['service.instance.id']) | summarize ultimo=max(_time), eventos=count(), erros=countif(severity_text == 'ERROR'), versao=max(['service.version']), ip=max(['resource.net.public_ip']), rotulo=max(['resource.label']), host=max(['resource.host.name']), so=max(['resource.os.type']), processos=dcount(['resource.process']) by maquina | order by ultimo desc",
+      "endTime": "2026-10-30T04:39:41.763Z",
+      "quickRange": "30m",
+      "startTime": "2026-10-30T04:09:41.763Z"
+     }
+    },
+    "tableSettings": {
+     "columns": [],
+     "settings": {
+      "fitColumns": false,
+      "fontSize": "12px",
+      "hideNulls": true,
+      "highlightSeverity": true,
+      "showEvent": true,
+      "showFieldList": false,
+      "showHistory": false,
+      "showRaw": true,
+      "showSavedQueries": false,
+      "showTimestamp": true,
+      "wrapLines": true
+     }
+    },
+    "type": "Table"
    },
-   "type": "Table"
-  },
-  {
-   "datasetId": "will-ia",
-   "id": "df7807d6-1751-401f-93ee-9c0e91518e55",
-   "name": "Instâncias (última atividade)",
-   "numSeries": 3,
-   "overrideDashboardCompareAgainst": false,
-   "overrideDashboardTimeRange": false,
-   "query": {
-    "apl": "['will-ia'] | extend maquina = coalesce(['resource.server.instance.id'], ['service.instance.id']) | summarize ultimo=max(_time), eventos=count(), erros=countif(severity_text == 'ERROR'), versao=max(['service.version']), ip=max(['resource.net.public_ip']), rotulo=max(['resource.label']), host=max(['resource.host.name']), so=max(['resource.os.type']), processos=dcount(['resource.process']) by maquina | order by ultimo desc",
-    "queryOptions": {
-     "against": "",
-     "aggChartOpts": "{\"erros\":{},\"eventos\":{},\"ultimo\":{}}",
-     "containsTimeFilter": "false",
-     "editorContent": "['will-ia'] | extend maquina = coalesce(['resource.server.instance.id'], ['service.instance.id']) | summarize ultimo=max(_time), eventos=count(), erros=countif(severity_text == 'ERROR'), versao=max(['service.version']), ip=max(['resource.net.public_ip']), rotulo=max(['resource.label']), host=max(['resource.host.name']), so=max(['resource.os.type']), processos=dcount(['resource.process']) by maquina | order by ultimo desc",
-     "quickRange": "30m"
-    }
+   {
+    "datasetId": "will-ia",
+    "id": "ad722fc9-0743-4172-8ed2-0aa3ecc55c84",
+    "modified": 1793335434704,
+    "name": "Quedas e relatórios de falha",
+    "numSeries": 3,
+    "overrideDashboardCompareAgainst": false,
+    "overrideDashboardTimeRange": false,
+    "query": {
+     "apl": "['will-ia'] | where tostring(column_ifexists('attributes.kind', '')) == 'file' | project _time, ['resource.label'], ['resource.host.name'], ['service.version'], tipo=tostring(column_ifexists('attributes.file_kind', '')), conteudo=tostring(column_ifexists('attributes.content', '')) | order by _time desc | limit 50",
+     "queryOptions": {
+      "against": "",
+      "aggChartOpts": "{\"erros\":{},\"eventos\":{},\"ultimo\":{}}",
+      "containsTimeFilter": "false",
+      "editorContent": "['will-ia'] | where tostring(column_ifexists('attributes.kind', '')) == 'file' | project _time, ['resource.label'], ['resource.host.name'], ['service.version'], tipo=tostring(column_ifexists('attributes.file_kind', '')), conteudo=tostring(column_ifexists('attributes.content', '')) | order by _time desc | limit 50",
+      "endTime": "2026-10-30T04:39:41.763Z",
+      "quickRange": "30m",
+      "startTime": "2026-10-30T04:09:41.763Z"
+     }
+    },
+    "tableSettings": {
+     "columns": [],
+     "settings": {
+      "fitColumns": false,
+      "fontSize": "12px",
+      "hideNulls": true,
+      "highlightSeverity": true,
+      "showEvent": true,
+      "showFieldList": false,
+      "showHistory": false,
+      "showRaw": true,
+      "showSavedQueries": false,
+      "showTimestamp": true,
+      "wrapLines": true
+     }
+    },
+    "type": "Table"
    },
-   "tableSettings": {
-    "columns": [],
-    "settings": {
-     "fitColumns": false,
-     "fontSize": "12px",
-     "hideNulls": true,
-     "highlightSeverity": true,
-     "showEvent": true,
-     "showFieldList": false,
-     "showHistory": false,
-     "showRaw": true,
-     "showSavedQueries": false,
-     "showTimestamp": true,
-     "wrapLines": true
-    }
+   {
+    "datasetId": "will-ia",
+    "id": "60f0e557-bc48-49d5-a6f7-8de5885ef202",
+    "modified": 1793335827006,
+    "name": "Por SO: instalações, eventos, erros, turnos",
+    "numSeries": 3,
+    "overrideDashboardCompareAgainst": false,
+    "overrideDashboardTimeRange": false,
+    "query": {
+     "apl": "['will-ia'] | summarize instalacoes=dcountif(['service.instance.id'], ['resource.process'] == 'server'), eventos=count(), erros=countif(severity_text == 'ERROR'), avisos=countif(severity_text == 'WARN'), turnos=countif(body == 'turno concluído'), ultimo=max(_time) by so = ['resource.os.type'] | order by eventos desc",
+     "queryOptions": {
+      "against": "",
+      "aggChartOpts": "{\"erros\":{},\"eventos\":{},\"ultimo\":{}}",
+      "containsTimeFilter": "false",
+      "editorContent": "['will-ia'] | summarize instalacoes=dcountif(['service.instance.id'], ['resource.process'] == 'server'), eventos=count(), erros=countif(severity_text == 'ERROR'), avisos=countif(severity_text == 'WARN'), turnos=countif(body == 'turno concluído'), ultimo=max(_time) by so = ['resource.os.type'] | order by eventos desc",
+      "endTime": "2026-10-30T04:39:41.763Z",
+      "quickRange": "30m",
+      "startTime": "2026-10-30T04:09:41.763Z"
+     }
+    },
+    "tableSettings": {
+     "columns": [],
+     "settings": {
+      "fitColumns": false,
+      "fontSize": "12px",
+      "hideNulls": true,
+      "highlightSeverity": true,
+      "showEvent": true,
+      "showFieldList": false,
+      "showHistory": false,
+      "showRaw": true,
+      "showSavedQueries": false,
+      "showTimestamp": true,
+      "wrapLines": true
+     }
+    },
+    "type": "Table"
    },
-   "type": "Table"
-  },
-  {
-   "datasetId": "will-ia",
-   "id": "ad722fc9-0743-4172-8ed2-0aa3ecc55c84",
-   "name": "Quedas e relatórios de falha",
-   "numSeries": 3,
-   "overrideDashboardCompareAgainst": false,
-   "overrideDashboardTimeRange": false,
-   "query": {
-    "apl": "['will-ia'] | where tostring(column_ifexists('attributes.kind', '')) == 'file' | project _time, ['resource.label'], ['resource.host.name'], ['service.version'], tipo=tostring(column_ifexists('attributes.file_kind', '')), conteudo=tostring(column_ifexists('attributes.content', '')) | order by _time desc | limit 50",
-    "queryOptions": {
-     "against": "",
-     "aggChartOpts": "{\"erros\":{},\"eventos\":{},\"ultimo\":{}}",
-     "containsTimeFilter": "false",
-     "editorContent": "['will-ia'] | where tostring(column_ifexists('attributes.kind', '')) == 'file' | project _time, ['resource.label'], ['resource.host.name'], ['service.version'], tipo=tostring(column_ifexists('attributes.file_kind', '')), conteudo=tostring(column_ifexists('attributes.content', '')) | order by _time desc | limit 50",
-     "quickRange": "30m"
-    }
+   {
+    "datasetId": "will-ia",
+    "id": "fb15f2f7-d701-41ec-9f3a-d41b794c4e3c",
+    "modified": 1793335827006,
+    "name": "Instalações por SO",
+    "numSeries": 1,
+    "overrideDashboardCompareAgainst": false,
+    "overrideDashboardTimeRange": false,
+    "query": {
+     "apl": "['will-ia'] | where ['resource.process'] == 'server' | summarize dcount(['service.instance.id']) by so = ['resource.os.type']",
+     "queryOptions": {
+      "against": "",
+      "aggChartOpts": "{\"__default__\":{\"colors\":{\"assignment\":\"series-name\",\"palette\":\"polychrome\",\"type\":\"categorical\"}},\"count_\":{}}",
+      "containsTimeFilter": "false",
+      "editorContent": "['will-ia'] | where ['resource.process'] == 'server' | summarize dcount(['service.instance.id']) by so = ['resource.os.type']",
+      "endTime": "2026-10-30T04:37:25.079Z",
+      "quickRange": "30m",
+      "startTime": "2026-10-30T04:07:25.079Z",
+      "timeSeriesView": "charts"
+     }
+    },
+    "type": "Pie"
    },
-   "tableSettings": {
-    "columns": [],
-    "settings": {
-     "fitColumns": false,
-     "fontSize": "12px",
-     "hideNulls": true,
-     "highlightSeverity": true,
-     "showEvent": true,
-     "showFieldList": false,
-     "showHistory": false,
-     "showRaw": true,
-     "showSavedQueries": false,
-     "showTimestamp": true,
-     "wrapLines": true
-    }
+   {
+    "datasetId": "will-ia",
+    "id": "980a8c9d-c4e8-4ff6-a3b9-44044196b6bb",
+    "modified": 1793335827006,
+    "name": "Erros e avisos por SO",
+    "numSeries": 1,
+    "overrideDashboardCompareAgainst": false,
+    "overrideDashboardTimeRange": false,
+    "query": {
+     "apl": "['will-ia'] | where severity_text in ('ERROR','WARN') | summarize count() by bin_auto(_time), so = ['resource.os.type']",
+     "queryOptions": {
+      "against": "",
+      "aggChartOpts": "{\"__default__\":{\"colors\":{\"assignment\":\"series-name\",\"palette\":\"polychrome\",\"type\":\"categorical\"},\"legend\":\"bottom\"},\"count_\":{}}",
+      "containsTimeFilter": "false",
+      "editorContent": "['will-ia'] | where severity_text in ('ERROR','WARN') | summarize count() by bin_auto(_time), so = ['resource.os.type']",
+      "endTime": "2026-10-30T04:37:09.510Z",
+      "openIntervals": "shown",
+      "quickRange": "30m",
+      "startTime": "2026-10-30T04:07:09.510Z",
+      "timeSeriesView": "charts"
+     }
+    },
+    "type": "TimeSeries"
    },
-   "type": "Table"
-  },
-  {
-   "datasetId": "will-ia",
-   "id": "60f0e557-bc48-49d5-a6f7-8de5885ef202",
-   "name": "Por SO: instalações, eventos, erros, turnos",
-   "numSeries": 3,
-   "overrideDashboardCompareAgainst": false,
-   "overrideDashboardTimeRange": false,
-   "query": {
-    "apl": "['will-ia'] | summarize instalacoes=dcountif(['service.instance.id'], ['resource.process'] == 'server'), eventos=count(), erros=countif(severity_text == 'ERROR'), avisos=countif(severity_text == 'WARN'), turnos=countif(name == 'turn'), ultimo=max(_time) by so = ['resource.os.type'] | order by eventos desc",
-    "queryOptions": {
-     "against": "",
-     "aggChartOpts": "{\"erros\":{},\"eventos\":{},\"ultimo\":{}}",
-     "containsTimeFilter": "false",
-     "editorContent": "['will-ia'] | summarize instalacoes=dcountif(['service.instance.id'], ['resource.process'] == 'server'), eventos=count(), erros=countif(severity_text == 'ERROR'), avisos=countif(severity_text == 'WARN'), turnos=countif(name == 'turn'), ultimo=max(_time) by so = ['resource.os.type'] | order by eventos desc",
-     "quickRange": "30m"
-    }
+   {
+    "colorScheme": "Blue",
+    "datasetId": "will-ia",
+    "id": "e6a94910-a59b-492c-8bf1-54374b4d475b",
+    "invertTheme": true,
+    "modified": 1793334986729,
+    "name": "Custo Claude (USD)",
+    "numSeries": 1,
+    "overrideDashboardCompareAgainst": false,
+    "overrideDashboardTimeRange": false,
+    "query": {
+     "apl": "['will-ia'] | where body == 'turno concluído' | summarize sum(['attributes.cost_usd'])",
+     "queryOptions": {
+      "against": "",
+      "aggChartOpts": "{\"avg_properties.query_cost_gbms\":{\"displayNull\":\"zero\"},\"count_\":{}}",
+      "containsTimeFilter": "false",
+      "editorContent": "['will-ia'] | where body == 'turno concluído' | summarize sum(['attributes.cost_usd'])",
+      "endTime": "2026-10-30T04:36:18.783Z",
+      "quickRange": "30m",
+      "startTime": "2026-10-30T04:06:18.783Z"
+     }
+    },
+    "showChart": false,
+    "type": "Statistic"
    },
-   "tableSettings": {
-    "columns": [],
-    "settings": {
-     "fitColumns": false,
-     "fontSize": "12px",
-     "hideNulls": true,
-     "highlightSeverity": true,
-     "showEvent": true,
-     "showFieldList": false,
-     "showHistory": false,
-     "showRaw": true,
-     "showSavedQueries": false,
-     "showTimestamp": true,
-     "wrapLines": true
-    }
+   {
+    "colorScheme": "Blue",
+    "datasetId": "will-ia",
+    "id": "6993a752-05cb-4100-95ce-110cfe86fe31",
+    "invertTheme": true,
+    "modified": 1793334986729,
+    "name": "Chamadas de ferramentas",
+    "numSeries": 1,
+    "overrideDashboardCompareAgainst": false,
+    "overrideDashboardTimeRange": false,
+    "query": {
+     "apl": "['will-ia'] | where name == 'tool_call' | summarize count()",
+     "queryOptions": {
+      "against": "",
+      "aggChartOpts": "{\"avg_properties.query_cost_gbms\":{\"displayNull\":\"zero\"},\"count_\":{}}",
+      "containsTimeFilter": "false",
+      "editorContent": "['will-ia'] | where name == 'tool_call' | summarize count()",
+      "endTime": "2026-10-30T04:36:18.783Z",
+      "quickRange": "30m",
+      "startTime": "2026-10-30T04:06:18.783Z"
+     }
+    },
+    "showChart": false,
+    "type": "Statistic"
    },
-   "type": "Table"
-  },
-  {
-   "datasetId": "will-ia",
-   "id": "fb15f2f7-d701-41ec-9f3a-d41b794c4e3c",
-   "name": "Instalações por SO",
-   "numSeries": 1,
-   "overrideDashboardCompareAgainst": false,
-   "overrideDashboardTimeRange": false,
-   "query": {
-    "apl": "['will-ia'] | where ['resource.process'] == 'server' | summarize dcount(['service.instance.id']) by so = ['resource.os.type']",
-    "queryOptions": {
-     "against": "",
-     "aggChartOpts": "{\"__default__\":{\"colors\":{\"assignment\":\"series-name\",\"palette\":\"polychrome\",\"type\":\"categorical\"}},\"count_\":{}}",
-     "containsTimeFilter": "false",
-     "editorContent": "['will-ia'] | where ['resource.process'] == 'server' | summarize dcount(['service.instance.id']) by so = ['resource.os.type']",
-     "quickRange": "30m",
-     "timeSeriesView": "charts"
-    }
+   {
+    "datasetId": "will-ia",
+    "id": "0929964d-864f-4cfc-894e-ec2f7466922b",
+    "modified": 1793335827006,
+    "name": "Custo por modelo (USD)",
+    "numSeries": 1,
+    "overrideDashboardCompareAgainst": false,
+    "overrideDashboardTimeRange": false,
+    "query": {
+     "apl": "['will-ia'] | where body == 'turno concluído' | summarize custo_usd=sum(['attributes.cost_usd']) by modelo=tostring(['attributes.model'])",
+     "queryOptions": {
+      "against": "",
+      "aggChartOpts": "{\"__default__\":{\"colors\":{\"assignment\":\"series-name\",\"palette\":\"polychrome\",\"type\":\"categorical\"}},\"count_\":{}}",
+      "containsTimeFilter": "false",
+      "editorContent": "['will-ia'] | where body == 'turno concluído' | summarize custo_usd=sum(['attributes.cost_usd']) by modelo=tostring(['attributes.model'])",
+      "endTime": "2026-10-30T04:37:25.079Z",
+      "quickRange": "30m",
+      "startTime": "2026-10-30T04:07:25.079Z",
+      "timeSeriesView": "charts"
+     }
+    },
+    "type": "Pie"
    },
-   "type": "Pie"
-  },
-  {
-   "datasetId": "will-ia",
-   "id": "980a8c9d-c4e8-4ff6-a3b9-44044196b6bb",
-   "name": "Erros e avisos por SO",
-   "numSeries": 1,
-   "overrideDashboardCompareAgainst": false,
-   "overrideDashboardTimeRange": false,
-   "query": {
-    "apl": "['will-ia'] | where severity_text in ('ERROR','WARN') | summarize count() by bin_auto(_time), so = ['resource.os.type']",
-    "queryOptions": {
-     "against": "",
-     "aggChartOpts": "{\"__default__\":{\"colors\":{\"assignment\":\"series-name\",\"palette\":\"polychrome\",\"type\":\"categorical\"},\"legend\":\"bottom\"},\"count_\":{}}",
-     "containsTimeFilter": "false",
-     "editorContent": "['will-ia'] | where severity_text in ('ERROR','WARN') | summarize count() by bin_auto(_time), so = ['resource.os.type']",
-     "openIntervals": "shown",
-     "quickRange": "30m",
-     "timeSeriesView": "charts"
-    }
+   {
+    "datasetId": "will-ia",
+    "id": "7b1e2b9b-4c34-4437-8e96-bb3aba52f3eb",
+    "modified": 1793335177620,
+    "name": "Últimos erros e avisos",
+    "numSeries": 0,
+    "overrideDashboardCompareAgainst": false,
+    "overrideDashboardTimeRange": false,
+    "query": {
+     "apl": "['will-ia'] | where severity_text in ('ERROR','WARN') | project _time, nivel=severity_text, modulo=tostring(['attributes.module']), mensagem=body, instancia=['resource.label'], versao=['service.version'] | order by _time desc | limit 50",
+     "queryOptions": {
+      "against": "",
+      "aggChartOpts": "{}",
+      "containsTimeFilter": "false",
+      "editorContent": "['will-ia'] | where severity_text in ('ERROR','WARN') | project _time, nivel=severity_text, modulo=tostring(['attributes.module']), mensagem=body, instancia=['resource.label'], versao=['service.version'] | order by _time desc | limit 50",
+      "endTime": "2026-10-30T04:38:46.557Z",
+      "quickRange": "30m",
+      "startTime": "2026-10-30T04:08:46.557Z"
+     }
+    },
+    "tableSettings": {
+     "columns": [],
+     "settings": {
+      "fitColumns": false,
+      "fontSize": "12px",
+      "hideNulls": true,
+      "highlightSeverity": true,
+      "showEvent": true,
+      "showFieldList": false,
+      "showHistory": false,
+      "showRaw": true,
+      "showSavedQueries": false,
+      "showTimestamp": true,
+      "wrapLines": true
+     }
+    },
+    "type": "Table"
+   }
+  ],
+  "createdAt": "2026-10-30T04:34:15.945Z",
+  "createdBy": "willguitaradmfar@gmail.com",
+  "datasets": [
+   "will-ia"
+  ],
+  "description": "Logs, erros, uso por módulo, turnos, instâncias e quedas do will-ia (dataset will-ia, OTLP)",
+  "layout": [
+   {
+    "h": 2,
+    "i": "9bd4d755-d993-43e3-aa95-4c4910567226",
+    "minH": 2,
+    "minW": 2,
+    "moved": false,
+    "static": false,
+    "w": 2,
+    "x": 0,
+    "y": 0
    },
-   "type": "TimeSeries"
-  }
- ],
- "datasets": [
-  "will-ia"
- ],
- "description": "Logs, erros, uso por módulo, turnos, instâncias e quedas do will-ia (dataset will-ia, OTLP)",
- "layout": [
-  {
-   "h": 2,
-   "i": "9bd4d755-d993-43e3-aa95-4c4910567226",
-   "minH": 2,
-   "minW": 2,
-   "moved": false,
-   "static": false,
-   "w": 3,
-   "x": 0,
-   "y": 0
-  },
-  {
-   "h": 2,
-   "i": "4b268bad-4b2b-4dca-9860-adaae7b61985",
-   "minH": 2,
-   "minW": 2,
-   "moved": false,
-   "static": false,
-   "w": 3,
-   "x": 3,
-   "y": 0
-  },
-  {
-   "h": 2,
-   "i": "7403ff52-2310-4aca-aed1-6b73b50834db",
-   "minH": 2,
-   "minW": 2,
-   "moved": false,
-   "static": false,
-   "w": 3,
-   "x": 6,
-   "y": 0
-  },
-  {
-   "h": 2,
-   "i": "5dbd9b28-fc3e-41b0-8670-3c12582d7431",
-   "minH": 2,
-   "minW": 2,
-   "moved": false,
-   "static": false,
-   "w": 3,
-   "x": 9,
-   "y": 0
-  },
-  {
-   "h": 5,
-   "i": "c1ea933d-2d11-41cc-bbb7-883df00e22e4",
-   "minH": 3,
-   "minW": 3,
-   "moved": false,
-   "static": false,
-   "w": 6,
-   "x": 0,
-   "y": 8
-  },
-  {
-   "h": 5,
-   "i": "fc1967c1-86f5-4552-993e-17dc5213389d",
-   "minH": 3,
-   "minW": 3,
-   "moved": false,
-   "static": false,
-   "w": 6,
-   "x": 6,
-   "y": 8
-  },
-  {
-   "h": 6,
-   "i": "69cf0a63-228e-47ff-9912-d7b230df2b0c",
-   "minH": 5,
-   "minW": 3,
-   "moved": false,
-   "static": false,
-   "w": 4,
-   "x": 0,
-   "y": 13
-  },
-  {
-   "h": 6,
-   "i": "56424e6b-af25-4cda-985f-54d27c085fe5",
-   "minH": 5,
-   "minW": 3,
-   "moved": false,
-   "static": false,
-   "w": 4,
-   "x": 4,
-   "y": 13
-  },
-  {
-   "h": 6,
-   "i": "0ad749ce-b659-4ff4-89c6-913312279bcf",
-   "minH": 3,
-   "minW": 3,
-   "moved": false,
-   "static": false,
-   "w": 4,
-   "x": 8,
-   "y": 13
-  },
-  {
-   "h": 5,
-   "i": "9c9eba7b-cb80-409a-98d6-e937b9e634b1",
-   "minH": 3,
-   "minW": 3,
-   "moved": false,
-   "static": false,
-   "w": 6,
-   "x": 0,
-   "y": 19
-  },
-  {
-   "h": 5,
-   "i": "233a55e9-8e1e-4440-8a46-d18e735d552f",
-   "minH": 3,
-   "minW": 3,
-   "moved": false,
-   "static": false,
-   "w": 6,
-   "x": 6,
-   "y": 19
-  },
-  {
-   "h": 8,
-   "i": "2a30a2a4-568c-4ccd-9ceb-2a8458d7905d",
-   "minH": 3,
-   "minW": 3,
-   "moved": false,
-   "static": false,
-   "w": 6,
-   "x": 0,
-   "y": 24
-  },
-  {
-   "h": 8,
-   "i": "df7807d6-1751-401f-93ee-9c0e91518e55",
-   "minH": 3,
-   "minW": 3,
-   "moved": false,
-   "static": false,
-   "w": 6,
-   "x": 6,
-   "y": 24
-  },
-  {
-   "h": 8,
-   "i": "ad722fc9-0743-4172-8ed2-0aa3ecc55c84",
-   "minH": 2,
-   "minW": 2,
-   "moved": false,
-   "static": false,
-   "w": 12,
-   "x": 0,
-   "y": 32
-  },
-  {
-   "h": 6,
-   "i": "60f0e557-bc48-49d5-a6f7-8de5885ef202",
-   "minH": 2,
-   "minW": 2,
-   "moved": false,
-   "static": false,
-   "w": 4,
-   "x": 0,
-   "y": 2
-  },
-  {
-   "h": 6,
-   "i": "fb15f2f7-d701-41ec-9f3a-d41b794c4e3c",
-   "minH": 5,
-   "minW": 3,
-   "moved": false,
-   "static": false,
-   "w": 4,
-   "x": 4,
-   "y": 2
-  },
-  {
-   "h": 6,
-   "i": "980a8c9d-c4e8-4ff6-a3b9-44044196b6bb",
-   "minH": 3,
-   "minW": 3,
-   "moved": false,
-   "static": false,
-   "w": 4,
-   "x": 8,
-   "y": 2
-  }
- ],
- "name": "will-ia — Operação",
- "overrides": {},
- "refreshTime": 15,
- "schemaVersion": 2,
- "timeWindowEnd": "qr-now",
- "timeWindowStart": "qr-now-24h"
+   {
+    "h": 2,
+    "i": "4b268bad-4b2b-4dca-9860-adaae7b61985",
+    "minH": 2,
+    "minW": 2,
+    "moved": false,
+    "static": false,
+    "w": 2,
+    "x": 2,
+    "y": 0
+   },
+   {
+    "h": 2,
+    "i": "e6a94910-a59b-492c-8bf1-54374b4d475b",
+    "minH": 2,
+    "minW": 2,
+    "moved": false,
+    "static": false,
+    "w": 2,
+    "x": 4,
+    "y": 0
+   },
+   {
+    "h": 2,
+    "i": "6993a752-05cb-4100-95ce-110cfe86fe31",
+    "minH": 2,
+    "minW": 2,
+    "moved": false,
+    "static": false,
+    "w": 2,
+    "x": 6,
+    "y": 0
+   },
+   {
+    "h": 2,
+    "i": "7403ff52-2310-4aca-aed1-6b73b50834db",
+    "minH": 2,
+    "minW": 2,
+    "moved": false,
+    "static": false,
+    "w": 2,
+    "x": 8,
+    "y": 0
+   },
+   {
+    "h": 2,
+    "i": "5dbd9b28-fc3e-41b0-8670-3c12582d7431",
+    "minH": 2,
+    "minW": 2,
+    "moved": false,
+    "static": false,
+    "w": 2,
+    "x": 10,
+    "y": 0
+   },
+   {
+    "h": 4,
+    "i": "60f0e557-bc48-49d5-a6f7-8de5885ef202",
+    "minH": 2,
+    "minW": 2,
+    "moved": false,
+    "static": false,
+    "w": 4,
+    "x": 0,
+    "y": 2
+   },
+   {
+    "h": 4,
+    "i": "fb15f2f7-d701-41ec-9f3a-d41b794c4e3c",
+    "minH": 2,
+    "minW": 2,
+    "moved": false,
+    "static": false,
+    "w": 4,
+    "x": 4,
+    "y": 2
+   },
+   {
+    "h": 4,
+    "i": "980a8c9d-c4e8-4ff6-a3b9-44044196b6bb",
+    "minH": 2,
+    "minW": 2,
+    "moved": false,
+    "static": false,
+    "w": 4,
+    "x": 8,
+    "y": 2
+   },
+   {
+    "h": 4,
+    "i": "c1ea933d-2d11-41cc-bbb7-883df00e22e4",
+    "minH": 2,
+    "minW": 2,
+    "moved": false,
+    "static": false,
+    "w": 6,
+    "x": 0,
+    "y": 6
+   },
+   {
+    "h": 4,
+    "i": "fc1967c1-86f5-4552-993e-17dc5213389d",
+    "minH": 2,
+    "minW": 2,
+    "moved": false,
+    "static": false,
+    "w": 6,
+    "x": 6,
+    "y": 6
+   },
+   {
+    "h": 5,
+    "i": "7b1e2b9b-4c34-4437-8e96-bb3aba52f3eb",
+    "minH": 2,
+    "minW": 2,
+    "moved": false,
+    "static": false,
+    "w": 12,
+    "x": 0,
+    "y": 10
+   },
+   {
+    "h": 4,
+    "i": "0ad749ce-b659-4ff4-89c6-913312279bcf",
+    "minH": 2,
+    "minW": 2,
+    "moved": false,
+    "static": false,
+    "w": 6,
+    "x": 0,
+    "y": 15
+   },
+   {
+    "h": 4,
+    "i": "9c9eba7b-cb80-409a-98d6-e937b9e634b1",
+    "minH": 2,
+    "minW": 2,
+    "moved": false,
+    "static": false,
+    "w": 6,
+    "x": 6,
+    "y": 15
+   },
+   {
+    "h": 4,
+    "i": "233a55e9-8e1e-4440-8a46-d18e735d552f",
+    "minH": 2,
+    "minW": 2,
+    "moved": false,
+    "static": false,
+    "w": 6,
+    "x": 0,
+    "y": 19
+   },
+   {
+    "h": 4,
+    "i": "0929964d-864f-4cfc-894e-ec2f7466922b",
+    "minH": 2,
+    "minW": 2,
+    "moved": false,
+    "static": false,
+    "w": 6,
+    "x": 6,
+    "y": 19
+   },
+   {
+    "h": 4,
+    "i": "69cf0a63-228e-47ff-9912-d7b230df2b0c",
+    "minH": 2,
+    "minW": 2,
+    "moved": false,
+    "static": false,
+    "w": 4,
+    "x": 0,
+    "y": 23
+   },
+   {
+    "h": 4,
+    "i": "56424e6b-af25-4cda-985f-54d27c085fe5",
+    "minH": 2,
+    "minW": 2,
+    "moved": false,
+    "static": false,
+    "w": 4,
+    "x": 4,
+    "y": 23
+   },
+   {
+    "h": 4,
+    "i": "2a30a2a4-568c-4ccd-9ceb-2a8458d7905d",
+    "minH": 2,
+    "minW": 2,
+    "moved": false,
+    "static": false,
+    "w": 4,
+    "x": 8,
+    "y": 23
+   },
+   {
+    "h": 4,
+    "i": "df7807d6-1751-401f-93ee-9c0e91518e55",
+    "minH": 2,
+    "minW": 2,
+    "moved": false,
+    "static": false,
+    "w": 12,
+    "x": 0,
+    "y": 27
+   },
+   {
+    "h": 5,
+    "i": "ad722fc9-0743-4172-8ed2-0aa3ecc55c84",
+    "minH": 2,
+    "minW": 2,
+    "moved": false,
+    "static": false,
+    "w": 12,
+    "x": 0,
+    "y": 31
+   }
+  ],
+  "name": "will-ia — Operação",
+  "overrides": {},
+  "owner": "acaf902e-a071-4dbb-9dc5-fb772ba65efa",
+  "refreshTime": 15,
+  "schemaVersion": 2,
+  "timeWindowEnd": "qr-now",
+  "timeWindowStart": "qr-now-24h",
+  "uid": "edd5ae43-4fc9-44ac-81f3-e4ca89bca0bd",
+  "updatedAt": "2026-10-30T15:05:03.314Z",
+  "updatedBy": "willguitaradmfar@gmail.com",
+  "version": "1793372703314383392"
+ },
+ "id": "1F7sJ9CDd5CDm2ia7d",
+ "labelIds": [],
+ "labelNames": [],
+ "type": "managed",
+ "uid": "edd5ae43-4fc9-44ac-81f3-e4ca89bca0bd",
+ "updatedAt": "2026-10-30T15:05:03.314Z",
+ "updatedBy": "willguitaradmfar@gmail.com",
+ "version": 1793372703314383392
 }

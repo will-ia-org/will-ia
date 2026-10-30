@@ -40,7 +40,7 @@ tracing (eventos + spans) ──► TelemetryLayer ──► fila (4096) ──�
 
 | Span | Campos | Onde |
 |---|---|---|
-| `turn` | `thread_id`, `turn_id`, `source` (telegram\|whatsapp\|app\|voice\|schedule\|mcp\|api), `channel` | will-server (orquestrador) |
+| `turn` | `thread_id`, `turn_id`, `source` (telegram\|whatsapp\|app\|voice\|schedule\|mcp\|api), `channel` | will-server (orquestrador: entrada e fechamento) e will-engine (runner: **um** span por turno, vivo da fila até o `result`; a duração é a do turno) |
 | `tool_call` | `tool`, `call_id`, `thread_id`, `policy`, `ok`, `duration_ms` | will-mcp / will-server |
 | `approval` | `approval_id`, `tool`, `thread_id`, `decision` | will-server |
 | `schedule_run` | `schedule_id`, `run_id`, `thread_id` | will-scheduler |
@@ -126,10 +126,19 @@ o passo 1 de novo e atualize o segredo do repositório (`gh secret set WILL_TELE
 
 ## Dashboard "will-ia — Operação" (Axiom)
 
-Criado em 2026-10-30 na org `will-ia` (`app.axiom.co/will-ia-1dhc/dashboards`), 17 painéis: instalações (servidores, por SO),
-ativas, turnos, erros e avisos (indicadores); eventos por nível; erros/avisos por módulo; uso por módulo
-e spans por tipo (pizzas); mensagens por canal; duração dos turnos p50/p95; custo Claude por instância;
-ferramentas mais chamadas; instâncias (última atividade, versão, IP); quedas e relatórios de falha.
+Criado em 2026-10-30 na org `will-ia` (`app.axiom.co/will-ia-1dhc/dashboards`), 21 painéis. Indicadores:
+instalações (só `process=server`), turnos concluídos, custo Claude (USD), chamadas de ferramentas, erros,
+avisos. Linhas: por SO (tabela + pizza de instalações + erros/avisos); eventos por nível; erros/avisos por
+módulo; **últimos erros e avisos** (tabela); turnos por canal; duração dos turnos p50/p95 **em segundos**;
+custo por instância e por modelo; uso por módulo e spans por tipo (pizzas); ferramentas mais chamadas
+(chamadas, erros, p50/p95 ms); instâncias (última atividade, versão, IP); quedas e relatórios de falha.
+
+Regras aprendidas (2026-10-30): tudo que é "turno" sai do evento `body == 'turno concluído'`
+(`attributes.duration_ms`, `cost_usd`, `model`, `channel`, `is_error`), não da contagem de spans `turn`
+— o orquestrador e o runner abrem spans `turn` próprios e, até a 0.1.11, o runner abria um por evento.
+Tabela com `summarize ... by` numa janela sem dados vira `null` na UI: a de ferramentas agrupa
+todos os spans com `iff(name == 'tool_call', tool, '— sem chamadas na janela —')` para sempre ter linha.
+`union` numa tabela faz a UI mostrar os resultados como JSON bruto — evitar.
 A definição está em `docs/telemetria/axiom-dashboard-operacao.json` (campo `dashboard` do
 `GET /api/v2/dashboards/uid/<uid>`); para recriar/atualizar, faça `PUT /api/v2/dashboards/uid/<uid>`
 com `{ "dashboard": {...}, "version": <int64 atual> }` e o cabeçalho `X-AXIOM-ORG-ID`. O grid tem
