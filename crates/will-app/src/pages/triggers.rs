@@ -480,12 +480,12 @@ impl TriggersPage {
                     ui::field(
                         ui,
                         tr("Conta Google"),
-                        Some(tr("Caixa de entrada que será varrida (conta conectada em Configurações → Google). Não é filtro de remetente: para isso use uma condição from, ex.: *@xpto.com.")),
+                        Some(tr("Caixa de entrada que será varrida. Vazio = todas as contas Google conectadas (uma varredura por conta). Não é filtro de remetente: para isso use uma condição from, ex.: *@xpto.com.")),
                         |ui| {
                             if accounts.is_empty() {
                                 ui.colored_label(Tone::Warning.color(dark), tr("Nenhuma conta Google com Gmail conectada."));
                             } else {
-                                let any = tr("a única / qualquer");
+                                let any = tr("todas as contas conectadas");
                                 let mut opts: Vec<(&str, &str)> = vec![("", any)];
                                 opts.extend(accounts.iter().map(|a| (a.as_str(), a.as_str())));
                                 ui::select(ui, "trigger-gmail-account", &mut f.account, &opts);

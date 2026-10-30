@@ -332,65 +332,76 @@ impl TriggersModule {
                 self.deps.bus.emit(Event::TriggersChanged);
                 continue;
             }
-            let items = match mail
-                .poll(
-                    Some(account.as_str()).filter(|a| !a.is_empty()),
-                    &query,
-                    max.max(20),
-                )
-                .await
-            {
-                Ok(i) => i,
-                Err(e) => {
-                    tracing::warn!(account = %account, query = %query, error = %e, "triggers: varredura do Gmail falhou");
-                    continue;
-                }
+            // Conta vazia = todas as contas conectadas; cursor por conta.
+            let targets: Vec<String> = if account.is_empty() {
+                accounts.iter().map(|(_, email)| email.clone()).collect()
+            } else {
+                vec![account.clone()]
             };
-            let newest = items
-                .iter()
-                .filter_map(|v| v.get("internal_date_ms").and_then(|x| x.as_i64()))
-                .max();
-            for t in triggers {
-                let cursor: Option<i64> = t.cursor.as_deref().and_then(|c| c.parse().ok());
-                let Some(cursor) = cursor else {
-                    // Primeira varredura: só marca a posição (não dispara pelo que já
-                    // estava na caixa).
-                    let c = newest.unwrap_or_else(|| Utc::now().timestamp_millis());
-                    let _ = self
-                        .deps
-                        .storage
-                        .set_trigger_cursor(t.id, Some(&c.to_string()))
-                        .await;
-                    tracing::info!(trigger = %t.id, cursor = c, "triggers: cursor do Gmail inicializado");
-                    continue;
-                };
-                let mut fresh: Vec<&Value> = items
-                    .iter()
-                    .filter(|v| {
-                        v.get("internal_date_ms")
-                            .and_then(|x| x.as_i64())
-                            .map(|ms| ms > cursor)
-                            .unwrap_or(false)
-                    })
-                    .collect();
-                fresh.sort_by_key(|v| v.get("internal_date_ms").and_then(|x| x.as_i64()));
-                fresh.truncate(max as usize);
-                let mut seen: HashSet<String> = HashSet::new();
-                for v in &fresh {
-                    let ev = gmail_event(v);
-                    if !seen.insert(ev.ref_id.clone()) {
-                        continue;
-                    }
-                    if t.filter.matches(&ev) {
-                        self.fire(t.clone(), ev).await;
-                        fired += 1;
+            if targets.is_empty() {
+                tracing::debug!(query = %query, "triggers: nenhuma conta Gmail conectada; nada a varrer");
+                continue;
+            }
+            // Uma consulta por conta, compartilhada entre as triggers do grupo.
+            let mut per_account: Vec<(String, Vec<Value>)> = Vec::new();
+            for acct in &targets {
+                match mail.poll(Some(acct.as_str()), &query, max.max(20)).await {
+                    Ok(items) => per_account.push((acct.clone(), items)),
+                    Err(e) => {
+                        tracing::warn!(account = %acct, query = %query, error = %e, "triggers: varredura do Gmail falhou")
                     }
                 }
-                if let Some(n) = newest.filter(|n| *n > cursor) {
+            }
+            for t in triggers {
+                let mut cursors = parse_cursors(t.cursor.as_deref());
+                let mut changed = false;
+                for (acct, items) in &per_account {
+                    let newest = items
+                        .iter()
+                        .filter_map(|v| v.get("internal_date_ms").and_then(|x| x.as_i64()))
+                        .max();
+                    let Some(cursor) = cursor_for(&cursors, acct) else {
+                        // Primeira varredura desta conta: só marca a posição (não dispara
+                        // pelo que já estava na caixa).
+                        let c = newest.unwrap_or_else(|| Utc::now().timestamp_millis());
+                        cursors.insert(acct.clone(), c);
+                        changed = true;
+                        tracing::info!(trigger = %t.id, account = %acct, cursor = c, "triggers: cursor do Gmail inicializado");
+                        continue;
+                    };
+                    let mut fresh: Vec<&Value> = items
+                        .iter()
+                        .filter(|v| {
+                            v.get("internal_date_ms")
+                                .and_then(|x| x.as_i64())
+                                .map(|ms| ms > cursor)
+                                .unwrap_or(false)
+                        })
+                        .collect();
+                    fresh.sort_by_key(|v| v.get("internal_date_ms").and_then(|x| x.as_i64()));
+                    fresh.truncate(max as usize);
+                    let mut seen: HashSet<String> = HashSet::new();
+                    for v in &fresh {
+                        let ev = gmail_event(v);
+                        if !seen.insert(ev.ref_id.clone()) {
+                            continue;
+                        }
+                        if t.filter.matches(&ev) {
+                            self.fire(t.clone(), ev).await;
+                            fired += 1;
+                        }
+                    }
+                    if let Some(n) = newest.filter(|n| *n > cursor) {
+                        cursors.insert(acct.clone(), n);
+                        changed = true;
+                    }
+                }
+                if changed {
+                    let json = serde_json::to_string(&cursors).unwrap_or_default();
                     let _ = self
                         .deps
                         .storage
-                        .set_trigger_cursor(t.id, Some(&n.to_string()))
+                        .set_trigger_cursor(t.id, Some(&json))
                         .await;
                 }
             }
@@ -981,6 +992,29 @@ pub fn merge_events(mut events: Vec<TriggerEvent>) -> TriggerEvent {
     }
 }
 
+/// Cursor do Gmail por conta. Aceita o formato antigo (um número = cursor da
+/// conta única, guardado sob a chave `""` e também aplicado a qualquer conta
+/// na primeira leitura) e o novo (`{"email": ms}`).
+fn parse_cursors(raw: Option<&str>) -> BTreeMap<String, i64> {
+    let mut out = BTreeMap::new();
+    let Some(raw) = raw.map(str::trim).filter(|s| !s.is_empty()) else {
+        return out;
+    };
+    if let Ok(n) = raw.parse::<i64>() {
+        out.insert(String::new(), n);
+        return out;
+    }
+    if let Ok(m) = serde_json::from_str::<BTreeMap<String, i64>>(raw) {
+        out = m;
+    }
+    out
+}
+
+/// Cursor da conta, ou o legado (`""`) quando a conta ainda não tem o seu.
+fn cursor_for(cursors: &BTreeMap<String, i64>, acct: &str) -> Option<i64> {
+    cursors.get(acct).or_else(|| cursors.get("")).copied()
+}
+
 /// Item de `gmail_poll` → evento normalizado.
 pub fn gmail_event(v: &Value) -> TriggerEvent {
     let from = s(v, "from");
@@ -1143,6 +1177,17 @@ mod tests {
         assert!(lines[2].ends_with("terceira"));
         assert_eq!(m.ref_id, "terceira");
         assert_eq!(merge_events(vec![mk("só", 0)]).body, "só");
+    }
+
+    #[test]
+    fn cursors_legacy_and_per_account() {
+        let c = parse_cursors(Some("1700"));
+        assert_eq!(cursor_for(&c, "a@b.com"), Some(1700));
+        let c = parse_cursors(Some(r#"{"a@b.com":5,"c@d.com":9}"#));
+        assert_eq!(cursor_for(&c, "a@b.com"), Some(5));
+        assert_eq!(cursor_for(&c, "zz@x.com"), None);
+        assert!(parse_cursors(None).is_empty());
+        assert!(parse_cursors(Some("lixo")).is_empty());
     }
 
     #[test]
