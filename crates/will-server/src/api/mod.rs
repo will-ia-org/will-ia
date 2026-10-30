@@ -13,6 +13,7 @@ pub mod schedules;
 pub mod system;
 pub mod telemetry;
 pub mod threads;
+pub mod triggers;
 pub mod users;
 pub mod ws;
 
@@ -259,6 +260,17 @@ pub fn router(state: App) -> Router {
                 .delete(schedules::delete),
         )
         .route("/schedules/{id}/run", post(schedules::run_now))
+        .route("/triggers", get(triggers::list).post(triggers::create))
+        .route("/triggers/gmail/poll", post(triggers::gmail_poll))
+        .route(
+            "/triggers/{id}",
+            get(triggers::get_one)
+                .put(triggers::update)
+                .delete(triggers::delete),
+        )
+        .route("/triggers/{id}/runs", get(triggers::runs))
+        .route("/triggers/{id}/test", post(triggers::test))
+        .route("/whatsapp/chats", get(integrations::wa_chats))
         .route("/browser/status", get(browser::status))
         .route("/browser/detect", get(browser::detect))
         .route("/browser/traffic", get(browser::traffic))

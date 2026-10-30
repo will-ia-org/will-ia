@@ -288,14 +288,15 @@ impl SchedulesPage {
     pub fn ui(&mut self, ui: &mut egui::Ui, cx: &mut Cx) {
         self.poll(cx);
 
-        ui::heading_help(
-            ui,
-            tr("Agendamentos"),
-            Some(tr(
-                "Lembretes e tarefas programados pelo agente ou por você; na hora, a mensagem é entregue na thread dona.",
-            )),
-            &help::SCHEDULER,
-        );
+        ui::section_help(ui, tr("Agendamentos"), Some(&help::SCHEDULER), |ui| {
+            ui.label(
+                    RichText::new(tr(
+                        "Lembretes e tarefas programados pelo agente ou por você; na hora, a mensagem é entregue na thread dona.",
+                    ))
+                    .small()
+                    .weak(),
+                );
+        });
 
         let enabled = self
             .list

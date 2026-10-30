@@ -450,6 +450,7 @@ pub fn module_name(m: will_core::Module) -> &'static str {
         // aqui só para o match ser exaustivo.
         M::Drive => tr("Drive"),
         M::Scheduler => tr("Agendamentos"),
+        M::Triggers => tr("Triggers"),
         M::Browser => tr("Browser CDP"),
     }
 }

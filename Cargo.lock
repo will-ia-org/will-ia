@@ -9320,6 +9320,7 @@ dependencies = [
  "will-storage",
  "will-telegram",
  "will-telemetry",
+ "will-triggers",
  "will-whatsapp",
 ]
 
@@ -9406,6 +9407,22 @@ dependencies = [
  "tracing",
  "tracing-subscriber",
  "uuid",
+]
+
+[[package]]
+name = "will-triggers"
+version = "0.1.12"
+dependencies = [
+ "async-trait",
+ "chrono",
+ "parking_lot",
+ "serde",
+ "serde_json",
+ "tokio",
+ "tokio-util",
+ "tracing",
+ "will-core",
+ "will-storage",
 ]
 
 [[package]]

@@ -25,8 +25,66 @@ pub async fn start_all(state: &Arc<AppState>) {
     start_telegram(state).await;
     #[cfg(feature = "whatsapp")]
     start_whatsapp(state).await;
+    start_triggers(state);
     recompute_engine_status(state);
     tracing::info!("módulos no ar");
+}
+
+/// Fonte de e-mails das triggers sobre o módulo Google (`gmail_poll`).
+#[cfg(feature = "google")]
+struct GmailSource(Arc<AppState>);
+
+#[cfg(feature = "google")]
+#[async_trait::async_trait]
+impl will_triggers::MailSource for GmailSource {
+    async fn poll(
+        &self,
+        account: Option<&str>,
+        query: &str,
+        max: u64,
+    ) -> Result<Vec<serde_json::Value>, String> {
+        let g = self
+            .0
+            .google
+            .read()
+            .clone()
+            .ok_or_else(|| "módulo Google não iniciado".to_string())?;
+        g.gmail_poll(account, query, max).await
+    }
+}
+
+#[cfg(feature = "google")]
+pub fn gmail_source(state: &Arc<AppState>) -> impl will_triggers::MailSource {
+    GmailSource(state.clone())
+}
+
+/// Triggers universais (`docs/30`): sobe/aplica configuração. A fonte de
+/// e-mail depende do módulo Google (feature `google`); o WhatsApp entra pelo
+/// barramento, sem dependência direta.
+pub fn start_triggers(state: &Arc<AppState>) {
+    let cfg = state.settings().triggers;
+    let existing = state.triggers.read().clone();
+    match existing {
+        Some(m) => m.update_config(cfg),
+        None => {
+            #[cfg(feature = "google")]
+            let mail: Option<Arc<dyn will_triggers::MailSource>> =
+                Some(Arc::new(GmailSource(state.clone())));
+            #[cfg(not(feature = "google"))]
+            let mail: Option<Arc<dyn will_triggers::MailSource>> = None;
+            let m = will_triggers::TriggersModule::new(
+                will_triggers::TriggersDeps {
+                    storage: state.storage.clone(),
+                    host: state.host(),
+                    bus: state.bus.clone(),
+                    mail,
+                },
+                cfg,
+            );
+            *state.triggers.write() = Some(m.clone());
+            m.start();
+        }
+    }
 }
 
 /// Regrava o `.mcp.json` da KB, logando a falha (os chamadores não param por ela).
@@ -754,6 +812,7 @@ pub async fn apply_section(state: &Arc<AppState>, section: &str) {
         }
         "realtime" => start_realtime(state).await,
         "scheduler" => start_scheduler(state),
+        "triggers" => start_triggers(state),
         "network" => {
             tracing::warn!(
                 target: "will_network",

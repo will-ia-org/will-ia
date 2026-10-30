@@ -123,6 +123,9 @@ pub type ApiResult = Result<Value, String>;
 
 /// O que o laço de eventos entrega ao app.
 #[derive(Debug, Clone)]
+// `Event` cresceu com os eventos das triggers (mensagem do WhatsApp); o canal
+// é de baixo volume, não vale o Box.
+#[allow(clippy::large_enum_variant)]
 pub enum ClientEvent {
     Connected,
     Disconnected(String),
@@ -644,6 +647,36 @@ impl Client {
     }
     pub async fn delete_schedule(&self, id: &str) -> ApiResult {
         self.delete(&format!("schedules/{id}")).await
+    }
+    // ----- triggers -----
+    pub async fn triggers(&self) -> ApiResult {
+        self.get("triggers").await
+    }
+    pub async fn create_trigger(&self, body: Value) -> ApiResult {
+        self.post("triggers", Some(body)).await
+    }
+    pub async fn update_trigger(&self, id: &str, body: Value) -> ApiResult {
+        self.put(&format!("triggers/{id}"), body).await
+    }
+    pub async fn delete_trigger(&self, id: &str) -> ApiResult {
+        self.delete(&format!("triggers/{id}")).await
+    }
+    pub async fn trigger_runs(&self, id: &str) -> ApiResult {
+        self.get(&format!("triggers/{id}/runs")).await
+    }
+    pub async fn test_trigger(&self, id: &str) -> ApiResult {
+        self.post(&format!("triggers/{id}/test"), None).await
+    }
+    pub async fn triggers_gmail_poll(&self) -> ApiResult {
+        self.post("triggers/gmail/poll", None).await
+    }
+    /// Contas e conversas do WhatsApp (seletor de contatos das triggers).
+    pub async fn wa_chats(&self, q: &str) -> ApiResult {
+        self.get_q(
+            "whatsapp/chats",
+            &[("q", q.to_string()), ("limit", "300".into())],
+        )
+        .await
     }
     pub async fn run_schedule(&self, id: &str) -> ApiResult {
         self.post(&format!("schedules/{id}/run"), None).await

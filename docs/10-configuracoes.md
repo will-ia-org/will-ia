@@ -67,6 +67,18 @@ Ações: **Adicionar token** (abre instrução `claude setup-token`; token já c
 | Status | existe / gravável / tem `CLAUDE.md` / nuvem sincronizada / `node` e `python` detectados |
 | Ações | Abrir no explorador · Criar estrutura inicial · Recarregar comandos (`.claude/commands`) |
 
+### Triggers (seção `triggers`; `docs/30`)
+| Campo | Tipo | Padrão |
+|---|---|---|
+| Habilitar | bool | true |
+| Notificar ao disparar | bool | true |
+| Varrer o Gmail a cada (minutos) (`gmail_poll_minutes`) | int 1–1440 | 5 |
+| E-mails novos por varredura (`gmail_max_per_poll`) | int 1–100 | 10 |
+| Máximo de triggers ativas (`max_triggers`) | int | 200 |
+| Cooldown padrão (segundos) (`default_cooldown_secs`) | int | 0 |
+
+A página de configurações **Triggers** (antiga "Agendamentos") traz esta seção e, abaixo, a de *Agendamentos (por tempo)* (`scheduler`).
+
 ### Voz (Realtime)
 | Campo | Tipo | Padrão |
 |---|---|---|

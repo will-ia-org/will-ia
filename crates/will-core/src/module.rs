@@ -13,6 +13,7 @@ pub enum Module {
     Gmail,
     Drive,
     Scheduler,
+    Triggers,
     Browser,
 }
 
@@ -29,6 +30,7 @@ impl Module {
             Module::Gmail => "gmail",
             Module::Drive => "drive",
             Module::Scheduler => "scheduler",
+            Module::Triggers => "triggers",
             Module::Browser => "browser",
         }
     }
@@ -44,6 +46,7 @@ impl Module {
             Module::Gmail,
             Module::Drive,
             Module::Scheduler,
+            Module::Triggers,
             Module::Browser,
         ]
     }

@@ -21,6 +21,7 @@ will-mcp.workspace = true
 will-realtime.workspace = true
 will-platform.workspace = true
 will-scheduler.workspace = true
+will-triggers.workspace = true
 will-browser.workspace = true
 will-telegram = { workspace = true, optional = true }
 will-google = { workspace = true, optional = true }

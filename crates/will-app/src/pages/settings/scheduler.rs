@@ -15,31 +15,103 @@ impl SchedulerPage {
     pub fn ui(&mut self, ui: &mut egui::Ui, cx: &mut Cx, st: &mut SettingsState) {
         ui::heading_help(
             ui,
-            tr("Agendamentos"),
+            tr("Triggers"),
             Some(tr(
-                "Lembretes e tarefas programados (cron ou data única), entregues como mensagem na thread dona.",
+                "Regras que acordam threads: WhatsApp, e-mail (Gmail) e agendamentos por tempo.",
             )),
-            &help::SCHEDULER,
+            &help::TRIGGERS,
         );
 
-        ui::section(ui, tr("Configuração"), |ui| {
+        // ---- triggers universais ----
+        ui::section(ui, tr("WhatsApp e E-mail"), |ui| {
             let status = cx
                 .snap
                 .modules
-                .get(&Module::Scheduler)
+                .get(&Module::Triggers)
                 .cloned()
                 .unwrap_or(will_core::ModuleStatus::Stopped);
             ui.horizontal(|ui| {
                 ui.label(tr("Módulo:"));
                 ui::badge(ui, &ui::module_label(&status), ui::tone_for_module(&status));
-                if ui.button(tr("ver agendamentos")).clicked() {
+                if ui.button(tr("ver triggers")).clicked() {
                     *cx.go = Some(Nav::Schedules);
                 }
             });
             ui.add_space(4.0);
-
-            let s = &mut st.draft.scheduler;
+            let t = &mut st.draft.triggers;
             ui::field(
+                ui,
+                tr("Habilitar"),
+                Some(tr("Desligado, nenhuma trigger de WhatsApp/e-mail dispara; as regras ficam guardadas.")),
+                |ui| {
+                    ui::toggle(ui, &mut t.enabled);
+                },
+            );
+            ui::field(
+                ui,
+                tr("Notificar ao disparar"),
+                Some(tr("Notificação nativa a cada disparo.")),
+                |ui| {
+                    ui::toggle(ui, &mut t.notify_on_fire);
+                },
+            );
+            ui::field(
+                ui,
+                tr("Varrer o Gmail a cada (minutos)"),
+                Some(tr(
+                    "Intervalo da consulta à caixa de entrada; o WhatsApp é imediato (evento).",
+                )),
+                |ui| {
+                    ui::number(ui, &mut t.gmail_poll_minutes, 1..=1_440);
+                },
+            );
+            ui::field(
+                ui,
+                tr("E-mails novos por varredura"),
+                Some(tr(
+                    "Máximo processado por trigger a cada varredura (os mais antigos primeiro).",
+                )),
+                |ui| {
+                    ui::number(ui, &mut t.gmail_max_per_poll, 1..=100);
+                },
+            );
+            ui::field(ui, tr("Máximo de triggers ativas"), None, |ui| {
+                ui::number(ui, &mut t.max_triggers, 1..=10_000);
+            });
+            ui::field(
+                ui,
+                tr("Cooldown padrão (segundos)"),
+                Some(tr("Intervalo mínimo entre dois disparos da mesma trigger nas regras novas; 0 = sem limite.")),
+                |ui| {
+                    ui::number(ui, &mut t.default_cooldown_secs, 0..=86_400);
+                },
+            );
+        });
+        st.save_bar(ui, cx.svc, "triggers");
+        ui.add_space(10.0);
+
+        ui::section_help(
+            ui,
+            tr("Agendamentos (por tempo)"),
+            Some(&help::SCHEDULER),
+            |ui| {
+                let status = cx
+                    .snap
+                    .modules
+                    .get(&Module::Scheduler)
+                    .cloned()
+                    .unwrap_or(will_core::ModuleStatus::Stopped);
+                ui.horizontal(|ui| {
+                    ui.label(tr("Módulo:"));
+                    ui::badge(ui, &ui::module_label(&status), ui::tone_for_module(&status));
+                    if ui.button(tr("ver agendamentos")).clicked() {
+                        *cx.go = Some(Nav::Schedules);
+                    }
+                });
+                ui.add_space(4.0);
+
+                let s = &mut st.draft.scheduler;
+                ui::field(
                 ui,
                 tr("Habilitar"),
                 Some(tr(
@@ -49,7 +121,7 @@ impl SchedulerPage {
                     ui::toggle(ui, &mut s.enabled);
                 },
             );
-            ui::field(
+                ui::field(
                 ui,
                 tr("Notificar ao disparar"),
                 Some(tr(
@@ -59,7 +131,7 @@ impl SchedulerPage {
                     ui::toggle(ui, &mut s.notify_on_fire);
                 },
             );
-            ui::field(
+                ui::field(
                 ui,
                 tr("Fuso padrão"),
                 Some(tr(
@@ -73,17 +145,17 @@ impl SchedulerPage {
                     );
                 },
             );
-            ui::field(
-                ui,
-                tr("Máximo de agendamentos ativos"),
-                Some(tr(
-                    "Proteção contra um agente em loop criando agendamentos sem parar.",
-                )),
-                |ui| {
-                    ui::number(ui, &mut s.max_schedules, 1..=10_000);
-                },
-            );
-            ui::field(
+                ui::field(
+                    ui,
+                    tr("Máximo de agendamentos ativos"),
+                    Some(tr(
+                        "Proteção contra um agente em loop criando agendamentos sem parar.",
+                    )),
+                    |ui| {
+                        ui::number(ui, &mut s.max_schedules, 1..=10_000);
+                    },
+                );
+                ui::field(
                 ui,
                 tr("Intervalo mínimo (minutos)"),
                 Some(tr(
@@ -93,7 +165,8 @@ impl SchedulerPage {
                     ui::number(ui, &mut s.min_interval_minutes, 1..=1_440);
                 },
             );
-        });
+            },
+        );
         st.save_bar(ui, cx.svc, "scheduler");
     }
 }

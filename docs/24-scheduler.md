@@ -1,5 +1,7 @@
 # 24 — Agendamentos (will-scheduler)
 
+> Desde 2026-10-30 o agendamento é o **trigger de tempo** do módulo universal de triggers (`docs/30`): mesma saída (acordar uma thread com uma mensagem), outra entrada. Na UI fica na página **Triggers**, aba *Agendamentos*; as configurações, em Configurações → Triggers.
+
 Lembretes e tarefas que o agente (ou o usuário) programa para o futuro: **recorrentes** (expressão cron) ou **únicos** (data/hora). Quando chega a hora, o serviço entrega a mensagem do agendamento **na thread que o criou**, pelo stdin do processo `claude`, como se o usuário tivesse escrito; o agente então executa o que ela pede (resumir notícias, mandar um Telegram, checar a agenda…).
 
 É um **módulo de ferramentas + UI**, não um canal: expõe `schedule_*` ao agente, uma página na janela e rotas na API. Não cria threads novas; a única exceção é **recriar** uma thread dona que foi apagada (ver [ADR-0017](adr/0017-scheduler-revive-threads.md)).

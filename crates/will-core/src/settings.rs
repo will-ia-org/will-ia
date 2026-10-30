@@ -27,6 +27,7 @@ pub struct Settings {
     pub gmail: GmailSettings,
     pub drive: DriveSettings,
     pub scheduler: SchedulerSettings,
+    pub triggers: TriggersSettings,
     pub browser: BrowserSettings,
     pub network: NetworkSettings,
     pub telemetry: TelemetrySettings,
@@ -629,6 +630,35 @@ impl Default for SchedulerSettings {
             timezone: None,
             max_schedules: 100,
             min_interval_minutes: 5,
+        }
+    }
+}
+
+/// Triggers universais (`docs/30`): fontes de evento que acordam threads.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct TriggersSettings {
+    pub enabled: bool,
+    /// Notificação nativa ao disparar.
+    pub notify_on_fire: bool,
+    /// Intervalo da varredura do Gmail, em minutos.
+    pub gmail_poll_minutes: u32,
+    /// Máximo de e-mails novos processados por trigger a cada varredura.
+    pub gmail_max_per_poll: u32,
+    /// Limite de triggers ativas.
+    pub max_triggers: u32,
+    /// Cooldown padrão (segundos) para triggers novas.
+    pub default_cooldown_secs: u32,
+}
+impl Default for TriggersSettings {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            notify_on_fire: true,
+            gmail_poll_minutes: 5,
+            gmail_max_per_poll: 10,
+            max_triggers: 200,
+            default_cooldown_secs: 0,
         }
     }
 }

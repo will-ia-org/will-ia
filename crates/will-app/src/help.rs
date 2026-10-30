@@ -368,6 +368,25 @@ pub const GOOGLE_GMAIL: Help = Help {
 
 // ---------- Agendamentos ----------
 
+pub const TRIGGERS: Help = Help {
+    title: "Triggers: acordar uma thread por evento",
+    intro: "Uma trigger é uma regra: fonte de evento + filtro + thread e prompt. Quando o evento casa com o filtro, o serviço entrega na thread o seu prompt mais todo o contexto do evento (quem mandou, chat ou assunto, hora, corpo…) e segue em frente — ninguém espera a resposta; se o processo do Claude estiver dormindo, ele sobe para processar. Fontes: WhatsApp (mensagem recebida), e-mail (Gmail, por varredura) e tempo (aba Agendamentos).",
+    steps: &[
+        ("WhatsApp", "Escolha os contatos/conversas (o índice do WhatsApp pareado alimenta a busca), se aceita grupos e as suas próprias mensagens. Dica: uma thread por contato, para não misturar contexto — marque \"criar nova\" e ela nasce no primeiro disparo."),
+        ("E-mail", "Precisa de uma conta Google com Gmail conectada. Informe a busca do Gmail (vazio = in:inbox) e condições como from = *@xpto.com ou subject = *fatura*. O serviço consulta a caixa a cada N minutos (Configurações → Triggers) e só considera e-mails chegados depois da criação da regra."),
+        ("Condições", "Campo + glob, todas precisam casar. * = qualquer trecho, ? = um caractere, ^ e $ ancoram no início/fim; sem curinga é \"contém\". Marque \"não\" para inverter."),
+        ("Prompt", "Diga o que a thread deve fazer a cada evento (responder, registrar, encaminhar, só analisar…). Ela recebe o prompt e o contexto completo; o que fazer com o WhatsApp/e-mail é decisão do agente, com as ferramentas de sempre."),
+        ("Testar", "Testar dispara na hora com um evento de exemplo (ignora filtro e cooldown) para validar prompt e thread. O histórico de disparos aparece no cartão expandido."),
+    ],
+    notes: &[
+        ("Cooldown", "Intervalo mínimo entre dois disparos da mesma regra, para não acordar a thread a cada mensagem de uma rajada."),
+        ("Thread apagada", "A regra guarda a sessão do Claude; se a thread sumir, o próximo disparo recria com --resume."),
+        ("Custos", "Cada disparo é um turno do Claude na thread, cobrado como qualquer mensagem."),
+    ],
+    code: "",
+    links: &[],
+};
+
 pub const SCHEDULER: Help = Help {
     title: "Agendamentos",
     intro: "Lembretes e tarefas programados: na hora marcada o serviço entrega a mensagem na thread dona como se você a tivesse escrito, com um cabeçalho que avisa o agente de que é um disparo. Podem ser criados aqui ou pelo próprio agente, durante uma conversa, com as ferramentas schedule_*.",

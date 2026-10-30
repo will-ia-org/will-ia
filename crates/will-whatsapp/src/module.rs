@@ -1236,6 +1236,25 @@ impl WhatsAppModule {
                 }
             }
         }
+        // Entrada das triggers (docs/30): toda mensagem indexada vira evento no
+        // barramento; quem filtra (contato, grupo, minha/não) é o módulo de triggers.
+        self.deps.bus.emit(Event::WhatsAppMessage {
+            account_id: acc.id.clone(),
+            msg_id: m.id.clone(),
+            chat_jid: m.chat_jid.clone(),
+            chat_name: chat_name.clone(),
+            sender_jid: m.sender_jid.clone(),
+            sender_name: m.sender_name.clone(),
+            sender_phone: m
+                .sender_phone
+                .clone()
+                .or_else(|| phone_from_jid(&m.sender_jid)),
+            from_me: m.from_me,
+            is_group: m.is_group,
+            kind: m.kind.clone(),
+            text: m.text.clone(),
+            at: m.timestamp,
+        });
         let msg = WaMessage {
             account_id: acc.id.clone(),
             id: m.id,

@@ -10,6 +10,7 @@ pub mod secrets;
 pub mod settings;
 pub mod telegram;
 pub mod threads;
+pub mod triggers;
 pub mod users;
 pub mod whatsapp;
 

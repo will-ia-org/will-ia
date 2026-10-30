@@ -127,6 +127,17 @@ Códigos: **401** `token de sessão ausente` / `token de sessão inválido` (tam
 | POST | `/api/telegram/test` | `getMe` |
 | GET | `/api/telegram/status` | threads por key |
 
+### Triggers (`docs/30`)
+| Método | Rota | Descrição |
+|---|---|---|
+| GET | `/api/triggers` | `{ triggers: TriggerView[], enabled, gmail_available, sources[] }` (`TriggerView` = `Trigger` + `source_label`, `thread_name`, `thread_exists`, `last_fired_local`) |
+| POST | `/api/triggers` | `TriggerInput` `{ name, source, enabled?, filter, prompt, thread_id? ("" = criar no primeiro disparo), thread_title?, cooldown_secs? }` |
+| GET / PUT / DELETE | `/api/triggers/{id}` | detalhe / edição parcial (mesmos campos) / exclusão |
+| GET | `/api/triggers/{id}/runs` | `{ runs: TriggerRun[] }` (últimos 50) |
+| POST | `/api/triggers/{id}/test` | dispara com evento de exemplo (ignora filtro/cooldown) |
+| POST | `/api/triggers/gmail/poll` | varredura do Gmail agora → `{ fired }` |
+| GET | `/api/whatsapp/chats?account=&q=&limit=` | `{ accounts: [{id,label,phone}], chats: [{account_id,jid,name,is_group,…}] }` do índice local (seletor de contatos) |
+
 ### Voz
 | Método | Rota | Descrição |
 |---|---|---|

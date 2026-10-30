@@ -10,6 +10,7 @@ pub mod logs;
 pub mod schedules;
 pub mod settings;
 pub mod threads;
+pub mod triggers;
 pub mod users;
 
 use crate::i18n::tr;
@@ -64,7 +65,7 @@ impl SettingsSection {
             SettingsSection::External => tr("MCPs externos"),
             SettingsSection::WhatsApp => tr("WhatsApp"),
             SettingsSection::Google => tr("Google"),
-            SettingsSection::Scheduler => tr("Agendamentos"),
+            SettingsSection::Scheduler => tr("Triggers"),
             SettingsSection::Browser => tr("Browser CDP"),
             SettingsSection::Network => tr("Rede"),
         }
@@ -110,7 +111,7 @@ impl Nav {
             // "Início" virou a aba Status de Configurações → Geral (2026-10-29).
             "dashboard" | "status" => Nav::Settings(SettingsSection::General),
             "threads" => Nav::Threads,
-            "schedules" => Nav::Schedules,
+            "schedules" | "triggers" => Nav::Schedules,
             "browser" => Nav::Browser,
             "approvals" => Nav::Approvals,
             "logs" => Nav::Logs,
@@ -181,6 +182,7 @@ pub struct Pages {
     pub connect: connect::ConnectPage,
     pub threads: threads::ThreadsPage,
     pub schedules: schedules::SchedulesPage,
+    pub triggers: triggers::TriggersPage,
     pub browser: browser::BrowserPage,
     pub approvals: approvals::ApprovalsPage,
     pub logs: logs::LogsPage,
@@ -193,6 +195,7 @@ impl Pages {
     pub fn on_event(&mut self, ev: &Event) {
         self.threads.on_event(ev);
         self.schedules.on_event(ev);
+        self.triggers.on_event(ev);
         self.browser.on_event(ev);
         self.approvals.on_event(ev);
         self.logs.on_event(ev);
@@ -203,7 +206,31 @@ impl Pages {
     pub fn ui(&mut self, ui: &mut egui::Ui, nav: Nav, cx: &mut Cx) {
         match nav {
             Nav::Threads => self.threads.ui(ui, cx),
-            Nav::Schedules => self.schedules.ui(ui, cx),
+            // Triggers: abas "WhatsApp e E-mail" (regras) e "Agendamentos" (relógio).
+            Nav::Schedules => {
+                crate::ui::heading_help(
+                    ui,
+                    tr("Triggers"),
+                    Some(tr(
+                        "Regras que acordam uma thread do Claude Code: por mensagem do WhatsApp, e-mail novo ou horário (agendamentos). Dispara e esquece.",
+                    )),
+                    &crate::help::TRIGGERS,
+                );
+                let tab = crate::ui::tabs(
+                    ui,
+                    "triggers",
+                    &[
+                        crate::ui::Tab::new("rules", tr("WhatsApp e E-mail")),
+                        crate::ui::Tab::new("schedules", tr("Agendamentos")),
+                    ],
+                );
+                ui.add_space(6.0);
+                if tab == "schedules" {
+                    self.schedules.ui(ui, cx);
+                } else {
+                    self.triggers.ui(ui, cx);
+                }
+            }
             Nav::Browser => self.browser.ui(ui, cx),
             Nav::Approvals => self.approvals.ui(ui, cx),
             Nav::Logs => self.logs.ui(ui, cx),

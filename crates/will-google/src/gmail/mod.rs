@@ -194,6 +194,74 @@ impl GoogleModule {
     }
 }
 
+impl GoogleModule {
+    /// Varredura para as triggers (`docs/30`): e-mails que casam com `query`
+    /// (sintaxe do Gmail; vazio = `in:inbox`) na conta (`None` = única), já
+    /// com corpo em texto (`detail(.., "text")`) e `internal_date_ms` para o
+    /// cursor. Mais novos primeiro, como o Gmail devolve.
+    pub async fn gmail_poll(
+        &self,
+        account: Option<&str>,
+        query: &str,
+        max: u64,
+    ) -> Result<Vec<Value>, String> {
+        if !self.config().gmail.enabled {
+            return Err("Gmail desligado nas configurações".into());
+        }
+        let acc = self
+            .resolve_gmail_account(account)
+            .await
+            .map_err(|e| e.to_string())?;
+        let q = query.trim();
+        let q = if q.is_empty() { "in:inbox" } else { q };
+        let list = self
+            .client
+            .get(
+                &acc,
+                &format!("{BASE}/messages"),
+                &[
+                    ("maxResults", max.clamp(1, MAX_SEARCH).to_string()),
+                    ("q", q.to_string()),
+                ],
+            )
+            .await
+            .map_err(|e| ToolError::from(e).to_string())?;
+        let ids: Vec<String> = list
+            .get("messages")
+            .and_then(|a| a.as_array())
+            .map(|a| {
+                a.iter()
+                    .filter_map(|x| x.get("id").and_then(|i| i.as_str()).map(|s| s.to_string()))
+                    .collect()
+            })
+            .unwrap_or_default();
+        let max_body = self.config().gmail.max_body_kb.max(1) as usize * 1024;
+        let acc_ref = &acc;
+        let details: Vec<Result<Value, GoogleError>> = futures::stream::iter(ids)
+            .map(|id| async move { fetch_message(self, acc_ref, &id, true).await })
+            .buffered(DETAIL_CONCURRENCY)
+            .collect()
+            .await;
+        let mut out = Vec::new();
+        for d in details {
+            match d {
+                Ok(msg) => {
+                    remember_addresses(self, &msg);
+                    let mut v = detail(&msg, "text", max_body, true);
+                    v["internal_date_ms"] = json!(msg
+                        .get("internalDate")
+                        .and_then(|x| x.as_str())
+                        .and_then(|x| x.parse::<i64>().ok()));
+                    v["account"] = json!(acc.email);
+                    out.push(v);
+                }
+                Err(e) => tracing::warn!(error = %e, "gmail_poll: e-mail não lido"),
+            }
+        }
+        Ok(out)
+    }
+}
+
 pub struct GmailTool {
     kind: Kind,
     module: Arc<GoogleModule>,

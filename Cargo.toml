@@ -12,6 +12,7 @@ members = [
   "crates/will-realtime",
   "crates/will-platform",
   "crates/will-scheduler",
+  "crates/will-triggers",
   "crates/will-browser",
   "crates/will-client",
   "crates/will-server",
@@ -31,6 +32,7 @@ default-members = [
   "crates/will-realtime",
   "crates/will-platform",
   "crates/will-scheduler",
+  "crates/will-triggers",
   "crates/will-browser",
   "crates/will-client",
   "crates/will-server",
@@ -59,6 +61,7 @@ will-whatsapp = { path = "crates/will-whatsapp" }
 will-realtime = { path = "crates/will-realtime" }
 will-platform = { path = "crates/will-platform" }
 will-scheduler = { path = "crates/will-scheduler" }
+will-triggers = { path = "crates/will-triggers" }
 will-browser = { path = "crates/will-browser" }
 will-client = { path = "crates/will-client" }
 will-server = { path = "crates/will-server", default-features = false }

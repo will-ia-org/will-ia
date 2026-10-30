@@ -256,6 +256,22 @@ CREATE TABLE events_log (                 -- eventos operacionais para a aba Log
 );
 ```
 
+## Triggers (`triggers`, `trigger_runs`, migration `0008_triggers.sql`; `docs/30`)
+
+```sql
+CREATE TABLE triggers (
+  id TEXT PRIMARY KEY, name TEXT NOT NULL, source TEXT NOT NULL,      -- whatsapp | gmail
+  enabled INTEGER NOT NULL DEFAULT 1, filter_json TEXT NOT NULL,      -- will_core::trigger::TriggerFilter
+  prompt TEXT NOT NULL, thread_id TEXT, thread_title TEXT, claude_session_id TEXT,
+  origin TEXT NOT NULL DEFAULT 'ui', origin_ref TEXT, cooldown_secs INTEGER NOT NULL DEFAULT 0,
+  created_by TEXT NOT NULL, created_at TEXT NOT NULL, updated_at TEXT NOT NULL,
+  last_fired_at TEXT, last_result TEXT, fire_count INTEGER NOT NULL DEFAULT 0, paused_reason TEXT,
+  cursor TEXT                                                           -- Gmail: internalDate ms do mais novo visto
+);
+CREATE TABLE trigger_runs (id INTEGER PRIMARY KEY, trigger_id TEXT REFERENCES triggers(id) ON DELETE CASCADE,
+  at TEXT NOT NULL, thread_id TEXT, ok INTEGER NOT NULL, detail TEXT, input TEXT);  -- últimos 50 por trigger
+```
+
 ## Acesso
 
 - `sqlx` com `SqlitePool` (1 conexão de escrita, N de leitura), `PRAGMA journal_mode=WAL; synchronous=NORMAL; foreign_keys=ON; busy_timeout=5000`.

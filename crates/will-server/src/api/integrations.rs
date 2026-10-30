@@ -421,6 +421,82 @@ pub async fn voice_transcripts(
 
 // ---------- WhatsApp ----------
 
+#[derive(serde::Deserialize, Default)]
+pub struct WaChatsQuery {
+    pub account: Option<String>,
+    pub q: Option<String>,
+    pub limit: Option<i64>,
+}
+
+/// `GET /api/whatsapp/chats?account=&q=&limit=`: contas pareadas e conversas
+/// do índice local (para o seletor de contatos das triggers). Com `q`, busca
+/// por nome de chat e por contato (nome/telefone).
+pub async fn wa_chats(State(state): State<App>, Query(q): Query<WaChatsQuery>) -> ApiResult<Value> {
+    #[cfg(feature = "whatsapp")]
+    {
+        let m = state.whatsapp.read().await.clone();
+        let Some(m) = m else {
+            return Ok(Json(json!({ "accounts": [], "chats": [] })));
+        };
+        let limit = q.limit.unwrap_or(200).clamp(1, 1000);
+        let needle = q.q.as_deref().map(str::trim).filter(|s| !s.is_empty());
+        let mut accounts = Vec::new();
+        let mut chats = Vec::new();
+        for acc in m.accounts() {
+            if let Some(a) = q.account.as_deref().filter(|a| !a.is_empty()) {
+                if a != acc.id {
+                    continue;
+                }
+            }
+            accounts.push(json!({ "id": acc.id, "label": acc.label(), "phone": acc.phone() }));
+            let mut seen = std::collections::HashSet::new();
+            match needle {
+                None => {
+                    for c in state
+                        .storage
+                        .wa_list_chats(&acc.id, "", limit)
+                        .await
+                        .unwrap_or_default()
+                    {
+                        if seen.insert(c.jid.clone()) {
+                            chats.push(json!({ "account_id": c.account_id, "jid": c.jid, "name": c.name, "is_group": c.is_group, "last_message_at": c.last_message_at }));
+                        }
+                    }
+                }
+                Some(n) => {
+                    for c in state
+                        .storage
+                        .wa_find_chat_by_name(&acc.id, n)
+                        .await
+                        .unwrap_or_default()
+                    {
+                        if seen.insert(c.jid.clone()) {
+                            chats.push(json!({ "account_id": c.account_id, "jid": c.jid, "name": c.name, "is_group": c.is_group, "last_message_at": c.last_message_at }));
+                        }
+                    }
+                    for c in state
+                        .storage
+                        .wa_search_contacts(&acc.id, Some(n), limit)
+                        .await
+                        .unwrap_or_default()
+                    {
+                        if seen.insert(c.jid.clone()) {
+                            let name = c.name.clone().or(c.push_name.clone()).or(c.phone.clone());
+                            chats.push(json!({ "account_id": c.account_id, "jid": c.jid, "name": name, "is_group": false, "phone": c.phone }));
+                        }
+                    }
+                }
+            }
+        }
+        Ok(Json(json!({ "accounts": accounts, "chats": chats })))
+    }
+    #[cfg(not(feature = "whatsapp"))]
+    {
+        let _ = (state, q);
+        Ok(Json(json!({ "accounts": [], "chats": [] })))
+    }
+}
+
 pub async fn wa_status(State(state): State<App>) -> ApiResult<Value> {
     #[cfg(feature = "whatsapp")]
     {

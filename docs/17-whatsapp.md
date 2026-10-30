@@ -1,6 +1,6 @@
 # 17 — WhatsApp (will-whatsapp)
 
-O WhatsApp **pessoal do dono** é pareado ao serviço e exposto aos agentes **somente como ferramentas MCP**: ler conversas, não lidas, grupos, buscar, resumir, enviar. **Não é um canal de entrada**: mensagens recebidas no WhatsApp não criam threads nem acionam o cérebro. Quem decide ler ou responder algo é um agente já em execução (via UI, Telegram ou voz).
+O WhatsApp **pessoal do dono** é pareado ao serviço e exposto aos agentes **somente como ferramentas MCP**: ler conversas, não lidas, grupos, buscar, resumir, enviar. **Não é um canal de entrada** por si: mensagens recebidas não criam threads nem acionam o cérebro — exceto quando uma **trigger** (`docs/30`) configurada pelo dono casa com a mensagem (contato/grupo + condições): aí o serviço acorda a thread da regra com o prompt dela + o contexto da mensagem. Para isso, cada mensagem indexada vira `Event::WhatsAppMessage` no barramento. Fora disso, quem decide ler ou responder é um agente já em execução (via UI, Telegram ou voz).
 
 O módulo suporta **várias contas pareadas** (ex.: número pessoal e número de trabalho). Cada conta tem sessão, índice e estado de conexão próprios; as ferramentas recebem um parâmetro `account` para escolher a conta.
 

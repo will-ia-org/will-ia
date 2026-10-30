@@ -17,12 +17,13 @@ pub mod schedule;
 pub mod settings;
 pub mod thread;
 pub mod tools;
+pub mod trigger;
 
 pub use approvals::{ApprovalDecision, ApprovalManager, ApprovalRequest};
 pub use auth::{Principal, Role};
 pub use bus::EventBus;
 pub use host::{BrainHost, BrainTask, ClaudeTokenInfo, SharedThreadHost, ThreadHost};
-pub use ids::{ApprovalId, MessageId, ScheduleId, ThreadId, TurnId};
+pub use ids::{ApprovalId, MessageId, ScheduleId, ThreadId, TriggerId, TurnId};
 pub use module::{Module, ModuleStatus};
 pub use paths::AppPaths;
 pub use schedule::{Schedule, ScheduleRun, ScheduleTrigger};
@@ -32,6 +33,7 @@ pub use thread::{
     Origin, OriginKind, ThreadStatus, ThreadSummary,
 };
 pub use tools::{ToolContext, ToolError, ToolOutput, ToolPolicy, ToolProvider, ToolSpec, WillTool};
+pub use trigger::{Trigger, TriggerEvent, TriggerFilter, TriggerRun, TriggerSource};
 
 /// Eventos difundidos pelo serviço (UI, canais e módulos assinam). Também é o
 /// formato do WS `/api/events`, por isso desserializa (o app é um cliente).
@@ -132,6 +134,32 @@ pub enum Event {
     },
     /// Lista de agendamentos mudou (criado/editado/removido/pausado); a UI recarrega.
     SchedulesChanged,
+    /// Mensagem do WhatsApp indexada (entrada das triggers; `text` pode ser
+    /// vazio em mídia). Vai no WS de eventos como os demais.
+    WhatsAppMessage {
+        account_id: String,
+        msg_id: String,
+        chat_jid: String,
+        chat_name: Option<String>,
+        sender_jid: String,
+        sender_name: Option<String>,
+        sender_phone: Option<String>,
+        from_me: bool,
+        is_group: bool,
+        kind: String,
+        text: Option<String>,
+        at: chrono::DateTime<chrono::Utc>,
+    },
+    /// Uma trigger disparou (mensagem entregue à thread) ou falhou ao disparar.
+    TriggerFired {
+        trigger_id: TriggerId,
+        thread_id: Option<ThreadId>,
+        name: String,
+        ok: bool,
+        detail: Option<String>,
+    },
+    /// Lista de triggers mudou (criada/editada/removida/pausada); a UI recarrega.
+    TriggersChanged,
     /// Estado do Browser CDP (proxy no ar, navegador lançado/fechado, upstream caiu…).
     Browser {
         state: String,

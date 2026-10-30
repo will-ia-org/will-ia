@@ -70,6 +70,7 @@ pub struct AppState {
     /// Chave da OpenAI em cache (para status sem I/O).
     pub voice_key: RwLock<Option<secrecy::SecretString>>,
     pub scheduler: RwLock<Option<Arc<will_scheduler::SchedulerModule>>>,
+    pub triggers: RwLock<Option<Arc<will_triggers::TriggersModule>>>,
     pub browser: RwLock<Option<Arc<will_browser::BrowserModule>>>,
     pub login_limiter: crate::auth::LoginLimiter,
     /// `http` ou `https` (depois da subida).
@@ -220,6 +221,7 @@ pub async fn start(opts: RunOptions) -> anyhow::Result<ServerHandle> {
         voice: RwLock::new(HashMap::new()),
         voice_key: RwLock::new(None),
         scheduler: RwLock::new(None),
+        triggers: RwLock::new(None),
         browser: RwLock::new(None),
         login_limiter: crate::auth::LoginLimiter::default(),
         scheme: RwLock::new("http".into()),

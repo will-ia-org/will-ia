@@ -735,7 +735,7 @@ impl WillApp {
             .show(ui, |ui| {
                 let mut items: Vec<(Nav, String)> = vec![
                     (Nav::Threads, tr("Threads").into()),
-                    (Nav::Schedules, tr("Agendamentos").into()),
+                    (Nav::Schedules, tr("Triggers").into()),
                     (Nav::Browser, tr("Browser CDP").into()),
                     (
                         Nav::Approvals,
