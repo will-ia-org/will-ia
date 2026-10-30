@@ -758,6 +758,111 @@ fn s(v: &Value, k: &str) -> String {
     }
 }
 
+/// Tamanho máximo do corpo do e-mail entregue à thread (caracteres).
+const MAIL_BODY_MAX: usize = 8_000;
+
+/// Limpa o texto de um e-mail para ir à thread: remove caracteres invisíveis
+/// (zero-width, soft hyphen), linhas que são só moldura/tabela (`─│┬┴…`),
+/// referências de link `[n]` e linhas que são só URL, colapsa espaços e linhas
+/// em branco. Newsletters em HTML viram quilos disso no `text/plain`.
+pub fn clean_mail_text(raw: &str) -> String {
+    let invisible = |c: char| {
+        matches!(
+            c,
+            '\u{200B}'
+                | '\u{200C}'
+                | '\u{200D}'
+                | '\u{2060}'
+                | '\u{FEFF}'
+                | '\u{00AD}'
+                | '\u{034F}'
+        )
+    };
+    let text: String = raw
+        .chars()
+        .filter(|c| !invisible(*c))
+        .map(|c| if c == '\u{00A0}' { ' ' } else { c })
+        .collect();
+    let mut out: Vec<String> = Vec::new();
+    let mut blank_run = 0usize;
+    for line in text.lines() {
+        let mut l = strip_link_refs(line.trim_end());
+        // só moldura / pontuação de tabela
+        let frame_only = !l.trim().is_empty()
+            && l.trim().chars().all(|c| {
+                ('\u{2500}'..='\u{257F}').contains(&c)
+                    || matches!(
+                        c,
+                        ' ' | '|' | '-' | '=' | '_' | '+' | '*' | '.' | '[' | ']' | ':' | '·' | '•'
+                    )
+            });
+        if frame_only {
+            continue;
+        }
+        let t = l.trim();
+        if t.starts_with("http://") || t.starts_with("https://") {
+            if !t.contains(' ') {
+                continue;
+            }
+        }
+        // colapsa espaços internos repetidos (colunas de tabela)
+        let mut collapsed = String::with_capacity(l.len());
+        let mut spaces = 0;
+        for c in l.trim().chars() {
+            if c == ' ' {
+                spaces += 1;
+                if spaces <= 1 {
+                    collapsed.push(c);
+                }
+            } else {
+                spaces = 0;
+                collapsed.push(c);
+            }
+        }
+        l = collapsed;
+        if l.trim().is_empty() {
+            blank_run += 1;
+            if blank_run <= 1 && !out.is_empty() {
+                out.push(String::new());
+            }
+            continue;
+        }
+        blank_run = 0;
+        out.push(l);
+    }
+    let mut s = out.join("\n").trim().to_string();
+    let n = s.chars().count();
+    if n > MAIL_BODY_MAX {
+        s = s.chars().take(MAIL_BODY_MAX).collect();
+        s.push_str(&format!(
+            "\n[… corpo cortado em {MAIL_BODY_MAX} de {n} caracteres; o e-mail inteiro está no Gmail (gmail_get_message) …]"
+        ));
+    }
+    s
+}
+
+/// Remove `[12]`/`][12]` (referências de links do text/plain gerado de HTML).
+fn strip_link_refs(line: &str) -> String {
+    let mut out = String::with_capacity(line.len());
+    let chars: Vec<char> = line.chars().collect();
+    let mut i = 0;
+    while i < chars.len() {
+        if chars[i] == '[' {
+            let mut j = i + 1;
+            while j < chars.len() && chars[j].is_ascii_digit() {
+                j += 1;
+            }
+            if j > i + 1 && j < chars.len() && chars[j] == ']' {
+                i = j + 1;
+                continue;
+            }
+        }
+        out.push(chars[i]);
+        i += 1;
+    }
+    out
+}
+
 /// Item de `gmail_poll` → evento normalizado.
 pub fn gmail_event(v: &Value) -> TriggerEvent {
     let from = s(v, "from");
@@ -798,9 +903,15 @@ pub fn gmail_event(v: &Value) -> TriggerEvent {
             ("gmail_message_id".into(), s(v, "id")),
             ("gmail_thread_id".into(), s(v, "thread_id")),
             ("attachments".into(), attachments),
-            ("snippet".into(), s(v, "snippet")),
+            (
+                "snippet".into(),
+                clean_mail_text(&s(v, "snippet"))
+                    .chars()
+                    .take(200)
+                    .collect(),
+            ),
         ],
-        body: s(v, "body_text"),
+        body: clean_mail_text(&s(v, "body_text")),
         ref_id: s(v, "id"),
         from_me: false,
         is_group: false,
@@ -866,6 +977,20 @@ mod tests {
             ..Default::default()
         };
         assert!(f.matches(&ev));
+    }
+
+    #[test]
+    fn mail_text_cleanup() {
+        let raw = "Encontre seleções que inspiram \u{200c} \u{200c} \u{200c}\n────────────────────\n[ [AliExpress]      \n][1]\n   -50% │.│R$16,18    \n\n\n\nVeja as ofertas\nhttps://x.y/z?track=1\n[3] https://a.b\n";
+        let c = clean_mail_text(raw);
+        assert!(c.starts_with("Encontre seleções que inspiram"));
+        assert!(!c.contains('\u{200c}'));
+        assert!(!c.contains("────"));
+        assert!(!c.contains("[1]"));
+        assert!(!c.contains("https://"));
+        assert!(c.contains("-50% │.│R$16,18"));
+        assert!(!c.contains("\n\n\n"));
+        assert_eq!(strip_link_refs("texto][12] fim [x]"), "texto] fim [x]");
     }
 
     #[test]

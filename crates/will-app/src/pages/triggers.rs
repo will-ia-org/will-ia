@@ -28,6 +28,8 @@ pub struct TriggersPage {
     expanded: HashSet<String>,
     /// Histórico por trigger (carregado ao expandir).
     runs: HashMap<String, Loader<Value>>,
+    /// Popup do seletor de contatos acabou de abrir: foca a busca.
+    picker_focus: bool,
 }
 
 #[derive(Clone)]
@@ -659,74 +661,126 @@ impl TriggersPage {
         let loading = self.chats.loading();
         let error = self.chats.error.clone();
         let query = &mut self.chat_query;
+        let picker_focus = &mut self.picker_focus;
         ui::field(
             ui,
             tr("Contatos / conversas"),
             Some(tr("Só mensagens destes chats disparam. Vazio = qualquer conversa 1:1 (grupos só se permitido abaixo).")),
             |ui| {
-                if !f.chats.is_empty() {
-                    let mut remove: Option<usize> = None;
-                    ui.horizontal_wrapped(|ui| {
-                        for (i, (jid, name)) in f.chats.iter().enumerate() {
-                            let label = if name.is_empty() { jid.clone() } else { name.clone() };
-                            if ui
-                                .add(egui::Button::new(format!("{label}  ×")).small())
-                                .on_hover_text(jid)
-                                .clicked()
-                            {
-                                remove = Some(i);
-                            }
+                // chips dos escolhidos + botão que abre o seletor
+                let mut remove: Option<usize> = None;
+                ui.horizontal_wrapped(|ui| {
+                    for (i, (jid, name)) in f.chats.iter().enumerate() {
+                        let label = if name.is_empty() { jid.clone() } else { name.clone() };
+                        if ui
+                            .add(egui::Button::new(format!("{label}  ×")).small())
+                            .on_hover_text(trf("{} · clique para remover", &[&jid]))
+                            .clicked()
+                        {
+                            remove = Some(i);
                         }
-                    });
-                    if let Some(i) = remove {
-                        f.chats.remove(i);
                     }
-                }
-                ui.horizontal(|ui| {
-                    ui::text_input(ui, query, tr("buscar por nome ou telefone…"));
-                    if loading {
-                        ui.spinner();
+                    let btn = ui.add(egui::Button::new(tr("+ adicionar contato…")).small());
+                    if btn.clicked() {
+                        *picker_focus = true;
                     }
-                });
-                if let Some(e) = &error {
-                    ui::error_text(ui, e);
-                } else if chats.is_empty() {
-                    ui.label(
-                        RichText::new(if loading {
-                            tr("carregando conversas…")
-                        } else {
-                            tr("Nenhuma conversa no índice (WhatsApp pareado?).")
-                        })
-                        .small()
-                        .weak(),
-                    );
-                } else {
-                    egui::ScrollArea::vertical()
-                        .id_salt("trigger-chats")
-                        .max_height(180.0)
-                        .show(ui, |ui| {
-                            for c in &chats {
-                                let jid = ui::s(c, "jid");
-                                if !f.account.is_empty() && ui::s(c, "account_id") != f.account {
-                                    continue;
-                                }
-                                let name = ui::s(c, "name");
-                                let is_group = ui::b(c, "is_group");
-                                let mut on = f.chats.iter().any(|(j, _)| *j == jid);
-                                let label = format!(
-                                    "{}{}",
-                                    if name.is_empty() { jid.clone() } else { name.clone() },
-                                    if is_group { tr(" (grupo)") } else { "" }
-                                );
-                                if ui.checkbox(&mut on, label).on_hover_text(&jid).changed() {
-                                    if on {
-                                        f.chats.push((jid.clone(), name.clone()));
-                                    } else {
-                                        f.chats.retain(|(j, _)| *j != jid);
-                                    }
-                                }
+                    egui::containers::Popup::menu(&btn)
+                        .close_behavior(egui::PopupCloseBehavior::CloseOnClickOutside)
+                        .width(380.0)
+                        .show(|ui| {
+                            ui.set_min_width(360.0);
+                            let r = ui.add(
+                                egui::TextEdit::singleline(query)
+                                    .hint_text(tr("buscar por nome ou telefone…"))
+                                    .desired_width(f32::INFINITY),
+                            );
+                            if *picker_focus {
+                                r.request_focus();
+                                *picker_focus = false;
                             }
+                            if loading {
+                                ui::busy(ui, tr("carregando conversas…"));
+                            }
+                            if let Some(e) = &error {
+                                ui::error_text(ui, e);
+                            }
+                            let q = query.trim().to_lowercase();
+                            let rows: Vec<&Value> = chats
+                                .iter()
+                                .filter(|c| {
+                                    if !f.account.is_empty() && ui::s(c, "account_id") != f.account {
+                                        return false;
+                                    }
+                                    if ui::s(c, "jid") == "status@broadcast" {
+                                        return false;
+                                    }
+                                    if q.is_empty() {
+                                        return true;
+                                    }
+                                    let hay = format!(
+                                        "{} {} {}",
+                                        ui::s(c, "name"),
+                                        ui::s(c, "jid"),
+                                        ui::s(c, "phone")
+                                    )
+                                    .to_lowercase();
+                                    hay.contains(&q)
+                                })
+                                .collect();
+                            if rows.is_empty() && !loading {
+                                ui.label(
+                                    RichText::new(if chats.is_empty() {
+                                        tr("Nenhuma conversa no índice (WhatsApp pareado?).")
+                                    } else {
+                                        tr("Nada encontrado.")
+                                    })
+                                    .small()
+                                    .weak(),
+                                );
+                            }
+                            let dark = ui.visuals().dark_mode;
+                            let weak = ui::palette(dark).text_weak;
+                            egui::ScrollArea::vertical()
+                                .id_salt("trigger-chats")
+                                .max_height(280.0)
+                                .show(ui, |ui| {
+                                    for c in rows {
+                                        let jid = ui::s(c, "jid");
+                                        let name = ui::s(c, "name");
+                                        let phone = ui::s(c, "phone");
+                                        let is_group = ui::b(c, "is_group");
+                                        let mut on = f.chats.iter().any(|(j, _)| *j == jid);
+                                        ui.horizontal(|ui| {
+                                            if ui.checkbox(&mut on, "").changed() {
+                                                if on {
+                                                    f.chats.push((jid.clone(), name.clone()));
+                                                } else {
+                                                    f.chats.retain(|(j, _)| *j != jid);
+                                                }
+                                            }
+                                            ui.vertical(|ui| {
+                                                ui.spacing_mut().item_spacing.y = 0.0;
+                                                ui.label(RichText::new(if name.is_empty() {
+                                                    jid.clone()
+                                                } else {
+                                                    name.clone()
+                                                }));
+                                                let sub = if is_group {
+                                                    tr("grupo").to_string()
+                                                } else if !phone.is_empty() {
+                                                    phone.clone()
+                                                } else {
+                                                    jid.split('@').next().unwrap_or("").to_string()
+                                                };
+                                                ui.label(RichText::new(sub).small().color(weak));
+                                            });
+                                        });
+                                    }
+                                });
                         });
+                });
+                if let Some(i) = remove {
+                    f.chats.remove(i);
                 }
             },
         );
