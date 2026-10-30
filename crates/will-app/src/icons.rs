@@ -25,6 +25,18 @@ pub const ARROW_UPWARD: MaterialIcon = m::ICON_ARROW_UPWARD;
 pub const VISIBILITY: MaterialIcon = m::ICON_VISIBILITY;
 pub const VISIBILITY_OFF: MaterialIcon = m::ICON_VISIBILITY_OFF;
 pub const CONTENT_COPY: MaterialIcon = m::ICON_CONTENT_COPY;
+// linha do tempo do turno ao vivo (threads)
+pub const BUILD: MaterialIcon = m::ICON_BUILD;
+pub const TERMINAL: MaterialIcon = m::ICON_TERMINAL;
+pub const SEARCH: MaterialIcon = m::ICON_SEARCH;
+pub const DESCRIPTION: MaterialIcon = m::ICON_DESCRIPTION;
+pub const EDIT: MaterialIcon = m::ICON_EDIT;
+pub const LANGUAGE: MaterialIcon = m::ICON_LANGUAGE;
+pub const SMART_TOY: MaterialIcon = m::ICON_SMART_TOY;
+pub const EXTENSION: MaterialIcon = m::ICON_EXTENSION;
+pub const PSYCHOLOGY: MaterialIcon = m::ICON_PSYCHOLOGY;
+pub const CHAT_BUBBLE: MaterialIcon = m::ICON_CHAT_BUBBLE;
+pub const SCHEDULE: MaterialIcon = m::ICON_SCHEDULE;
 
 /// Todos os ícones nomeados (o teste garante que a fonte tem cada glifo).
 #[cfg(test)]
@@ -45,6 +57,17 @@ pub const ALL: &[(&str, MaterialIcon)] = &[
     ("VISIBILITY", VISIBILITY),
     ("VISIBILITY_OFF", VISIBILITY_OFF),
     ("CONTENT_COPY", CONTENT_COPY),
+    ("BUILD", BUILD),
+    ("TERMINAL", TERMINAL),
+    ("SEARCH", SEARCH),
+    ("DESCRIPTION", DESCRIPTION),
+    ("EDIT", EDIT),
+    ("LANGUAGE", LANGUAGE),
+    ("SMART_TOY", SMART_TOY),
+    ("EXTENSION", EXTENSION),
+    ("PSYCHOLOGY", PSYCHOLOGY),
+    ("CHAT_BUBBLE", CHAT_BUBBLE),
+    ("SCHEDULE", SCHEDULE),
 ];
 
 #[cfg(test)]

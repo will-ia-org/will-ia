@@ -30,12 +30,128 @@ struct RemoteFiles {
     opening: Vec<Task<()>>,
 }
 
-#[derive(Default)]
+/// Item da linha do tempo do turno ao vivo, já organizado a partir dos
+/// `EngineDelta`: fala do assistente em bloco, ferramenta com o resultado
+/// anexado, status e raciocínio. `at` serve à animação de entrada.
+#[derive(Clone, Debug)]
+enum LiveItem {
+    Say {
+        text: String,
+        at: std::time::Instant,
+    },
+    Tool {
+        name: String,
+        input: String,
+        /// `(prévia, falhou)` quando o resultado chegou.
+        result: Option<(String, bool)>,
+        at: std::time::Instant,
+        done_at: Option<std::time::Instant>,
+    },
+    Status {
+        text: String,
+        at: std::time::Instant,
+    },
+    Think {
+        text: String,
+        at: std::time::Instant,
+    },
+}
+
+#[derive(Clone, Default)]
 struct LiveTurn {
     turn_id: Option<String>,
-    items: Vec<EngineDelta>,
+    items: Vec<LiveItem>,
+    /// Texto em streaming ainda não fechado em bloco (`TextDelta`).
     text: String,
     started: Option<std::time::Instant>,
+}
+
+impl LiveTurn {
+    /// Fecha o texto em streaming num bloco "fala" (antes de uma ferramenta).
+    fn flush_text(&mut self) {
+        if !self.text.trim().is_empty() {
+            self.items.push(LiveItem::Say {
+                text: std::mem::take(&mut self.text),
+                at: std::time::Instant::now(),
+            });
+        } else {
+            self.text.clear();
+        }
+    }
+
+    fn push(&mut self, d: &EngineDelta) {
+        let now = std::time::Instant::now();
+        match d {
+            EngineDelta::TextDelta { text } => self.text.push_str(text),
+            // Bloco completo: substitui o streaming do mesmo trecho.
+            EngineDelta::Narration { text } => {
+                self.text.clear();
+                if !text.trim().is_empty() {
+                    self.items.push(LiveItem::Say {
+                        text: text.clone(),
+                        at: now,
+                    });
+                }
+            }
+            EngineDelta::ToolUse {
+                name,
+                input_preview,
+            } => {
+                self.flush_text();
+                self.items.push(LiveItem::Tool {
+                    name: name.clone(),
+                    input: input_preview.clone(),
+                    result: None,
+                    at: now,
+                    done_at: None,
+                });
+            }
+            EngineDelta::ToolResult { preview, is_error } => {
+                // anexa à ferramenta mais recente ainda sem resultado
+                let open = self
+                    .items
+                    .iter()
+                    .rposition(|i| matches!(i, LiveItem::Tool { result: None, .. }));
+                match open {
+                    Some(p) => {
+                        if let LiveItem::Tool {
+                            result, done_at, ..
+                        } = &mut self.items[p]
+                        {
+                            *result = Some((preview.clone(), *is_error));
+                            *done_at = Some(now);
+                        }
+                    }
+                    None => self.items.push(LiveItem::Status {
+                        text: preview.clone(),
+                        at: now,
+                    }),
+                }
+            }
+            EngineDelta::Status { text } => self.items.push(LiveItem::Status {
+                text: text.clone(),
+                at: now,
+            }),
+            EngineDelta::Thinking { text } => self.items.push(LiveItem::Think {
+                text: text.clone(),
+                at: now,
+            }),
+        }
+    }
+
+    fn tools_total(&self) -> usize {
+        self.items
+            .iter()
+            .filter(|i| matches!(i, LiveItem::Tool { .. }))
+            .count()
+    }
+
+    fn tools_running(&self) -> usize {
+        self.items
+            .iter()
+            .filter(|i| matches!(i, LiveItem::Tool { result: None, .. }))
+            .count()
+    }
 }
 
 /// Mensagem que o usuário acabou de enviar, mostrada no chat **antes** de o
@@ -634,10 +750,7 @@ impl ThreadsPage {
                 thread_id, delta, ..
             } => {
                 let l = self.live.entry(*thread_id).or_default();
-                match delta {
-                    EngineDelta::TextDelta { text } => l.text.push_str(text),
-                    other => l.items.push(other.clone()),
-                }
+                l.push(delta);
             }
             Event::TurnFinished { thread_id, .. } | Event::TurnFailed { thread_id, .. } => {
                 self.live.remove(thread_id);
@@ -1381,10 +1494,7 @@ impl ThreadsPage {
         let echoes: Vec<Echo> = self.echoes.get(&t.id).cloned().unwrap_or_default();
         let mut echo_actions: Vec<EchoAction> = Vec::new();
         let scroll_bottom = std::mem::take(&mut self.scroll_bottom);
-        let live = self
-            .live
-            .get(&t.id)
-            .map(|l| (l.items.clone(), l.text.clone(), l.started));
+        let live = self.live.get(&t.id).cloned();
         let has_live = live.is_some();
         let dark = ui.visuals().dark_mode;
         let pal = ui::palette(dark);
@@ -1516,11 +1626,11 @@ impl ThreadsPage {
                         ui.label(egui::RichText::new(n).small().weak().italics());
                     });
                 }
-                if let Some((items, text, started)) = &live {
+                if let Some(l) = &live {
                     ui.ctx()
                         .request_repaint_after(std::time::Duration::from_millis(120));
                     ui.push_id(("live", t.id), |ui| {
-                        live_card(ui, pal, &mut self.md_cache, items, text, *started);
+                        live_card(ui, pal, &mut self.md_cache, l);
                     });
                 }
                 ui.add_space(8.0);
@@ -2407,9 +2517,7 @@ fn live_card(
     ui: &mut egui::Ui,
     pal: &ui::Palette,
     cache: &mut egui_commonmark::CommonMarkCache,
-    items: &[EngineDelta],
-    text: &str,
-    started: Option<std::time::Instant>,
+    live: &LiveTurn,
 ) {
     let t = ui.input(|i| i.time);
     let phase = ((t * 2.0) as usize) % 4;
@@ -2427,8 +2535,8 @@ fn live_card(
         .inner_margin(egui::Margin::symmetric(14, 10))
         .show(ui, |ui| {
             ui.set_width(ui.available_width() * 0.88);
+            // ---- cabeçalho: pulso, título, tempo, contadores ----
             ui.horizontal(|ui| {
-                // pulso
                 let (r, _) = ui.allocate_exact_size(egui::vec2(12.0, 12.0), egui::Sense::hover());
                 let pulse = 0.5 + 0.5 * (t * 4.0).sin() as f32;
                 ui.painter().circle_filled(
@@ -2442,120 +2550,434 @@ fn live_card(
                         .font(ui::medium(13.0))
                         .color(pal.text),
                 );
-                if let Some(s) = started {
+                if let Some(s) = live.started {
                     ui.label(
                         egui::RichText::new(format!("{} s", s.elapsed().as_secs()))
                             .small()
                             .color(pal.text_weak),
                     );
                 }
+                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    let total = live.tools_total();
+                    let running = live.tools_running();
+                    if running > 0 {
+                        ui::badge(ui, &trf("{} em andamento", &[&running]), Tone::Info);
+                    }
+                    if total > 0 {
+                        ui.label(
+                            egui::RichText::new(trf("{} ferramenta(s)", &[&total]))
+                                .small()
+                                .color(pal.text_weak),
+                        );
+                    }
+                });
             });
-            if !items.is_empty() {
-                ui.add_space(4.0);
+
+            // ---- linha do tempo ----
+            if !live.items.is_empty() || !live.text.is_empty() {
+                ui.add_space(6.0);
             }
-            // linha do tempo
-            let line_x = 6.0;
-            for d in items {
-                match d {
-                    EngineDelta::ToolUse {
-                        name,
-                        input_preview,
-                    } => {
-                        ui.horizontal_top(|ui| {
-                            timeline_dot(ui, line_x, Tone::Info.color(dark));
-                            ui.vertical(|ui| {
-                                ui.horizontal_wrapped(|ui| {
-                                    ui::badge(ui, name, Tone::Info);
-                                    let prev: String = input_preview.chars().take(140).collect();
-                                    ui.add(
-                                        egui::Label::new(
-                                            egui::RichText::new(prev)
-                                                .monospace()
-                                                .size(12.0)
-                                                .color(pal.text_weak),
-                                        )
-                                        .truncate(),
-                                    )
-                                    .on_hover_text(input_preview);
-                                });
-                            });
-                        });
-                    }
-                    EngineDelta::ToolResult { preview, is_error } => {
-                        let col = if *is_error {
-                            Tone::Danger.color(dark)
-                        } else {
-                            Tone::Success.color(dark)
-                        };
-                        ui.horizontal_top(|ui| {
-                            timeline_dot(ui, line_x, col);
-                            let prev: String = preview.chars().take(160).collect();
-                            ui.add(
-                                egui::Label::new(
-                                    egui::RichText::new(format!(
-                                        "{} {prev}",
-                                        if *is_error { tr("falhou:") } else { tr("ok:") }
-                                    ))
-                                    .monospace()
-                                    .size(12.0)
-                                    .color(pal.text_weak),
-                                )
-                                .truncate(),
-                            )
-                            .on_hover_text(preview);
-                        });
-                    }
-                    EngineDelta::Status { text } => {
-                        ui.horizontal_top(|ui| {
-                            timeline_dot(ui, line_x, pal.text_weak);
-                            ui.label(egui::RichText::new(text).small().color(pal.text_weak));
-                        });
-                    }
-                    EngineDelta::Thinking { text } => {
-                        ui.horizontal_top(|ui| {
-                            timeline_dot(ui, line_x, Tone::Warning.color(dark));
-                            egui::CollapsingHeader::new(
-                                egui::RichText::new(tr("raciocínio"))
-                                    .small()
-                                    .color(pal.text_weak),
-                            )
-                            .id_salt(("think", text.len(), text.as_ptr() as usize))
-                            .show(ui, |ui| {
-                                ui.add(
-                                    egui::Label::new(
-                                        egui::RichText::new(text)
-                                            .italics()
-                                            .size(12.5)
-                                            .color(pal.text_weak),
-                                    )
-                                    .wrap(),
-                                );
-                            });
-                        });
-                    }
-                    EngineDelta::Narration { text } => {
-                        ui.add_space(2.0);
-                        md(ui, cache, text);
-                    }
-                    EngineDelta::TextDelta { .. } => {}
-                }
+            let line_color = pal.border;
+            let start_y = ui.cursor().top();
+            for (idx, item) in live.items.iter().enumerate() {
+                live_item(ui, pal, cache, dark, idx, item);
             }
-            if !text.is_empty() {
-                ui.add_space(4.0);
-                // "|" existe em todas as fontes; "▍" (bloco) só na Hack (mono) e virava caixinha.
+            // texto em streaming (ainda aberto)
+            if !live.text.is_empty() {
                 let caret = if phase.is_multiple_of(2) { "|" } else { " " };
-                md(ui, cache, &format!("{text}{caret}"));
+                say_block(ui, pal, cache, &format!("{}{caret}", live.text), 1.0);
+            }
+            let end_y = ui.cursor().top();
+            if end_y > start_y + 4.0 {
+                // trilho vertical à esquerda ligando os itens
+                let x = ui.min_rect().left() + 9.0;
+                ui.painter().line_segment(
+                    [egui::pos2(x, start_y + 2.0), egui::pos2(x, end_y - 6.0)],
+                    egui::Stroke::new(1.0, line_color),
+                );
             }
         });
     ui.add_space(8.0);
 }
 
-fn timeline_dot(ui: &mut egui::Ui, x_pad: f32, color: egui::Color32) {
-    ui.add_space(x_pad);
-    let (r, _) = ui.allocate_exact_size(egui::vec2(10.0, 18.0), egui::Sense::hover());
-    ui.painter()
-        .circle_filled(egui::pos2(r.center().x, r.top() + 9.0), 3.5, color);
+/// Opacidade de entrada (0→1 em ~280 ms) a partir do instante em que o item chegou.
+fn enter_alpha(at: std::time::Instant) -> f32 {
+    (at.elapsed().as_secs_f32() / 0.28).clamp(0.0, 1.0)
+}
+
+/// Marcador na linha do tempo: círculo (ou ícone) alinhado ao trilho.
+fn timeline_mark(
+    ui: &mut egui::Ui,
+    color: egui::Color32,
+    icon: Option<crate::icons::MaterialIcon>,
+) {
+    let (r, _) = ui.allocate_exact_size(egui::vec2(18.0, 20.0), egui::Sense::hover());
+    let c = egui::pos2(r.center().x, r.top() + 10.0);
+    // apaga o trilho atrás do marcador
+    ui.painter().circle_filled(c, 7.0, ui.visuals().panel_fill);
+    match icon {
+        Some(ic) => {
+            ui.put(
+                egui::Rect::from_center_size(c, egui::vec2(16.0, 16.0)),
+                egui::Label::new(ic.rich_text().size(13.0).color(color)),
+            );
+        }
+        None => {
+            ui.painter().circle_filled(c, 3.5, color);
+        }
+    }
+}
+
+fn live_item(
+    ui: &mut egui::Ui,
+    pal: &ui::Palette,
+    cache: &mut egui_commonmark::CommonMarkCache,
+    dark: bool,
+    idx: usize,
+    item: &LiveItem,
+) {
+    match item {
+        LiveItem::Say { text, at } => {
+            ui.horizontal_top(|ui| {
+                timeline_mark(ui, pal.accent, Some(crate::icons::CHAT_BUBBLE));
+                ui.vertical(|ui| say_block(ui, pal, cache, text, enter_alpha(*at)));
+            });
+        }
+        LiveItem::Tool {
+            name,
+            input,
+            result,
+            at,
+            done_at,
+        } => {
+            let alpha = enter_alpha(*at);
+            let (icon, short, server) = tool_display(name);
+            let (status_color, status_icon) = match result {
+                None => (Tone::Info.color(dark), None),
+                Some((_, false)) => (Tone::Success.color(dark), Some(crate::icons::CHECK_CIRCLE)),
+                Some((_, true)) => (Tone::Danger.color(dark), Some(crate::icons::ERROR)),
+            };
+            let key = egui::Id::unique(("live-tool-open", idx, name.as_str()));
+            let mut open = ui.ctx().data(|d| d.get_temp::<bool>(key)).unwrap_or(false);
+            ui.horizontal_top(|ui| {
+                timeline_mark(ui, status_color, Some(icon));
+                ui.scope(|ui| {
+                    ui.set_opacity(alpha);
+                    ui.vertical(|ui| {
+                        let row = egui::Frame::new()
+                            .fill(if open {
+                                pal.card_alt
+                            } else {
+                                egui::Color32::TRANSPARENT
+                            })
+                            .corner_radius(6.0)
+                            .inner_margin(egui::Margin::symmetric(6, 3))
+                            .show(ui, |ui| {
+                                ui.set_width(ui.available_width());
+                                ui.horizontal(|ui| {
+                                    ui.spacing_mut().item_spacing.x = 6.0;
+                                    ui.label(
+                                        egui::RichText::new(&short)
+                                            .font(ui::medium(12.5))
+                                            .color(pal.text),
+                                    );
+                                    if let Some(srv) = &server {
+                                        ui.label(
+                                            egui::RichText::new(srv)
+                                                .size(10.5)
+                                                .color(pal.text_weak),
+                                        );
+                                    }
+                                    let summary = tool_summary(input);
+                                    // resumo truncado num espaço pequeno; detalhes ao expandir
+                                    let right_w = 70.0;
+                                    let avail = (ui.available_width() - right_w).max(60.0);
+                                    ui.scope(|ui| {
+                                        ui.set_max_width(avail);
+                                        ui.add(
+                                            egui::Label::new(
+                                                egui::RichText::new(summary)
+                                                    .monospace()
+                                                    .size(11.5)
+                                                    .color(pal.text_weak),
+                                            )
+                                            .truncate(),
+                                        );
+                                    });
+                                    ui.with_layout(
+                                        egui::Layout::right_to_left(egui::Align::Center),
+                                        |ui| match result {
+                                            None => {
+                                                ui.add(egui::Spinner::new().size(12.0));
+                                                ui.label(
+                                                    egui::RichText::new(format!(
+                                                        "{:.0}s",
+                                                        at.elapsed().as_secs_f32()
+                                                    ))
+                                                    .size(10.5)
+                                                    .color(pal.text_weak),
+                                                );
+                                            }
+                                            Some((_, failed)) => {
+                                                if let Some(ic) = status_icon {
+                                                    ui.label(
+                                                        ic.rich_text()
+                                                            .size(14.0)
+                                                            .color(status_color),
+                                                    );
+                                                }
+                                                let took = done_at
+                                                    .map(|d| d.duration_since(*at))
+                                                    .unwrap_or_default();
+                                                ui.label(
+                                                    egui::RichText::new(format!(
+                                                        "{}{}",
+                                                        if *failed { tr("falhou · ") } else { "" },
+                                                        ui::fmt_ms(took.as_millis() as u64)
+                                                    ))
+                                                    .size(10.5)
+                                                    .color(if *failed {
+                                                        status_color
+                                                    } else {
+                                                        pal.text_weak
+                                                    }),
+                                                );
+                                            }
+                                        },
+                                    );
+                                });
+                            });
+                        let resp = row
+                            .response
+                            .interact(egui::Sense::click())
+                            .on_hover_cursor(egui::CursorIcon::PointingHand)
+                            .on_hover_text(if open {
+                                tr("recolher detalhes")
+                            } else {
+                                tr("ver entrada e resultado")
+                            });
+                        if resp.clicked() {
+                            open = !open;
+                            ui.ctx().data_mut(|d| d.insert_temp(key, open));
+                        }
+                        if open {
+                            tool_details(ui, pal, dark, input, result.as_ref());
+                        }
+                    });
+                });
+            });
+        }
+        LiveItem::Status { text, at } => {
+            ui.horizontal_top(|ui| {
+                timeline_mark(ui, pal.text_weak, None);
+                ui.scope(|ui| {
+                    ui.set_opacity(enter_alpha(*at));
+                    ui.add(
+                        egui::Label::new(
+                            egui::RichText::new(text)
+                                .small()
+                                .italics()
+                                .color(pal.text_weak),
+                        )
+                        .truncate(),
+                    )
+                    .on_hover_text(text);
+                });
+            });
+        }
+        LiveItem::Think { text, at } => {
+            ui.horizontal_top(|ui| {
+                timeline_mark(
+                    ui,
+                    Tone::Warning.color(dark),
+                    Some(crate::icons::PSYCHOLOGY),
+                );
+                ui.scope(|ui| {
+                    ui.set_opacity(enter_alpha(*at));
+                    egui::CollapsingHeader::new(
+                        egui::RichText::new(tr("raciocínio"))
+                            .small()
+                            .color(pal.text_weak),
+                    )
+                    .id_salt(("think", idx))
+                    .show(ui, |ui| {
+                        ui.add(
+                            egui::Label::new(
+                                egui::RichText::new(text)
+                                    .italics()
+                                    .size(12.5)
+                                    .color(pal.text_weak),
+                            )
+                            .wrap(),
+                        );
+                    });
+                });
+            });
+        }
+    }
+    ui.add_space(2.0);
+}
+
+/// Bloco de fala do assistente: borda de destaque à esquerda + Markdown.
+fn say_block(
+    ui: &mut egui::Ui,
+    pal: &ui::Palette,
+    cache: &mut egui_commonmark::CommonMarkCache,
+    text: &str,
+    alpha: f32,
+) {
+    ui.scope(|ui| {
+        ui.set_opacity(alpha);
+        let r = egui::Frame::new()
+            .fill(pal.card_alt)
+            .corner_radius(8.0)
+            .inner_margin(egui::Margin {
+                left: 12,
+                right: 10,
+                top: 6,
+                bottom: 6,
+            })
+            .show(ui, |ui| {
+                ui.set_width(ui.available_width());
+                md(ui, cache, text);
+            })
+            .response
+            .rect;
+        ui.painter().rect_filled(
+            egui::Rect::from_min_max(r.left_top(), egui::pos2(r.left() + 3.0, r.bottom())),
+            egui::CornerRadius::same(2),
+            pal.accent,
+        );
+    });
+}
+
+/// Entrada e resultado da ferramenta, formatados, em áreas roláveis curtas.
+fn tool_details(
+    ui: &mut egui::Ui,
+    pal: &ui::Palette,
+    dark: bool,
+    input: &str,
+    result: Option<&(String, bool)>,
+) {
+    let mono =
+        |s: &str, color: egui::Color32| egui::RichText::new(s).monospace().size(11.5).color(color);
     ui.add_space(4.0);
+    ui.label(
+        egui::RichText::new(tr("entrada"))
+            .small()
+            .color(pal.text_weak),
+    );
+    egui::ScrollArea::vertical()
+        .id_salt(("tool-in", input.len()))
+        .max_height(160.0)
+        .show(ui, |ui| {
+            ui.add(egui::Label::new(mono(&pretty_json(input), pal.text)).wrap());
+        });
+    if let Some((out, failed)) = result {
+        ui.add_space(4.0);
+        ui.label(
+            egui::RichText::new(if *failed {
+                tr("resultado (erro)")
+            } else {
+                tr("resultado")
+            })
+            .small()
+            .color(if *failed {
+                Tone::Danger.color(dark)
+            } else {
+                pal.text_weak
+            }),
+        );
+        egui::ScrollArea::vertical()
+            .id_salt(("tool-out", out.len()))
+            .max_height(200.0)
+            .show(ui, |ui| {
+                ui.add(egui::Label::new(mono(&pretty_json(out), pal.text)).wrap());
+            });
+    }
+    ui.add_space(2.0);
+}
+
+/// Ícone, nome curto e servidor MCP (se houver) de uma ferramenta.
+fn tool_display(name: &str) -> (crate::icons::MaterialIcon, String, Option<String>) {
+    use crate::icons as ic;
+    // mcp__<servidor>__<ferramenta>
+    if let Some(rest) = name.strip_prefix("mcp__") {
+        if let Some((srv, tool)) = rest.split_once("__") {
+            return (ic::EXTENSION, tool.to_string(), Some(srv.replace('_', "-")));
+        }
+    }
+    let icon = match name {
+        "Bash" => ic::TERMINAL,
+        "Read" | "Glob" => ic::DESCRIPTION,
+        "Grep" => ic::SEARCH,
+        "Edit" | "Write" | "MultiEdit" | "NotebookEdit" => ic::EDIT,
+        "WebFetch" | "WebSearch" => ic::LANGUAGE,
+        "Task" | "Agent" => ic::SMART_TOY,
+        "TodoWrite" => ic::SCHEDULE,
+        _ => ic::BUILD,
+    };
+    (icon, name.to_string(), None)
+}
+
+/// Resumo de uma linha dos argumentos: os campos que importam (`command`,
+/// `file_path`, `pattern`…) como `chave: valor`; sem JSON, o texto cru.
+fn tool_summary(input: &str) -> String {
+    const KEYS: &[&str] = &[
+        "command",
+        "description",
+        "file_path",
+        "path",
+        "pattern",
+        "query",
+        "q",
+        "url",
+        "prompt",
+        "text",
+        "message",
+        "title",
+        "name",
+        "id",
+        "chat",
+        "to",
+        "subject",
+    ];
+    let one_line = |s: &str| s.split_whitespace().collect::<Vec<_>>().join(" ");
+    if let Ok(Value::Object(map)) = serde_json::from_str::<Value>(input) {
+        let mut parts = Vec::new();
+        for k in KEYS {
+            if let Some(v) = map.get(*k) {
+                let v = match v {
+                    Value::String(s) => one_line(s),
+                    other => one_line(&other.to_string()),
+                };
+                if v.is_empty() {
+                    continue;
+                }
+                let v: String = v.chars().take(80).collect();
+                parts.push(format!("{k}: {v}"));
+                if parts.len() == 2 {
+                    break;
+                }
+            }
+        }
+        if parts.is_empty() {
+            for (k, v) in map.iter().take(2) {
+                let v = one_line(&v.to_string());
+                parts.push(format!("{k}: {}", v.chars().take(60).collect::<String>()));
+            }
+        }
+        return parts.join(" · ");
+    }
+    one_line(input).chars().take(160).collect()
+}
+
+/// JSON indentado quando o texto é JSON; caso contrário, o texto como veio.
+fn pretty_json(s: &str) -> String {
+    serde_json::from_str::<Value>(s)
+        .ok()
+        .and_then(|v| serde_json::to_string_pretty(&v).ok())
+        .unwrap_or_else(|| s.to_string())
 }
 
 #[allow(dead_code)]
