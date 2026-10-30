@@ -1183,7 +1183,13 @@ impl ThreadsPage {
                             tip.push('\n');
                             tip.push_str(tr("sessão expirada"));
                         }
-                        if r.response.interact(egui::Sense::click()).on_hover_text(tip).clicked() {
+                        if r
+                            .response
+                            .interact(egui::Sense::click())
+                            .on_hover_cursor(egui::CursorIcon::PointingHand)
+                            .on_hover_text(tip)
+                            .clicked()
+                        {
                             click = Some(t.id);
                         }
                         if i + 1 < n {
