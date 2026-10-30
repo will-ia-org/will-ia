@@ -48,6 +48,7 @@ struct Form {
     chats: Vec<(String, String)>,
     include_groups: bool,
     include_from_me: bool,
+    include_status: bool,
     gmail_query: String,
     conditions: Vec<Cond>,
     /// `"existing"` ou `"new"`.
@@ -56,11 +57,12 @@ struct Form {
     thread_title: String,
     prompt: String,
     cooldown_secs: u32,
+    debounce_secs: u32,
     save: Option<Task<Value>>,
 }
 
 impl Form {
-    fn new(source: &str, default_thread: Option<String>, cooldown: u32) -> Self {
+    fn new(source: &str, default_thread: Option<String>, cooldown: u32, debounce: u32) -> Self {
         Self {
             editing: None,
             name: String::new(),
@@ -70,6 +72,7 @@ impl Form {
             chats: Vec::new(),
             include_groups: false,
             include_from_me: false,
+            include_status: false,
             gmail_query: String::new(),
             conditions: Vec::new(),
             thread_mode: "new".into(),
@@ -77,13 +80,14 @@ impl Form {
             thread_title: String::new(),
             prompt: String::new(),
             cooldown_secs: cooldown,
+            debounce_secs: debounce,
             save: None,
         }
     }
 
     fn from_view(v: &Value) -> Self {
         let f = &v["filter"];
-        let mut out = Self::new(&ui::s(v, "source"), None, 0);
+        let mut out = Self::new(&ui::s(v, "source"), None, 0, 0);
         out.editing = Some(ui::s(v, "id"));
         out.name = ui::s(v, "name");
         out.enabled = ui::b(v, "enabled");
@@ -99,6 +103,7 @@ impl Form {
             .unwrap_or_default();
         out.include_groups = ui::b(f, "include_groups");
         out.include_from_me = ui::b(f, "include_from_me");
+        out.include_status = ui::b(f, "include_status");
         out.gmail_query = ui::s(f, "gmail_query");
         out.conditions = f
             .get("conditions")
@@ -123,6 +128,7 @@ impl Form {
         out.thread_title = ui::s(v, "thread_title");
         out.prompt = ui::s(v, "prompt");
         out.cooldown_secs = v.get("cooldown_secs").and_then(|c| c.as_u64()).unwrap_or(0) as u32;
+        out.debounce_secs = v.get("debounce_secs").and_then(|c| c.as_u64()).unwrap_or(0) as u32;
         out
     }
 
@@ -163,11 +169,13 @@ impl Form {
             "thread_id": if self.thread_mode == "existing" { self.thread_id.trim() } else { "" },
             "thread_title": self.thread_title.trim(),
             "cooldown_secs": self.cooldown_secs,
+            "debounce_secs": self.debounce_secs,
             "filter": {
                 "account": self.account.trim(),
                 "chats": chats,
                 "include_groups": self.include_groups,
                 "include_from_me": self.include_from_me,
+                "include_status": self.include_status,
                 "gmail_query": self.gmail_query.trim(),
                 "conditions": conditions,
             },
@@ -350,8 +358,9 @@ impl TriggersPage {
                 .clicked()
             {
                 let cooldown = cx.snap.settings.triggers.default_cooldown_secs;
+                let debounce = cx.snap.settings.triggers.default_debounce_secs;
                 let t = self.thread_list.first().map(|t| t.id.to_string());
-                self.form = Some(Form::new("whatsapp", t, cooldown));
+                self.form = Some(Form::new("whatsapp", t, cooldown, debounce));
             }
             if ui.button(tr("Atualizar")).clicked() {
                 self.list.loaded_at = None;
@@ -578,6 +587,18 @@ impl TriggersPage {
                     ui::text_area(ui, &mut f.prompt, 6);
                 },
             );
+            if f.source() == TriggerSource::WhatsApp {
+                ui::field(
+                    ui,
+                    tr("Agrupar mensagens (segundos)"),
+                    Some(tr(
+                        "Espera a pessoa parar de escrever: só dispara quando passam estes segundos sem mensagem nova na conversa, com todas as mensagens juntas. 0 = cada mensagem dispara na hora.",
+                    )),
+                    |ui| {
+                        ui::number(ui, &mut f.debounce_secs, 0..=600);
+                    },
+                );
+            }
             ui::field(
                 ui,
                 tr("Cooldown (segundos)"),
@@ -796,6 +817,14 @@ impl TriggersPage {
                 ui::toggle(ui, &mut f.include_from_me);
             },
         );
+        ui::field(
+            ui,
+            tr("Ouvir status do WhatsApp"),
+            Some(tr("Desligado (padrão): foto/texto que o contato publica no status não dispara; só mensagens de conversa. Ligado: status também dispara.")),
+            |ui| {
+                ui::toggle(ui, &mut f.include_status);
+            },
+        );
     }
 
     // ---------- cartões ----------
@@ -857,6 +886,11 @@ impl TriggersPage {
                         if source == "gmail" { Tone::Info } else { Tone::Success },
                     );
                     ui.add(egui::Label::new(RichText::new(&scope).small().weak()).truncate());
+                    let deb = v.get("debounce_secs").and_then(|x| x.as_u64()).unwrap_or(0);
+                    if source != "gmail" && deb > 0 {
+                        ui.label(RichText::new(trf("agrupa {}s", &[&deb])).small().weak())
+                            .on_hover_text(tr("Mensagens seguidas são juntadas e disparam uma vez quando a conversa silencia."));
+                    }
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                         ui.spacing_mut().item_spacing.x = 8.0;
                         let chevron = if expanded {

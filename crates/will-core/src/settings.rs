@@ -649,6 +649,12 @@ pub struct TriggersSettings {
     pub max_triggers: u32,
     /// Cooldown padrão (segundos) para triggers novas.
     pub default_cooldown_secs: u32,
+    /// Debounce padrão (segundos) para triggers novas de WhatsApp: espera a
+    /// pessoa parar de escrever e dispara uma vez com todas as mensagens.
+    pub default_debounce_secs: u32,
+    /// Teto da espera do debounce (segundos): mesmo com mensagens chegando sem
+    /// parar, dispara ao atingir este tempo desde a primeira.
+    pub debounce_max_wait_secs: u32,
 }
 impl Default for TriggersSettings {
     fn default() -> Self {
@@ -659,6 +665,8 @@ impl Default for TriggersSettings {
             gmail_max_per_poll: 10,
             max_triggers: 200,
             default_cooldown_secs: 0,
+            default_debounce_secs: 20,
+            debounce_max_wait_secs: 120,
         }
     }
 }

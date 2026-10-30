@@ -42,6 +42,8 @@ pub fn notify(title: &str, body: &str) {
             target_os = "windows"
         ))]
         {
+            #[cfg(target_os = "macos")]
+            ensure_notification_bundle();
             let mut n = notify_rust::Notification::new();
             n.appname("will-ia").summary(&title).body(&body);
             match n.show() {
@@ -61,6 +63,39 @@ pub fn notify(title: &str, body: &str) {
         )))]
         {
             tracing::info!(name: "platform", op = "notify", ok = false, title_len, body_len, "notificação sem backend nativo neste SO (só no log)");
+        }
+    });
+}
+
+/// macOS: fixa o bundle que "assina" as notificações ANTES da primeira. Sem
+/// isto o `mac-notification-sys` procura um app chamado literalmente
+/// `use_default` no LaunchServices e o sistema abre o diálogo "Where is
+/// use_default?" (visto 2026-10-30 ao disparar triggers). Usa o bundle do
+/// próprio executável quando ele roda dentro de um `.app` (servidor:
+/// `dev.will.will-ia.server`; app: `dev.will.will-ia`); fora de bundle, cai
+/// no Finder, que sempre existe.
+#[cfg(target_os = "macos")]
+fn ensure_notification_bundle() {
+    use std::sync::Once;
+    static ONCE: Once = Once::new();
+    ONCE.call_once(|| {
+        let own = std::env::current_exe().ok().and_then(|exe| {
+            // <Bundle>.app/Contents/MacOS/<exe> → <Bundle>.app/Contents/Info.plist
+            let contents = exe.parent()?.parent()?;
+            if contents.file_name()?.to_str()? != "Contents" {
+                return None;
+            }
+            let plist = std::fs::read_to_string(contents.join("Info.plist")).ok()?;
+            let i = plist.find("<key>CFBundleIdentifier</key>")?;
+            let rest = &plist[i..];
+            let a = rest.find("<string>")? + "<string>".len();
+            let b = rest[a..].find("</string>")? + a;
+            Some(rest[a..b].trim().to_string())
+        });
+        let bundle = own.unwrap_or_else(|| "com.apple.Finder".to_string());
+        match notify_rust::set_application(&bundle) {
+            Ok(()) => tracing::debug!(name: "platform", op = "notify_bundle", bundle = %bundle, "bundle das notificações fixado"),
+            Err(e) => tracing::warn!(name: "platform", op = "notify_bundle", bundle = %bundle, error = %e, "não fixou o bundle das notificações"),
         }
     });
 }

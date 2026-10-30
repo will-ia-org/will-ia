@@ -173,6 +173,9 @@ pub struct ThreadsPage {
     /// Roteiros/áudios já gerados por turno (memória + disco): ouvir de novo não
     /// refaz resumo nem TTS.
     speak_cache: crate::speak_cache::SpeakCache,
+    /// Triggers por thread alvo (id → "nome (fonte)"), para o ícone de raio.
+    triggers: Loader<Value>,
+    trigger_map: HashMap<String, Vec<String>>,
     /// Altura medida do bloco de entrada no quadro anterior (define quanto
     /// sobra para o histórico sem a página rolar).
     bottom_h: f32,
@@ -321,6 +324,32 @@ fn origin_icon(ui: &mut egui::Ui, pal: &ui::Palette, t: &ThreadSummary) -> egui:
         }
     }
     resp.on_hover_text(origin_label(t))
+}
+
+/// Raio discreto: a thread é alvo de uma ou mais triggers (hover lista quais).
+fn trigger_icon(ui: &mut egui::Ui, pal: &ui::Palette, names: &[String]) -> egui::Response {
+    let (rect, resp) = ui.allocate_exact_size(egui::vec2(11.0, 13.0), egui::Sense::hover());
+    let color = if resp.hovered() {
+        pal.accent
+    } else {
+        pal.text_weak
+    };
+    let st = egui::Stroke::new(1.2, color);
+    let p = ui.painter();
+    let r = rect;
+    let pts = [
+        egui::pos2(r.left() + 7.0, r.top() + 0.5),
+        egui::pos2(r.left() + 2.0, r.top() + 7.0),
+        egui::pos2(r.left() + 6.0, r.top() + 7.0),
+        egui::pos2(r.left() + 4.0, r.bottom() - 0.5),
+        egui::pos2(r.right() - 1.0, r.top() + 5.5),
+        egui::pos2(r.left() + 5.5, r.top() + 5.5),
+        egui::pos2(r.left() + 7.0, r.top() + 0.5),
+    ];
+    for w in pts.windows(2) {
+        p.line_segment([w[0], w[1]], st);
+    }
+    resp.on_hover_text(format!("{}\n{}", tr("Alvo de trigger:"), names.join("\n")))
 }
 
 /// Conteúdo do "i" do cabeçalho: origem, status, custo, sessão, atividade.
@@ -561,6 +590,9 @@ impl ThreadsPage {
                     self.threads.insert(0, thread.clone());
                 }
             }
+            Event::TriggersChanged | Event::TriggerFired { .. } => {
+                self.triggers.loaded_at = None;
+            }
             Event::ThreadDeleted { thread_id } => {
                 self.threads.retain(|t| t.id != *thread_id);
                 if self.selected == Some(*thread_id) {
@@ -722,6 +754,33 @@ impl ThreadsPage {
     fn poll(&mut self, cx: &mut Cx) {
         self.sync_draft();
         self.poll_speak(cx);
+        if self.triggers.stale(std::time::Duration::from_secs(120)) {
+            self.triggers
+                .start(cx.svc.call(|c| async move { c.triggers().await }));
+        }
+        if self.triggers.poll() {
+            let mut map: HashMap<String, Vec<String>> = HashMap::new();
+            if let Some(list) = self
+                .triggers
+                .data
+                .as_ref()
+                .and_then(|v| v.get("triggers"))
+                .and_then(|v| v.as_array())
+            {
+                for t in list {
+                    let tid = ui::s(t, "thread_id");
+                    if tid.is_empty() {
+                        continue;
+                    }
+                    map.entry(tid).or_default().push(format!(
+                        "{} ({})",
+                        ui::s(t, "name"),
+                        ui::s(t, "source_label")
+                    ));
+                }
+            }
+            self.trigger_map = map;
+        }
         if let Some((tid, t)) = &self.dictation_task {
             if let Some(r) = t.take() {
                 let tid = *tid;
@@ -1091,6 +1150,9 @@ impl ThreadsPage {
                             ui.horizontal(|ui| {
                                 ui::dot(ui, status_tone(t));
                                 origin_icon(ui, pal, t);
+                                if let Some(names) = self.trigger_map.get(&t.id.to_string()) {
+                                    trigger_icon(ui, pal, names);
+                                }
                                 ui.add(egui::Label::new(egui::RichText::new(title_of(t)).font(ui::medium(13.0))).truncate());
                             });
                             // resumo da conversa: até 3 linhas, itálico, truncado com "…"
@@ -1225,6 +1287,9 @@ impl ThreadsPage {
                     // invadir os botões alinhados à direita.
                     let w = (ui.available_width() - 490.0).max(160.0);
                     origin_icon(ui, pal, t);
+                    if let Some(names) = self.trigger_map.get(&t.id.to_string()) {
+                        trigger_icon(ui, pal, names);
+                    }
                     ui.scope(|ui| {
                         ui.set_max_width(w);
                         ui.add(

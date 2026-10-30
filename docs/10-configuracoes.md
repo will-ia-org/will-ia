@@ -76,8 +76,10 @@ Ações: **Adicionar token** (abre instrução `claude setup-token`; token já c
 | E-mails novos por varredura (`gmail_max_per_poll`) | int 1–100 | 10 |
 | Máximo de triggers ativas (`max_triggers`) | int | 200 |
 | Cooldown padrão (segundos) (`default_cooldown_secs`) | int | 0 |
+| Agrupar mensagens do WhatsApp (segundos) (`default_debounce_secs`) | int 0–600 (padrão das regras novas) | 20 |
+| Espera máxima do agrupamento (segundos) (`debounce_max_wait_secs`) | int 10–3600 | 120 |
 
-A página de configurações **Triggers** (antiga "Agendamentos") traz esta seção e, abaixo, a de *Agendamentos (por tempo)* (`scheduler`).
+A página de configurações **Triggers** (antiga "Agendamentos") tem duas abas: *WhatsApp e E-mail* (esta seção) e *Agendamentos* (`scheduler`), cada uma com o seu Salvar.
 
 ### Voz (Realtime)
 | Campo | Tipo | Padrão |

@@ -73,6 +73,7 @@ pub struct TriggerInput {
     /// Título da thread a criar (quando `thread_id` vazio).
     pub thread_title: Option<String>,
     pub cooldown_secs: Option<u32>,
+    pub debounce_secs: Option<u32>,
 }
 
 /// Trigger + campos derivados para a lista.
@@ -86,10 +87,22 @@ pub struct TriggerView {
     pub last_fired_local: Option<String>,
 }
 
+/// Mensagens acumuladas de uma (trigger, conversa) esperando o debounce.
+struct Pending {
+    trigger: Trigger,
+    events: Vec<TriggerEvent>,
+    first_at: std::time::Instant,
+    /// Incrementa a cada mensagem nova: o temporizador só dispara se ninguém
+    /// chegou depois dele (ou se o teto de espera venceu).
+    generation: u64,
+}
+
 pub struct TriggersModule {
     deps: TriggersDeps,
     cfg: RwLock<TriggersSettings>,
     cancel: RwLock<Option<CancellationToken>>,
+    /// Debounce do WhatsApp por (trigger, chat).
+    pending: parking_lot::Mutex<std::collections::HashMap<(TriggerId, String), Pending>>,
 }
 
 impl TriggersModule {
@@ -98,6 +111,7 @@ impl TriggersModule {
             deps,
             cfg: RwLock::new(cfg),
             cancel: RwLock::new(None),
+            pending: parking_lot::Mutex::new(std::collections::HashMap::new()),
         })
     }
 
@@ -185,7 +199,9 @@ impl TriggersModule {
     }
 
     /// Entrega um evento a todas as triggers habilitadas da fonte que casarem.
-    pub async fn dispatch(&self, source: TriggerSource, ev: TriggerEvent) {
+    /// No WhatsApp, triggers com `debounce_secs > 0` acumulam por conversa e
+    /// disparam uma vez quando a pessoa para de escrever.
+    pub async fn dispatch(self: &Arc<Self>, source: TriggerSource, ev: TriggerEvent) {
         let list = match self.deps.storage.list_triggers_by_source(source).await {
             Ok(l) => l,
             Err(e) => {
@@ -194,10 +210,57 @@ impl TriggersModule {
             }
         };
         for t in list.into_iter().filter(|t| t.enabled) {
-            if t.filter.matches(&ev) {
+            if !t.filter.matches(&ev) {
+                continue;
+            }
+            if source == TriggerSource::WhatsApp && t.debounce_secs > 0 {
+                self.debounce(t, ev.clone());
+            } else {
                 self.fire(t, ev.clone()).await;
             }
         }
+    }
+
+    /// Guarda a mensagem no balde (trigger, chat) e (re)arma o temporizador:
+    /// dispara quando passar `debounce_secs` sem mensagem nova ou quando a
+    /// primeira mensagem do balde completar `debounce_max_wait_secs`.
+    fn debounce(self: &Arc<Self>, t: Trigger, ev: TriggerEvent) {
+        let key = (t.id, ev.chat_jid.clone());
+        let wait = Duration::from_secs(u64::from(t.debounce_secs));
+        let max_wait =
+            Duration::from_secs(u64::from(self.cfg.read().debounce_max_wait_secs.max(1)));
+        let generation = {
+            let mut map = self.pending.lock();
+            let p = map.entry(key.clone()).or_insert_with(|| Pending {
+                trigger: t.clone(),
+                events: Vec::new(),
+                first_at: std::time::Instant::now(),
+                generation: 0,
+            });
+            p.trigger = t;
+            p.events.push(ev);
+            p.generation += 1;
+            tracing::debug!(trigger = %key.0, chat = %key.1, acumuladas = p.events.len(), "triggers: debounce (re)armado");
+            p.generation
+        };
+        let me = self.clone();
+        tokio::spawn(async move {
+            tokio::time::sleep(wait).await;
+            let batch = {
+                let mut map = me.pending.lock();
+                let Some(p) = map.get(&key) else { return };
+                let quiet = p.generation == generation;
+                let capped = p.first_at.elapsed() >= max_wait;
+                if !quiet && !capped {
+                    return; // chegou mensagem depois: o temporizador dela assume
+                }
+                map.remove(&key)
+            };
+            if let Some(p) = batch {
+                let merged = merge_events(p.events);
+                me.fire(p.trigger, merged).await;
+            }
+        });
     }
 
     // ----- Gmail -----
@@ -523,6 +586,7 @@ impl TriggersModule {
                 claude_session_id: session,
                 origin,
                 cooldown_secs: input.cooldown_secs.unwrap_or(cfg.default_cooldown_secs),
+                debounce_secs: input.debounce_secs.unwrap_or(cfg.default_debounce_secs),
                 created_by: created_by.into(),
             })
             .await
@@ -562,6 +626,9 @@ impl TriggersModule {
         }
         if let Some(c) = input.cooldown_secs {
             t.cooldown_secs = c;
+        }
+        if let Some(d) = input.debounce_secs {
+            t.debounce_secs = d;
         }
         if let Some(title) = input.thread_title {
             t.thread_title = Some(title.trim().to_string()).filter(|s| !s.is_empty());
@@ -861,6 +928,59 @@ fn strip_link_refs(line: &str) -> String {
     out
 }
 
+/// Junta as mensagens acumuladas pelo debounce num evento só: campos da
+/// última, corpo com todas em ordem (`[HH:MM] texto`), `messages` = total.
+pub fn merge_events(mut events: Vec<TriggerEvent>) -> TriggerEvent {
+    if events.len() <= 1 {
+        return events.pop().unwrap_or_default();
+    }
+    events.sort_by_key(|e| e.at);
+    let n = events.len();
+    let body = events
+        .iter()
+        .map(|e| {
+            let when =
+                e.at.map(|a| a.with_timezone(&Local).format("%H:%M").to_string())
+                    .unwrap_or_default();
+            let kind = e.field("kind").unwrap_or("");
+            let text = if e.body.trim().is_empty() {
+                format!("[{kind}]")
+            } else {
+                e.body.trim().to_string()
+            };
+            if when.is_empty() {
+                text
+            } else {
+                format!("[{when}] {text}")
+            }
+        })
+        .collect::<Vec<_>>()
+        .join("\n");
+    let last = events.last().cloned().unwrap_or_default();
+    let who = last
+        .field("from_name")
+        .filter(|s| !s.is_empty())
+        .or_else(|| last.field("from_phone").filter(|s| !s.is_empty()))
+        .unwrap_or("?")
+        .to_string();
+    let mut fields = last.fields.clone();
+    fields.push(("messages".into(), n.to_string()));
+    fields.push((
+        "first_at".into(),
+        events
+            .first()
+            .and_then(|e| e.at)
+            .map(|a| a.to_rfc3339())
+            .unwrap_or_default(),
+    ));
+    TriggerEvent {
+        summary: format!("WhatsApp · {who}: {n} mensagens"),
+        fields,
+        body,
+        ..last
+    }
+}
+
 /// Item de `gmail_poll` → evento normalizado.
 pub fn gmail_event(v: &Value) -> TriggerEvent {
     let from = s(v, "from");
@@ -989,6 +1109,40 @@ mod tests {
         assert!(c.contains("-50% │.│R$16,18"));
         assert!(!c.contains("\n\n\n"));
         assert_eq!(strip_link_refs("texto][12] fim [x]"), "texto] fim [x]");
+    }
+
+    #[test]
+    fn merge_keeps_order_and_counts() {
+        let mk = |t: &str, secs: i64| {
+            let mut e = whatsapp_event(
+                "acc",
+                t,
+                "551199@s.whatsapp.net",
+                Some("Pedro"),
+                "551199@s.whatsapp.net",
+                Some("Pedro"),
+                Some("551199"),
+                false,
+                false,
+                "text",
+                Some(t),
+                DateTime::<Utc>::from_timestamp(1_700_000_000 + secs, 0).unwrap(),
+            );
+            e.ref_id = t.into();
+            e
+        };
+        let m = merge_events(vec![
+            mk("segunda", 10),
+            mk("primeira", 0),
+            mk("terceira", 20),
+        ]);
+        assert_eq!(m.field("messages"), Some("3"));
+        assert_eq!(m.summary, "WhatsApp · Pedro: 3 mensagens");
+        let lines: Vec<&str> = m.body.lines().collect();
+        assert!(lines[0].ends_with("primeira"));
+        assert!(lines[2].ends_with("terceira"));
+        assert_eq!(m.ref_id, "terceira");
+        assert_eq!(merge_events(vec![mk("só", 0)]).body, "só");
     }
 
     #[test]

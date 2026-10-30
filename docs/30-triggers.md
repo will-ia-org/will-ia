@@ -19,6 +19,8 @@ O agendamento por tempo (`docs/24`, `will-scheduler`) é o "trigger de relógio"
 | `thread_id` / `thread_title` | thread dona; `NULL` = criar no primeiro disparo (com o título) e fixar |
 | `claude_session_id` / `origin` | para recriar a thread com `--resume` se ela for apagada |
 | `cooldown_secs` | intervalo mínimo entre dois disparos da mesma trigger (anti-rajada) |
+| `debounce_secs` (WhatsApp) | **agrupamento**: espera N segundos sem mensagem nova **na conversa** e dispara uma vez com todas as mensagens acumuladas (`merge_events`: corpo `[HH:MM] texto` por mensagem, campo `messages` = total); teto `triggers.debounce_max_wait_secs` desde a primeira; 0 = cada mensagem dispara |
+| `filter.include_status` (WhatsApp) | aceitar atualizações de status do contato (`status@broadcast`); padrão **não** |
 | `cursor` | posição de leitura da fonte (Gmail: `internalDate` ms do e-mail mais novo visto) |
 | `last_fired_at`, `last_result`, `fire_count`, `paused_reason` | estado/histórico |
 
@@ -80,6 +82,9 @@ Tabelas `triggers` (uma linha por regra, `filter_json`) e `trigger_runs` (histó
 
 ## UI (`crates/will-app/src/pages/triggers.rs`)
 Cartões (toggle pausar/retomar, fonte, escopo resumido, thread, contagem/último disparo, falha em vermelho; expandido: prompt, condições, Testar/Editar/Excluir, últimos disparos) e formulário: nome, fonte, habilitada; escopo (WhatsApp: conta, **seletor de contatos** com busca no índice e chips, grupos, minhas mensagens; Gmail: conta, busca); condições (campo da fonte + glob + "não"); thread (existente ou **criar nova** com título); prompt; cooldown. Configurações → Triggers: seção *WhatsApp e E-mail* + *Agendamentos (por tempo)*.
+
+## Não é exposto ao MCP
+As triggers de WhatsApp/e-mail são mantidas **só pela UI/API** (dono). O agente não tem ferramentas `trigger_*`; as únicas ferramentas de gatilho do agente continuam sendo as `schedule_*` do agendamento por tempo (`docs/24`).
 
 ## Limites e segurança
 - Só mensagens **recebidas** disparam por padrão (`include_from_me` desligado) e grupos só quando permitido — evita loops com as próprias respostas do agente.

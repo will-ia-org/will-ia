@@ -18,6 +18,7 @@ pub struct NewTrigger {
     pub claude_session_id: Option<String>,
     pub origin: Origin,
     pub cooldown_secs: u32,
+    pub debounce_secs: u32,
     pub created_by: String,
 }
 
@@ -45,6 +46,7 @@ fn row_to_trigger(r: &sqlx::sqlite::SqliteRow) -> Option<Trigger> {
         claude_session_id: r.get("claude_session_id"),
         origin: Origin::from_parts(&origin_kind, origin_ref.as_deref()).unwrap_or(Origin::Ui),
         cooldown_secs: r.get::<i64, _>("cooldown_secs").max(0) as u32,
+        debounce_secs: r.try_get::<i64, _>("debounce_secs").unwrap_or(0).max(0) as u32,
         created_by: r.get("created_by"),
         created_at: parse_dt(&r.get::<String, _>("created_at")),
         updated_at: parse_dt(&r.get::<String, _>("updated_at")),
@@ -61,8 +63,8 @@ impl Storage {
         let id = TriggerId::new();
         let ts = now();
         sqlx::query(
-            "INSERT INTO triggers (id, name, source, enabled, filter_json, prompt, thread_id, thread_title, claude_session_id, origin, origin_ref, cooldown_secs, created_by, created_at, updated_at, fire_count) \
-             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0)",
+            "INSERT INTO triggers (id, name, source, enabled, filter_json, prompt, thread_id, thread_title, claude_session_id, origin, origin_ref, cooldown_secs, debounce_secs, created_by, created_at, updated_at, fire_count) \
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0)",
         )
         .bind(id.to_string())
         .bind(&n.name)
@@ -76,6 +78,7 @@ impl Storage {
         .bind(n.origin.kind().as_str())
         .bind(n.origin.origin_ref())
         .bind(i64::from(n.cooldown_secs))
+        .bind(i64::from(n.debounce_secs))
         .bind(&n.created_by)
         .bind(fmt(ts))
         .bind(fmt(ts))
@@ -119,7 +122,7 @@ impl Storage {
     /// habilitada) e limpa `paused_reason` quando reabilitada.
     pub async fn update_trigger(&self, t: &Trigger) -> Result<Trigger> {
         let res = sqlx::query(
-            "UPDATE triggers SET name = ?, source = ?, enabled = ?, filter_json = ?, prompt = ?, thread_id = ?, thread_title = ?, claude_session_id = ?, origin = ?, origin_ref = ?, cooldown_secs = ?, paused_reason = CASE WHEN ? THEN NULL ELSE paused_reason END, updated_at = ? WHERE id = ?",
+            "UPDATE triggers SET name = ?, source = ?, enabled = ?, filter_json = ?, prompt = ?, thread_id = ?, thread_title = ?, claude_session_id = ?, origin = ?, origin_ref = ?, cooldown_secs = ?, debounce_secs = ?, paused_reason = CASE WHEN ? THEN NULL ELSE paused_reason END, updated_at = ? WHERE id = ?",
         )
         .bind(&t.name)
         .bind(t.source.as_str())
@@ -132,6 +135,7 @@ impl Storage {
         .bind(t.origin.kind().as_str())
         .bind(t.origin.origin_ref())
         .bind(i64::from(t.cooldown_secs))
+        .bind(i64::from(t.debounce_secs))
         .bind(t.enabled as i64)
         .bind(fmt(now()))
         .bind(t.id.to_string())
@@ -272,6 +276,7 @@ mod tests {
                 claude_session_id: None,
                 origin: Origin::Ui,
                 cooldown_secs: 30,
+                debounce_secs: 20,
                 created_by: "user".into(),
             })
             .await

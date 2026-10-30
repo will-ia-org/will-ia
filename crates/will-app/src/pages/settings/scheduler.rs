@@ -22,6 +22,21 @@ impl SchedulerPage {
             &help::TRIGGERS,
         );
 
+        // Abas (padrão do app para páginas longas): regras × agendamentos.
+        let tab = ui::tabs(
+            ui,
+            "settings-triggers",
+            &[
+                ui::Tab::new("rules", tr("WhatsApp e E-mail")),
+                ui::Tab::new("schedules", tr("Agendamentos")),
+            ],
+        );
+        ui.add_space(6.0);
+        if tab == "schedules" {
+            self.schedules_tab(ui, cx, st);
+            return;
+        }
+
         // ---- triggers universais ----
         ui::section(ui, tr("WhatsApp e E-mail"), |ui| {
             let status = cx
@@ -86,10 +101,27 @@ impl SchedulerPage {
                     ui::number(ui, &mut t.default_cooldown_secs, 0..=86_400);
                 },
             );
+            ui::field(
+                ui,
+                tr("Agrupar mensagens do WhatsApp (segundos)"),
+                Some(tr("Padrão das regras novas: espera a pessoa parar de escrever por estes segundos e dispara uma vez com todas as mensagens. 0 = cada mensagem dispara.")),
+                |ui| {
+                    ui::number(ui, &mut t.default_debounce_secs, 0..=600);
+                },
+            );
+            ui::field(
+                ui,
+                tr("Espera máxima do agrupamento (segundos)"),
+                Some(tr("Mesmo com mensagens chegando sem parar, dispara ao completar este tempo desde a primeira.")),
+                |ui| {
+                    ui::number(ui, &mut t.debounce_max_wait_secs, 10..=3_600);
+                },
+            );
         });
         st.save_bar(ui, cx.svc, "triggers");
-        ui.add_space(10.0);
+    }
 
+    fn schedules_tab(&mut self, ui: &mut egui::Ui, cx: &mut Cx, st: &mut SettingsState) {
         ui::section_help(
             ui,
             tr("Agendamentos (por tempo)"),

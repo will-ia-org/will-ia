@@ -98,6 +98,9 @@ pub struct TriggerFilter {
     pub include_groups: bool,
     /// WhatsApp: aceitar as mensagens que **eu** mandei (padrão: não).
     pub include_from_me: bool,
+    /// WhatsApp: aceitar atualizações de **status** (`status@broadcast`: foto/
+    /// texto no status do contato). Padrão: não — só mensagens de conversa.
+    pub include_status: bool,
     /// Gmail: query da busca (`is:unread`, `in:inbox`…); vazio = `in:inbox`.
     pub gmail_query: String,
     /// Condições (AND) sobre os campos do evento.
@@ -129,6 +132,10 @@ pub struct Trigger {
     pub origin: Origin,
     /// Segundos mínimos entre dois disparos desta trigger (0 = sem limite).
     pub cooldown_secs: u32,
+    /// WhatsApp: segundos sem mensagem nova (por conversa) antes de disparar
+    /// uma vez com todas as mensagens acumuladas; 0 = cada mensagem dispara.
+    #[serde(default)]
+    pub debounce_secs: u32,
     pub created_by: String,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
@@ -189,6 +196,9 @@ impl TriggerEvent {
             .map(|(_, v)| v.as_str())
     }
 }
+
+/// Chat especial do WhatsApp onde chegam as atualizações de status dos contatos.
+pub const WHATSAPP_STATUS_JID: &str = "status@broadcast";
 
 /// Glob simples, sem distinção de maiúsculas: `*` qualquer sequência, `?` um
 /// caractere. Casa em **qualquer trecho** do texto (`*@xpto.com` acha
@@ -251,6 +261,9 @@ impl TriggerFilter {
         }
         if ev.source == Some(TriggerSource::WhatsApp) {
             if ev.from_me && !self.include_from_me {
+                return false;
+            }
+            if ev.chat_jid == WHATSAPP_STATUS_JID && !self.include_status {
                 return false;
             }
             if ev.is_group && !self.include_groups && self.chats.is_empty() {
@@ -383,6 +396,15 @@ mod tests {
         let mut m = ev();
         m.from_me = true;
         assert!(!f2.matches(&m));
+        // status do contato: ignorado por padrão; aceito com a flag
+        let mut st = ev();
+        st.chat_jid = WHATSAPP_STATUS_JID.into();
+        assert!(!f2.matches(&st));
+        let f3 = TriggerFilter {
+            include_status: true,
+            ..Default::default()
+        };
+        assert!(f3.matches(&st));
     }
 
     #[test]
@@ -399,6 +421,7 @@ mod tests {
             claude_session_id: None,
             origin: Origin::Ui,
             cooldown_secs: 0,
+            debounce_secs: 0,
             created_by: "user".into(),
             created_at: Utc::now(),
             updated_at: Utc::now(),
