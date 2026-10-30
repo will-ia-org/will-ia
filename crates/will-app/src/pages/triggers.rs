@@ -242,17 +242,20 @@ impl TriggersPage {
                 }
             }
         }
-        // Seletor de contatos: recarrega quando a busca muda (debounce leve pelo quadro).
+        // Seletor de contatos: consome a resposta ANTES de decidir recarregar e
+        // só recarrega sem tarefa pendente/concluída (`busy`), senão `start`
+        // descarta o resultado que acabou de chegar e vira um laço de requisições.
+        self.chats.poll();
         if self.form.is_some()
-            && (self.chats.data.is_none() || self.chat_query != self.chat_query_sent)
-            && !self.chats.loading()
+            && (self.chats.data.is_none() && self.chats.error.is_none()
+                || self.chat_query != self.chat_query_sent)
+            && !self.chats.busy()
         {
             self.chat_query_sent = self.chat_query.clone();
             let q = self.chat_query.clone();
             self.chats
                 .start(cx.svc.call(move |c| async move { c.wa_chats(&q).await }));
         }
-        self.chats.poll();
         for l in self.runs.values_mut() {
             l.poll();
         }
@@ -641,6 +644,7 @@ impl TriggersPage {
             .cloned()
             .unwrap_or_default();
         let loading = self.chats.loading();
+        let error = self.chats.error.clone();
         let query = &mut self.chat_query;
         ui::field(
             ui,
@@ -671,11 +675,17 @@ impl TriggersPage {
                         ui.spinner();
                     }
                 });
-                if chats.is_empty() {
+                if let Some(e) = &error {
+                    ui::error_text(ui, e);
+                } else if chats.is_empty() {
                     ui.label(
-                        RichText::new(tr("Nenhuma conversa no índice (WhatsApp pareado?)."))
-                            .small()
-                            .weak(),
+                        RichText::new(if loading {
+                            tr("carregando conversas…")
+                        } else {
+                            tr("Nenhuma conversa no índice (WhatsApp pareado?).")
+                        })
+                        .small()
+                        .weak(),
                     );
                 } else {
                     egui::ScrollArea::vertical()

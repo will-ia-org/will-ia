@@ -1810,6 +1810,7 @@ pub static TABLE: &[(&str, &str)] = &[
     ("Trigger criada.", "Trigger created."),
     ("Triggers desligadas nas configurações: nada dispara.", "Triggers disabled in settings: nothing fires."),
     ("Nova trigger", "New trigger"),
+    ("carregando conversas…", "loading chats…"),
     ("Varrer Gmail agora", "Poll Gmail now"),
     ("Consulta a caixa de entrada fora do intervalo configurado.", "Checks the inbox outside the configured interval."),
     ("Varredura do Gmail feita.", "Gmail poll done."),
