@@ -2713,15 +2713,19 @@ fn activity_strip(
 fn full_row_click(
     ui: &mut egui::Ui,
     drawn: &egui::Rect,
-    salt: impl std::hash::Hash,
+    salt: impl std::hash::Hash + std::fmt::Debug,
 ) -> egui::Response {
     let full = ui.max_rect();
     let rect = egui::Rect::from_min_max(
         egui::pos2(full.left(), drawn.top()),
         egui::pos2(full.right(), drawn.bottom()),
     );
-    ui.interact(rect, ui.id().with(salt), egui::Sense::click())
-        .on_hover_cursor(egui::CursorIcon::PointingHand)
+    ui.interact(
+        rect,
+        egui::Id::unique(("full-row", ui.scope_id(), salt)),
+        egui::Sense::click(),
+    )
+    .on_hover_cursor(egui::CursorIcon::PointingHand)
 }
 
 /// Opacidade de entrada (0→1 em ~280 ms) a partir do instante em que o item chegou.
