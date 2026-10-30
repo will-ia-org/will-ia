@@ -100,14 +100,14 @@ sistema é gerenciado pelo instalador.
 
 | Pacote | Instalador dentro |
 |---|---|
-| `will-ia-<versão>-macos-aarch64.zip` / `-macos-x86_64.zip` | `Instalar will-ia.app` (bundle com `packaging/macos/Setup-Info.plist` e `Contents/MacOS/will-ia-setup`) + `will-ia.app` |
-| `will-ia-<versão>-windows-x86_64.zip` | `will-ia-setup.exe` (+ `will-ia.exe`, `will-ia-app.exe`) |
-| `will-ia-<versão>-linux-x86_64.tar.gz` | `will-ia-setup` (+ `will-ia`, `will-ia-app`, `packaging/`) |
+| `will-ia-<versão>-macos-aarch64.zip` / `-macos-x86_64.zip` | `Install.app` (bundle com `packaging/macos/Setup-Info.plist` e `Contents/MacOS/install`) + `will-ia.app` |
+| `will-ia-<versão>-windows-x86_64.zip` | `install.exe` (+ `will-ia.exe`, `will-ia-app.exe`) |
+| `will-ia-<versão>-linux-x86_64.tar.gz` | `install` (+ `will-ia`, `will-ia-app`, `packaging/`) |
 | `will-ia_<versão>-1_amd64.deb` | `/usr/bin/will-ia-setup` (junto de `/usr/bin/will-ia` e `/usr/bin/will-ia-app`; o `.deb` já instala tudo, o instalador fica disponível para uma instalação por usuário) |
 
-Uso: descompactar e abrir o instalador (servidor sem tela: `./will-ia-setup --yes`). Não
+Uso: descompactar e abrir o instalador — **`install` em todo SO** (`Install.app`, `install.exe`, `./install`; servidor sem tela: `./install --yes`). O nome do binário por dentro continua `will-ia-setup` (crate `will-setup`; o `.deb` instala `/usr/bin/will-ia-setup`, porque `install` em `/usr/bin` colidiria com o `install` do coreutils). Não
 assinado/notarizado: no macOS o usuário libera em Privacidade e Segurança ou
-`xattr -dr com.apple.quarantine "Instalar will-ia.app" will-ia.app`; no Windows o SmartScreen pede
+`xattr -dr com.apple.quarantine Install.app will-ia.app`; no Windows o SmartScreen pede
 "Executar assim mesmo".
 
 ## Permissões no macOS

@@ -4,17 +4,19 @@ name: Release
 # Windows x86_64, macOS x86_64 e macOS aarch64 e publica UM pacote por SO (e por
 # arquitetura no macOS) numa GitHub Release. Layout decidido em 2026-10-29 (docs/13):
 #
-#   will-ia-<v>-macos-aarch64.zip     "Instalar will-ia.app" (instalador) + will-ia.app (app + servidor)
+#   will-ia-<v>-macos-aarch64.zip     Install.app (instalador) + will-ia.app (app + servidor)
 #   will-ia-<v>-macos-x86_64.zip        + README.md, LICENSE, docs/
-#   will-ia-<v>-windows-x86_64.zip    will-ia-setup.exe, will-ia.exe, will-ia-app.exe + README.md, LICENSE, docs/
-#   will-ia-<v>-linux-x86_64.tar.gz   will-ia-setup, will-ia, will-ia-app + README.md, LICENSE, docs/,
+#   will-ia-<v>-windows-x86_64.zip    install.exe, will-ia.exe, will-ia-app.exe + README.md, LICENSE, docs/
+#   will-ia-<v>-linux-x86_64.tar.gz   install, will-ia, will-ia-app + README.md, LICENSE, docs/,
 #                                       packaging/linux/, packaging/systemd/
 #   will-ia_<v>-1_amd64.deb           cargo-deb (crates/will-ia/Cargo.toml): os três binários em /usr/bin,
 #                                       .desktop do app e user unit do servidor
 #   SHA256SUMS.txt                    de todos os acima
 #
-# Cada pacote descompacta numa pasta `will-ia-<v>-<plataforma>/`; o usuário abre o instalador
-# (`will-ia-setup`, docs/27) ou usa os binários soltos à mão.
+# Cada pacote descompacta numa pasta `will-ia-<v>-<plataforma>/`; o usuário abre o instalador,
+# que em TODO pacote se chama `install` (Install.app / install.exe / install; docs/27) — o binário
+# por dentro continua `will-ia-setup` (crate will-setup; no .deb fica /usr/bin/will-ia-setup, porque
+# `install` em /usr/bin colidiria com o `install` do coreutils) — ou usa os binários soltos à mão.
 #
 # Três binários por plataforma (ADR-0019 + ADR-0021):
 #   will-ia        servidor residente (+ bandeja quando há desktop; `serve` = headless)
@@ -151,10 +153,11 @@ jobs:
               sed "s/__VERSION__/${VERSION}/g" packaging/macos/Server-Info.plist > "$srv/Contents/Info.plist"
               cp assets/icon/will-ia.icns "$app/Contents/Resources/will-ia.icns"
               cp assets/icon/will-ia.icns "$srv/Contents/Resources/will-ia.icns"
-              # "Instalar will-ia.app": duplo clique abre o assistente (payload dentro do binário)
-              setup="$stage/Instalar will-ia.app"
+              # Install.app: duplo clique abre o assistente (payload dentro do binário). Nome padronizado
+              # em todos os SOs: `install` (Setup-Info.plist aponta CFBundleExecutable = install).
+              setup="$stage/Install.app"
               mkdir -p "$setup/Contents/MacOS" "$setup/Contents/Resources"
-              cp "$rel/${SETUP}" "$setup/Contents/MacOS/${SETUP}"
+              cp "$rel/${SETUP}" "$setup/Contents/MacOS/install"
               sed "s/__VERSION__/${VERSION}/g" packaging/macos/Setup-Info.plist > "$setup/Contents/Info.plist"
               cp assets/icon/will-ia.icns "$setup/Contents/Resources/will-ia.icns"
               chmod +x "$app/Contents/MacOS/"* "$srv/Contents/MacOS/"* "$setup/Contents/MacOS/"*
@@ -164,11 +167,13 @@ jobs:
               (cd "$out" && zip -qr -y "${name}.zip" "$name")
               ;;
             Windows)
-              for b in $SETUP $BINS; do cp "$rel/${b}${ext}" "$stage/"; done
+              cp "$rel/${SETUP}${ext}" "$stage/install${ext}"
+              for b in $BINS; do cp "$rel/${b}${ext}" "$stage/"; done
               (cd "$out" && 7z a -tzip "${name}.zip" "$name" >/dev/null)
               ;;
             Linux)
-              for b in $SETUP $BINS; do cp "$rel/${b}${ext}" "$stage/"; chmod +x "$stage/${b}${ext}"; done
+              cp "$rel/${SETUP}" "$stage/install"; chmod +x "$stage/install"
+              for b in $BINS; do cp "$rel/${b}${ext}" "$stage/"; chmod +x "$stage/${b}${ext}"; done
               # .desktop do app e user unit do servidor, para instalação manual/de sistema
               mkdir -p "$stage/packaging"
               cp -r packaging/linux packaging/systemd "$stage/packaging/"

@@ -96,14 +96,14 @@ Montagem manual (não é mais publicado na release): coloque os binários do `.t
 
 ## Distribuição
 
-**Um pacote por sistema, com o instalador dentro.** Em [Releases](https://github.com/will-ia-org/will-ia/releases) baixe o arquivo do seu sistema, descompacte e **abra o instalador** (`will-ia-setup`, `docs/27`): ele instala/atualiza por usuário, registra o servidor no login, cria os atalhos e preserva seus dados.
+**Um pacote por sistema, com o instalador dentro.** Em [Releases](https://github.com/will-ia-org/will-ia/releases) baixe o arquivo do seu sistema, descompacte e **abra o instalador** (`install` — `Install.app` no macOS, `install.exe` no Windows, `./install` no Linux; por dentro é o binário `will-ia-setup`, `docs/27`): ele instala/atualiza por usuário, registra o servidor no login, cria os atalhos e preserva seus dados.
 
 | Sistema | Arquivo | Dentro |
 |---|---|---|
-| macOS Apple Silicon | `will-ia-<versão>-macos-aarch64.zip` | `Instalar will-ia.app` + `will-ia.app` |
+| macOS Apple Silicon | `will-ia-<versão>-macos-aarch64.zip` | `Install.app` + `will-ia.app` |
 | macOS Intel | `will-ia-<versão>-macos-x86_64.zip` | idem |
-| Windows 10/11 x64 | `will-ia-<versão>-windows-x86_64.zip` | `will-ia-setup.exe`, `will-ia.exe`, `will-ia-app.exe` |
-| Linux x86_64 | `will-ia-<versão>-linux-x86_64.tar.gz` | `will-ia-setup`, `will-ia`, `will-ia-app`, `packaging/` (`.desktop` + user unit) |
+| Windows 10/11 x64 | `will-ia-<versão>-windows-x86_64.zip` | `install.exe`, `will-ia.exe`, `will-ia-app.exe` |
+| Linux x86_64 | `will-ia-<versão>-linux-x86_64.tar.gz` | `install`, `will-ia`, `will-ia-app`, `packaging/` (`.desktop` + user unit) |
 | Debian/Ubuntu | `will-ia_<versão>-1_amd64.deb` | `sudo apt install ./will-ia_<versão>-1_amd64.deb` instala os três binários, o `.desktop` e a user unit (`systemctl --user enable --now will-ia`) |
 
 Todo pacote traz ainda `README.md`, `LICENSE` e `docs/`, e um `SHA256SUMS.txt` acompanha a release. macOS (não notarizado): libere em Privacidade e Segurança ou `xattr -dr com.apple.quarantine "Instalar will-ia.app" will-ia.app`. Servidor Linux sem tela: `./will-ia-setup --yes`. Os binários soltos servem para instalação manual ou para montar o modo portátil à mão. Gerados pelo workflow `release.yml` a cada tag `v*`; `.dmg`, `.msi` e notarização ficam para depois; detalhes em [`docs/13`](docs/13-plataformas-e-distribuicao.md).

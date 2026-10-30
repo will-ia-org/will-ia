@@ -110,7 +110,7 @@ Sem `sudo` para instalar `libasound2-dev`, é possível apontar `PKG_CONFIG_PATH
 - Dois binários (etapa 3 de `docs/26`): `crates/will-ia` (servidor + bandeja) e `crates/will-app` (app egui, cliente via `crates/will-client`); o antigo `crates/will-desktop` não existe mais. Validado só no Linux (headless pelo `smoke.sh`; GUI sem teste interativo completo). O núcleo (`will-server`) e o servidor rodam em qualquer SO sem libs de GUI.
 - `packaging/` tem `linux/will-ia.desktop` (entrada de menu do **app**), `systemd/will-ia.service` (user unit do **servidor**, `serve`), `macos/Info.plist` + `macos/Setup-Info.plist` e `portable/` (lançadores + README, montagem manual). O `ci.yml` compila `-p will-ia -p will-app`; o `release.yml` compila os três binários e publica **um pacote por SO/arquitetura** com o instalador dentro (seção CI/CD).
 
-## Instalador (`will-ia-setup`)
+## Instalador (`will-ia-setup`; nos pacotes, `install`)
 
 Desde a v0.1.5 cada release traz um **terceiro binário**, o instalador por usuário (`docs/27`, ADR-0021): assistente gráfico (ou `--cli`) que grava os dois binários na pasta do usuário, registra o servidor no login (LaunchAgent / autostart ou user unit / chave Run), cria atalhos e, numa atualização, para o que está rodando, troca os binários e religa, preservando a pasta de dados. É o caminho recomendado na máquina pessoal. Desde 2026-10-29 ele **vem dentro do pacote de cada plataforma** (não há mais download separado do instalador): descompacte e abra `Instalar will-ia.app` / `will-ia-setup.exe` / `./will-ia-setup`. Os binários soltos no mesmo pacote servem para instalação manual/de sistema.
 
@@ -121,7 +121,7 @@ Fonte única em `assets/icon/` (`will-ia.svg` = squircle azul com onda de voz; `
 | Onde | Como |
 |---|---|
 | Janela, barra de tarefas (Windows/Linux), Dock quando é o ícone da janela | `eframe` `with_icon` com o PNG 256 decodificado por `will_platform::icon` (embutido nos binários do app e do instalador) |
-| Dock / Finder / Launchpad (macOS) | `Contents/Resources/will-ia.icns` + `CFBundleIconFile` nos dois bundles (`will-ia.app`, `Instalar will-ia.app`); o release copia o `.icns`, e o `will-ia-setup` o grava ao instalar (e dá `touch` no bundle para o Finder renovar o cache) |
+| Dock / Finder / Launchpad (macOS) | `Contents/Resources/will-ia.icns` + `CFBundleIconFile` nos dois bundles (`will-ia.app`, `Install.app`); o release copia o `.icns`, e o `will-ia-setup` o grava ao instalar (e dá `touch` no bundle para o Finder renovar o cache) |
 | Barra de menus do macOS | `tray-icon` com o PNG *template* 44 px e `with_icon_as_template(true)` (preto/branco conforme o tema) |
 | Bandeja do Windows | `tray-icon` com o PNG colorido 32 px |
 | Bandeja do Linux (StatusNotifierItem) | `ksni` com pixmaps ARGB 22/32/48 vindos dos PNGs |
@@ -134,10 +134,10 @@ Desde 2026-10-29 a release publica **um pacote por SO (e por arquitetura no macO
 
 | SO | Arquivo | Conteúdo | Ferramenta |
 |---|---|---|---|
-| macOS aarch64 (Apple Silicon) | `will-ia-<versão>-macos-aarch64.zip` | `Instalar will-ia.app` (bundle do instalador: `packaging/macos/Setup-Info.plist`, executável `will-ia-setup`) + `will-ia.app` (`Contents/MacOS/will-ia-app` = `CFBundleExecutable`, `packaging/macos/Info.plist`; servidor em `Contents/Library/LoginItems/will-ia Server.app/Contents/MacOS/will-ia`, `packaging/macos/Server-Info.plist`) + `README.md`, `LICENSE`, `docs/` | `zip -r -y` na pasta de staging (preserva bits de execução e a estrutura dos bundles) |
+| macOS aarch64 (Apple Silicon) | `will-ia-<versão>-macos-aarch64.zip` | `Install.app` (bundle do instalador: `packaging/macos/Setup-Info.plist`, executável `will-ia-setup`) + `will-ia.app` (`Contents/MacOS/will-ia-app` = `CFBundleExecutable`, `packaging/macos/Info.plist`; servidor em `Contents/Library/LoginItems/will-ia Server.app/Contents/MacOS/will-ia`, `packaging/macos/Server-Info.plist`) + `README.md`, `LICENSE`, `docs/` | `zip -r -y` na pasta de staging (preserva bits de execução e a estrutura dos bundles) |
 | macOS x86_64 (Intel) | `will-ia-<versão>-macos-x86_64.zip` | idem (build separada, não universal) | idem |
-| Windows x86_64 | `will-ia-<versão>-windows-x86_64.zip` | `will-ia-setup.exe`, `will-ia.exe`, `will-ia-app.exe`, `README.md`, `LICENSE`, `docs/` | `7z a -tzip` |
-| Linux x86_64 | `will-ia-<versão>-linux-x86_64.tar.gz` | `will-ia-setup`, `will-ia`, `will-ia-app` (executáveis), `README.md`, `LICENSE`, `docs/`, `packaging/linux/` (`.desktop` do app), `packaging/systemd/` (user unit do servidor) | `tar -czf` |
+| Windows x86_64 | `will-ia-<versão>-windows-x86_64.zip` | `install.exe` (= `will-ia-setup.exe` renomeado), `will-ia.exe`, `will-ia-app.exe`, `README.md`, `LICENSE`, `docs/` | `7z a -tzip` |
+| Linux x86_64 | `will-ia-<versão>-linux-x86_64.tar.gz` | `install` (= `will-ia-setup` renomeado), `will-ia`, `will-ia-app` (executáveis), `README.md`, `LICENSE`, `docs/`, `packaging/linux/` (`.desktop` do app), `packaging/systemd/` (user unit do servidor) | `tar -czf` |
 | Linux Debian/Ubuntu | `will-ia_<versão>-1_amd64.deb` | `/usr/bin/{will-ia,will-ia-app,will-ia-setup}`, `.desktop`, user unit, `README` em `/usr/share/doc/will-ia/`; `sudo apt install ./will-ia_<versão>-1_amd64.deb` | `cargo-deb -p will-ia` (assets em `crates/will-ia/Cargo.toml`) |
 | todos | `SHA256SUMS.txt` | hashes de todos os arquivos acima | `sha256sum` |
 
@@ -168,7 +168,7 @@ Arquivos em `packaging/`:
   O job final `release` só junta os artefatos, gera `SHA256SUMS.txt` e publica a GitHub Release com notas automáticas mais um corpo fixo em português (o que é cada arquivo e como instalar). Conteúdo de cada pacote na seção "Empacotamento por SO".
 - Publicar uma versão: `git tag v0.1.0 && git push origin v0.1.0`.
 - Assinatura/notarização (macOS) e instalador Windows ficam para depois. Sem notarização, o Gatekeeper mostra "Apple could not verify … is free of malware" (macOS 15 não aceita mais o botão direito → Abrir). Para liberar:
-  - pacote da release: `xattr -dr com.apple.quarantine "Instalar will-ia.app" will-ia.app` (dentro da pasta descompactada);
+  - pacote da release: `xattr -dr com.apple.quarantine Install.app will-ia.app` (dentro da pasta descompactada);
   - binários soltos (ex.: portátil): `xattr -d com.apple.quarantine bin/will-ia-macos-aarch64 bin/will-ia-app-macos-aarch64 && chmod +x …`;
   - ou, depois da primeira tentativa, Ajustes do Sistema › Privacidade e Segurança › "Abrir Mesmo Assim".
   O `packaging/portable/README.md` repete essa instrução. Com um certificado Developer ID, o `release.yml` passa a assinar (`codesign --options runtime`) e notarizar (`notarytool`), e o aviso some.
