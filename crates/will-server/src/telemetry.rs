@@ -9,6 +9,70 @@ use will_telemetry::ShipConfig;
 
 pub const TOKEN_KEY: &str = "telemetry_token";
 
+/// IP público detectado no start (rótulo padrão da instância).
+static PUBLIC_IP: parking_lot::Mutex<Option<String>> = parking_lot::Mutex::new(None);
+
+pub fn public_ip() -> Option<String> {
+    PUBLIC_IP.lock().clone()
+}
+
+/// Rótulo efetivo: o configurado ou, vazio, o IP público (ou o host).
+pub fn effective_label(s: &TelemetrySettings) -> String {
+    let l = s.label.trim();
+    if !l.is_empty() {
+        return l.to_string();
+    }
+    public_ip().unwrap_or_default()
+}
+
+/// Primeira execução de um binário com telemetria embutida (`baked_telemetry`,
+/// docs/29): copia os padrões e o token para esta instalação e liga. Só uma
+/// vez (`seeded`), e nunca por cima de uma telemetria já ligada pelo usuário.
+pub async fn seed_defaults(state: &AppState) {
+    let mut settings = state.settings();
+    if settings.telemetry.seeded {
+        return;
+    }
+    settings.telemetry.seeded = true;
+    if let Some(baked) = will_core::settings::baked_telemetry() {
+        if settings.telemetry.enabled {
+            tracing::info!("telemetria já configurada; padrões embutidos ignorados");
+        } else {
+            baked.apply_to(&mut settings.telemetry);
+            settings.telemetry.enabled = true;
+            if !baked.token.trim().is_empty() {
+                if let Err(e) = state
+                    .secrets
+                    .set(
+                        TOKEN_KEY,
+                        &SecretString::from(baked.token.trim().to_string()),
+                    )
+                    .await
+                {
+                    tracing::warn!(error = %e, "não gravei o token de telemetria embutido");
+                    settings.telemetry.enabled = false;
+                }
+            }
+            tracing::info!(provider = %settings.telemetry.provider, dataset = %settings.telemetry.dataset, "telemetria pré-configurada aplicada");
+        }
+    }
+    if let Err(e) = state.storage.save_settings(&settings).await {
+        tracing::warn!(error = %e, "não salvei as configurações (telemetria)");
+        return;
+    }
+    *state.settings.write() = settings;
+}
+
+/// Detecta o IP público em segundo plano e reaplica (rótulo/atributo).
+pub fn spawn_public_ip_probe(state: std::sync::Arc<AppState>) {
+    tokio::spawn(async move {
+        let ip = will_telemetry::detect_public_ip().await;
+        tracing::debug!(ip = ip.as_deref().unwrap_or("?"), "ip público");
+        *PUBLIC_IP.lock() = ip;
+        apply(&state).await;
+    });
+}
+
 /// Monta o destino a partir das configurações; `None` = desligado/incompleto.
 pub fn ship_config(s: &TelemetrySettings, token: Option<SecretString>) -> Option<ShipConfig> {
     if !s.enabled {
@@ -64,7 +128,8 @@ pub async fn apply(state: &AppState) {
     let s = state.settings().telemetry;
     let token = state.secrets.get(TOKEN_KEY).await.ok().flatten();
     let cfg = ship_config(&s, token);
-    h.instance.set_label(&s.label);
+    h.instance.set_label(&effective_label(&s));
+    h.instance.set_extra("net.public_ip", public_ip());
     let on = cfg.is_some();
     h.configure(cfg, level(&s));
     if on {

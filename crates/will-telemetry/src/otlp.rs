@@ -93,6 +93,9 @@ pub(crate) fn resource(inst: &InstanceInfo) -> Resource {
     if let Some(p) = inst.peer.read().as_ref() {
         m.insert("server.instance.id".into(), p.clone().into());
     }
+    for (k, v) in inst.extra.read().iter() {
+        m.insert(k.clone(), v.clone().into());
+    }
     Resource {
         attributes: attributes(&m),
         ..Default::default()

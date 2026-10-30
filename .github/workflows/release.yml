@@ -108,6 +108,10 @@ jobs:
         run: sudo apt-get update && sudo apt-get install -y --no-install-recommends libasound2-dev pkg-config
 
       - name: Compilar (servidor + app)
+        env:
+          # Telemetria pré-configurada na distribuição (docs/29): JSON gerado por
+          # `will-ia telemetry-defaults` e guardado no segredo do repositório.
+          WILL_TELEMETRY_DEFAULTS_JSON: ${{ secrets.WILL_TELEMETRY_DEFAULTS_JSON }}
         run: cargo build --release -p will-ia -p will-app --target ${{ matrix.target }}
 
       - name: Compilar instalador (com os dois binários embutidos)

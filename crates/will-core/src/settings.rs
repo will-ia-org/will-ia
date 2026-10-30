@@ -746,6 +746,9 @@ pub struct TelemetrySettings {
     pub ship_app_logs: bool,
     /// Envia `will-ia-fatal.log` / `service.err.log` / log do setup no start.
     pub ship_crash_reports: bool,
+    /// Os padrões embutidos na distribuição (`baked_telemetry`) já foram
+    /// aplicados (ou não havia): não reaplicar se o usuário desligar depois.
+    pub seeded: bool,
 }
 impl Default for TelemetrySettings {
     fn default() -> Self {
@@ -760,6 +763,74 @@ impl Default for TelemetrySettings {
             label: String::new(),
             ship_app_logs: true,
             ship_crash_reports: true,
+            seeded: false,
+        }
+    }
+}
+
+/// Telemetria pré-configurada na distribuição: JSON embutido no build
+/// (`WILL_TELEMETRY_DEFAULTS` / `WILL_TELEMETRY_DEFAULTS_JSON` → `build.rs`).
+/// Gerado com `will-ia telemetry-defaults` a partir de uma instalação
+/// configurada. O token aqui é de *ingest* apenas.
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[serde(default)]
+pub struct BakedTelemetry {
+    pub provider: String,
+    pub endpoint: String,
+    pub dataset: String,
+    pub headers: Vec<String>,
+    pub token: String,
+    pub level: String,
+    pub send_traces: bool,
+    pub ship_app_logs: bool,
+    pub ship_crash_reports: bool,
+}
+
+impl BakedTelemetry {
+    /// Copia tudo menos `enabled`/`label`/`seeded` para as configurações.
+    pub fn apply_to(&self, t: &mut TelemetrySettings) {
+        t.provider = if self.provider.is_empty() {
+            "axiom".into()
+        } else {
+            self.provider.clone()
+        };
+        t.endpoint = self.endpoint.clone();
+        t.dataset = self.dataset.clone();
+        t.headers = self.headers.clone();
+        t.level = if self.level.is_empty() {
+            "info".into()
+        } else {
+            self.level.clone()
+        };
+        t.send_traces = self.send_traces;
+        t.ship_app_logs = self.ship_app_logs;
+        t.ship_crash_reports = self.ship_crash_reports;
+    }
+
+    pub fn from_settings(t: &TelemetrySettings, token: &str) -> Self {
+        Self {
+            provider: t.provider.clone(),
+            endpoint: t.endpoint.clone(),
+            dataset: t.dataset.clone(),
+            headers: t.headers.clone(),
+            token: token.to_string(),
+            level: t.level.clone(),
+            send_traces: t.send_traces,
+            ship_app_logs: t.ship_app_logs,
+            ship_crash_reports: t.ship_crash_reports,
+        }
+    }
+}
+
+/// Os padrões embutidos neste binário, se houver.
+pub fn baked_telemetry() -> Option<BakedTelemetry> {
+    let json = option_env!("WILL_TELEMETRY_BAKED")?;
+    match serde_json::from_str::<BakedTelemetry>(json) {
+        Ok(b) if !b.endpoint.trim().is_empty() => Some(b),
+        Ok(_) => None,
+        Err(e) => {
+            tracing::warn!(error = %e, "WILL_TELEMETRY_BAKED inválido; ignorando");
+            None
         }
     }
 }

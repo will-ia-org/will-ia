@@ -14,6 +14,8 @@ pub struct InstanceInfo {
     pub label: parking_lot::RwLock<String>,
     /// Id da instância do servidor, quando este processo é o app (correlação).
     pub peer: parking_lot::RwLock<Option<String>>,
+    /// Atributos extras do resource (ex.: `net.public_ip`).
+    pub extra: parking_lot::RwLock<std::collections::BTreeMap<String, String>>,
     pub started_at: std::time::Instant,
 }
 
@@ -28,12 +30,25 @@ impl InstanceInfo {
             process,
             label: parking_lot::RwLock::new(String::new()),
             peer: parking_lot::RwLock::new(None),
+            extra: parking_lot::RwLock::new(Default::default()),
             started_at: std::time::Instant::now(),
         }
     }
 
     pub fn set_label(&self, label: &str) {
         *self.label.write() = label.trim().to_string();
+    }
+
+    pub fn set_extra(&self, key: &str, value: Option<String>) {
+        let mut e = self.extra.write();
+        match value.filter(|v| !v.is_empty()) {
+            Some(v) => {
+                e.insert(key.to_string(), v);
+            }
+            None => {
+                e.remove(key);
+            }
+        }
     }
 
     pub fn set_peer(&self, id: Option<String>) {
@@ -59,6 +74,9 @@ impl InstanceInfo {
         if let Some(p) = self.peer.read().as_ref() {
             rec.insert("server_instance_id".into(), p.clone().into());
         }
+        for (k, v) in self.extra.read().iter() {
+            rec.insert(k.clone(), v.clone().into());
+        }
     }
 }
 
@@ -76,4 +94,28 @@ pub fn instance_id(data_dir: &Path) -> String {
     let _ = std::fs::create_dir_all(data_dir);
     let _ = std::fs::write(&path, &id);
     id
+}
+
+/// IP público desta máquina (texto puro de serviços públicos), com timeout
+/// curto; `None` sem rede. Usado como rótulo padrão da instância.
+pub async fn detect_public_ip() -> Option<String> {
+    let client = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(5))
+        .build()
+        .ok()?;
+    for url in [
+        "https://api.ipify.org",
+        "https://checkip.amazonaws.com",
+        "https://ifconfig.me/ip",
+    ] {
+        if let Ok(r) = client.get(url).send().await {
+            if let Ok(t) = r.text().await {
+                let t = t.trim();
+                if !t.is_empty() && t.len() < 64 && t.parse::<std::net::IpAddr>().is_ok() {
+                    return Some(t.to_string());
+                }
+            }
+        }
+    }
+    None
 }

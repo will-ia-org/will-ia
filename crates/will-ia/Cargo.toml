@@ -20,6 +20,9 @@ whatsapp-real = ["will-server/whatsapp-real"]
 [dependencies]
 chrono.workspace = true
 will-core.workspace = true
+will-storage.workspace = true
+serde_json.workspace = true
+secrecy.workspace = true
 will-server.workspace = true
 will-platform.workspace = true
 tokio.workspace = true

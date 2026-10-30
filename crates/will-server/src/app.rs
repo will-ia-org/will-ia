@@ -241,7 +241,9 @@ pub async fn start(opts: RunOptions) -> anyhow::Result<ServerHandle> {
     let host = Arc::new(Host::new(state.clone()));
     *state.host.write() = Some(host.clone());
 
+    crate::telemetry::seed_defaults(&state).await;
     crate::telemetry::apply(&state).await;
+    crate::telemetry::spawn_public_ip_probe(state.clone());
     crate::telemetry::ship_crash_reports(&state);
     if let Some(t) = crate::logging::telemetry() {
         t.heartbeat("start");

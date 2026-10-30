@@ -63,6 +63,13 @@ enum Cmd {
         #[arg(long)]
         nav: Option<String>,
     },
+    /// Exporta a telemetria desta instalação (provedor, endpoint, dataset, token…)
+    /// como JSON para embutir numa distribuição (WILL_TELEMETRY_DEFAULTS no build)
+    TelemetryDefaults {
+        /// Grava no arquivo (0600) em vez de imprimir
+        #[arg(long)]
+        out: Option<PathBuf>,
+    },
 }
 
 fn main() -> anyhow::Result<()> {
@@ -154,6 +161,7 @@ fn real_main() -> anyhow::Result<()> {
             }
             Ok(())
         }
+        Some(Cmd::TelemetryDefaults { out }) => telemetry_defaults(out),
         Some(Cmd::Show) => launcher::open_app(&[]).map(|_| ()),
         Some(Cmd::Screenshot { nav }) => {
             let mut args = vec!["screenshot".to_string()];
@@ -333,4 +341,52 @@ fn ignore_signals() {
             });
         }
     }
+}
+
+/// `will-ia telemetry-defaults`: lê as configurações e o token desta instalação
+/// (direto do SQLite e do cofre; o serviço pode estar no ar) e devolve o JSON
+/// que o `build.rs` do will-core embute (`docs/29`).
+fn telemetry_defaults(out: Option<PathBuf>) -> anyhow::Result<()> {
+    let paths = will_core::AppPaths::resolve();
+    let rt = tokio::runtime::Runtime::new()?;
+    let json = rt.block_on(async {
+        let storage = will_storage::Storage::open(&paths.db_path()).await?;
+        let settings = storage.load_settings().await?;
+        let secrets = will_storage::AutoSecretStore::new(
+            paths.secrets_file(),
+            paths.encrypted_secrets_file(),
+            paths.master_key_file(),
+            paths.is_portable(),
+        )
+        .await;
+        let token = will_storage::SecretStore::get(&secrets, will_server::telemetry::TOKEN_KEY)
+            .await
+            .map_err(|e| anyhow::anyhow!(e))?;
+        if !settings.telemetry.enabled {
+            anyhow::bail!(
+                "a telemetria desta instalação está desligada; ligue e salve antes de exportar"
+            );
+        }
+        let token = token
+            .map(|t| secrecy::ExposeSecret::expose_secret(&t).to_string())
+            .unwrap_or_default();
+        if settings.telemetry.provider != "otlp" && token.is_empty() {
+            anyhow::bail!("sem token de telemetria salvo nesta instalação");
+        }
+        let baked = will_core::settings::BakedTelemetry::from_settings(&settings.telemetry, &token);
+        anyhow::Ok(serde_json::to_string_pretty(&baked)?)
+    })?;
+    match out {
+        Some(path) => {
+            std::fs::write(&path, format!("{json}\n"))?;
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::PermissionsExt;
+                std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600))?;
+            }
+            println!("gravado em {}", path.display());
+        }
+        None => println!("{json}"),
+    }
+    Ok(())
 }

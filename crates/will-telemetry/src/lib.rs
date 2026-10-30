@@ -18,7 +18,7 @@ mod otlp;
 mod redact;
 mod shipper;
 
-pub use instance::{instance_id, InstanceInfo};
+pub use instance::{detect_public_ip, instance_id, InstanceInfo};
 pub use layer::TelemetryLayer;
 pub use metrics::{Metrics, Snapshot};
 pub use redact::redact;

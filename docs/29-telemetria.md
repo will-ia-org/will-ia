@@ -76,7 +76,8 @@ mascara `sk-ant-…`, `sk-…`, `xaat-…`, tokens Telegram, `Bearer …`, `ya29
 | `headers` | `[]` | só `otlp`; linhas `Nome: valor` |
 | `send_traces` | `true` | spans como traces |
 | `level` | `info` | nível mínimo enviado (as métricas contam tudo) |
-| `label` | vazio | rótulo da instância |
+| `label` | vazio | rótulo da instância; vazio = IP público detectado |
+| `seeded` | `false` | padrões embutidos já aplicados (interno) |
 | `ship_app_logs` | `true` | o app pede `GET /api/telemetry/client-config` (admin) e envia os próprios logs |
 | `ship_crash_reports` | `true` | arquivos de falha no start |
 
@@ -92,11 +93,34 @@ Presets de outros provedores (provedor `otlp`):
 | New Relic | `https://otlp.nr-data.net` | `api-key: <license>` em `headers` |
 | OpenObserve (self-host) | `https://<host>/api/<org>` | `Authorization: Basic …` em `headers` |
 
+## Distribuição pré-configurada (`baked_telemetry`)
+
+Quem instala o will-ia de um pacote oficial já sai enviando telemetria para o nosso Axiom, sem
+configurar nada — é assim que acompanhamos bugs e uso enquanto outras pessoas usam.
+
+1. Numa instalação configurada e **ligada**, exporte: `will-ia telemetry-defaults --out <arquivo>`
+   (lê o SQLite e o cofre; JSON com provedor, endpoint, dataset, cabeçalhos, nível, flags e o
+   **token de ingest**; arquivo 0600).
+2. No build, `crates/will-core/build.rs` embute o JSON se `WILL_TELEMETRY_DEFAULTS=<arquivo>` ou
+   `WILL_TELEMETRY_DEFAULTS_JSON=<json>` estiver no ambiente (`cargo:rustc-env=WILL_TELEMETRY_BAKED`).
+   No CI de release o JSON vem do segredo do repositório `WILL_TELEMETRY_DEFAULTS_JSON`.
+3. Na primeira execução de um binário assim (`telemetry.seeded == false`), o servidor copia os
+   padrões para as configurações, grava o token no cofre (`telemetry_token`) e liga. Acontece
+   **uma vez**: se o usuário desligar depois, fica desligado. Uma instalação que já tinha
+   telemetria ligada não é sobrescrita.
+4. **Rótulo da instância**: se vazio, o servidor usa o **IP público** detectado no start
+   (`api.ipify.org` → `checkip.amazonaws.com` → `ifconfig.me`, 5 s cada); o IP também vai sempre
+   como atributo `net.public_ip` do resource. Sem rede, o rótulo fica vazio e o `host.name` identifica.
+
+Risco assumido: o token embutido pode ser extraído do binário. Por isso ele é **só de ingest**
+no dataset `will-ia` (não lê nada, não administra); se vazar, revogue no Axiom, gere outro, rode
+o passo 1 de novo e atualize o segredo do repositório (`gh secret set WILL_TELEMETRY_DEFAULTS_JSON`).
+
 ## API
 
 | Método | Rota | Descrição |
 |---|---|---|
-| GET | `/api/telemetry/status` | `enabled`, `configured`, `provider`, `endpoint`, `dataset`, `instance_id`, `host`, `sent`, `failed`, `spooled`, `spool_bytes`, `last_sent_at`, `last_error` |
+| GET | `/api/telemetry/status` | `enabled`, `configured`, `provider`, `endpoint`, `dataset`, `instance_id`, `host`, `label` (efetivo), `public_ip`, `sent`, `failed`, `spooled`, `spool_bytes`, `last_sent_at`, `last_error` |
 | POST | `/api/telemetry/test` | envia um evento agora; `{ ok, message }` |
 | GET | `/api/telemetry/client-config` | destino para o app (`logs_url`, `traces_url`, `headers`, `bearer`, `level`, `label`, `instance_id`); admin |
 

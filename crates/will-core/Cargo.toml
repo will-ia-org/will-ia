@@ -3,6 +3,7 @@ name = "will-core"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
+build = "build.rs"
 
 [dependencies]
 tokio.workspace = true
