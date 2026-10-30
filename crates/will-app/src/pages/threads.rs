@@ -2641,64 +2641,71 @@ fn activity_strip(
             }
         )
     });
-    ui.with_layout(egui::Layout::left_to_right(egui::Align::Min), |ui| {
+    // Layout vertical explícito: a faixa fica no fluxo do chat e o conteúdo
+    // expandido (linha do tempo) empilha abaixo do cabeçalho.
+    ui.horizontal_top(|ui| {
         ui.add_space(4.0);
-        egui::Frame::new()
-            .fill(if open {
-                pal.card_alt
-            } else {
-                egui::Color32::TRANSPARENT
-            })
-            .stroke(egui::Stroke::new(1.0, pal.border.linear_multiply(0.7)))
-            .corner_radius(8.0)
-            .inner_margin(egui::Margin::symmetric(10, 5))
-            .show(ui, |ui| {
-                ui.set_width(ui.available_width() * 0.88);
-                let header = ui.horizontal(|ui| {
-                    ui.spacing_mut().item_spacing.x = 6.0;
-                    let chevron = if open {
-                        crate::icons::EXPAND_MORE
-                    } else {
-                        crate::icons::CHEVRON_RIGHT
-                    };
-                    ui.label(chevron.rich_text().size(14.0).color(pal.text_weak));
-                    ui.label(crate::icons::BUILD.rich_text().size(13.0).color(if failed {
-                        Tone::Danger.color(dark)
-                    } else {
-                        pal.text_weak
-                    }));
-                    let mut parts: Vec<String> = vec![tr("atividade do turno").to_string()];
-                    if tools > 0 {
-                        parts.push(trf("{} ferramenta(s)", &[&tools]));
+        ui.vertical(|ui| {
+            ui.set_width(ui.available_width() * 0.88);
+            egui::Frame::new()
+                .fill(if open {
+                    pal.card_alt
+                } else {
+                    egui::Color32::TRANSPARENT
+                })
+                .stroke(egui::Stroke::new(1.0, pal.border.linear_multiply(0.7)))
+                .corner_radius(8.0)
+                .inner_margin(egui::Margin::symmetric(10, 5))
+                .show(ui, |ui| {
+                    ui.set_width(ui.available_width());
+                    let header = ui.horizontal(|ui| {
+                        ui.spacing_mut().item_spacing.x = 6.0;
+                        let chevron = if open {
+                            crate::icons::EXPAND_MORE
+                        } else {
+                            crate::icons::CHEVRON_RIGHT
+                        };
+                        ui.label(chevron.rich_text().size(14.0).color(pal.text_weak));
+                        ui.label(crate::icons::BUILD.rich_text().size(13.0).color(if failed {
+                            Tone::Danger.color(dark)
+                        } else {
+                            pal.text_weak
+                        }));
+                        let mut parts: Vec<String> = vec![tr("atividade do turno").to_string()];
+                        if tools > 0 {
+                            parts.push(trf("{} ferramenta(s)", &[&tools]));
+                        }
+                        if let Some(secs) = done.finished_secs {
+                            parts.push(format!("{secs} s"));
+                        }
+                        ui.label(
+                            egui::RichText::new(parts.join(" · "))
+                                .size(11.5)
+                                .color(pal.text_weak),
+                        );
+                        if failed {
+                            ui::badge(ui, tr("com falha"), Tone::Danger);
+                        }
+                    });
+                    if header
+                        .response
+                        .interact(egui::Sense::click())
+                        .on_hover_cursor(egui::CursorIcon::PointingHand)
+                        .clicked()
+                    {
+                        open = !open;
+                        ui.ctx().data_mut(|d| d.insert_temp(key, open));
                     }
-                    if let Some(secs) = done.finished_secs {
-                        parts.push(format!("{secs} s"));
-                    }
-                    ui.label(
-                        egui::RichText::new(parts.join(" · "))
-                            .size(11.5)
-                            .color(pal.text_weak),
-                    );
-                    if failed {
-                        ui::badge(ui, tr("com falha"), Tone::Danger);
+                    if open {
+                        ui.add_space(6.0);
+                        ui.vertical(|ui| {
+                            for (idx, item) in done.items.iter().enumerate() {
+                                live_item(ui, pal, cache, dark, idx, item, true);
+                            }
+                        });
                     }
                 });
-                if header
-                    .response
-                    .interact(egui::Sense::click())
-                    .on_hover_cursor(egui::CursorIcon::PointingHand)
-                    .clicked()
-                {
-                    open = !open;
-                    ui.ctx().data_mut(|d| d.insert_temp(key, open));
-                }
-                if open {
-                    ui.add_space(6.0);
-                    for (idx, item) in done.items.iter().enumerate() {
-                        live_item(ui, pal, cache, dark, idx, item, true);
-                    }
-                }
-            });
+        });
     });
     ui.add_space(4.0);
 }
