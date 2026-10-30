@@ -2709,15 +2709,20 @@ fn enter_alpha(at: std::time::Instant) -> f32 {
 }
 
 /// Marcador na linha do tempo: círculo (ou ícone) alinhado ao trilho.
+const MARK_W: f32 = 18.0;
+const MARK_H: f32 = 18.0;
+
 fn timeline_mark(
     ui: &mut egui::Ui,
     color: egui::Color32,
     icon: Option<crate::icons::MaterialIcon>,
     center_y: f32,
 ) {
-    let (r, _) = ui.allocate_exact_size(egui::vec2(18.0, 20.0), egui::Sense::hover());
-    // `center_y` alinha o marcador com a primeira linha do item (cada tipo tem
-    // margem interna diferente).
+    // Em linhas `horizontal` (centralizadas) `center_y = MARK_H / 2` põe o
+    // marcador no eixo do texto; em blocos multilinha, o chamador passa o
+    // centro da primeira linha.
+    let h = MARK_H.max(center_y + MARK_H / 2.0);
+    let (r, _) = ui.allocate_exact_size(egui::vec2(MARK_W, h), egui::Sense::hover());
     let c = egui::pos2(r.center().x, r.top() + center_y);
     // apaga o trilho atrás do marcador
     ui.painter().circle_filled(c, 7.0, ui.visuals().panel_fill);
@@ -2743,10 +2748,20 @@ fn live_item(
     item: &LiveItem,
     finished: bool,
 ) {
+    // Linhas de uma só altura (ferramenta, status, raciocínio) usam `horizontal`
+    // com alinhamento central: marcador e texto ficam na mesma linha por
+    // construção. O bloco de fala (multilinha) alinha o marcador ao centro da
+    // primeira linha, calculado pela altura real da fonte.
     match item {
         LiveItem::Say { text, at } => {
+            let line_h = ui.text_style_height(&egui::TextStyle::Body);
             ui.horizontal_top(|ui| {
-                timeline_mark(ui, pal.accent, Some(crate::icons::CHAT_BUBBLE), 16.0);
+                timeline_mark(
+                    ui,
+                    pal.accent,
+                    Some(crate::icons::CHAT_BUBBLE),
+                    6.0 + line_h / 2.0,
+                );
                 ui.vertical(|ui| say_block(ui, pal, cache, text, enter_alpha(*at)));
             });
         }
@@ -2760,18 +2775,18 @@ fn live_item(
             let alpha = enter_alpha(*at);
             let (icon, short, server) = tool_display(name);
             let (status_color, status_icon) = match result {
-                None => (Tone::Info.color(dark), None),
+                None => (Tone::Warning.color(dark), None),
                 Some((_, false)) => (Tone::Success.color(dark), Some(crate::icons::CHECK_CIRCLE)),
                 Some((_, true)) => (Tone::Danger.color(dark), Some(crate::icons::ERROR)),
             };
             let key = egui::Id::unique(("live-tool-open", idx, name.as_str()));
             let mut open = ui.ctx().data(|d| d.get_temp::<bool>(key)).unwrap_or(false);
-            ui.horizontal_top(|ui| {
-                timeline_mark(ui, status_color, Some(icon), 13.0);
+            ui.vertical(|ui| {
                 ui.scope(|ui| {
                     ui.set_opacity(alpha);
-                    ui.vertical(|ui| {
-                        let row = egui::Frame::new()
+                    let row = ui.horizontal(|ui| {
+                        timeline_mark(ui, status_color, Some(icon), MARK_H / 2.0);
+                        egui::Frame::new()
                             .fill(if open {
                                 pal.card_alt
                             } else {
@@ -2796,7 +2811,6 @@ fn live_item(
                                         );
                                     }
                                     let summary = tool_summary(input);
-                                    // resumo truncado num espaço pequeno; detalhes ao expandir
                                     let right_w = 70.0;
                                     let avail = (ui.available_width() - right_w).max(60.0);
                                     ui.scope(|ui| {
@@ -2861,29 +2875,32 @@ fn live_item(
                                     );
                                 });
                             });
-                        let resp = row
-                            .response
-                            .interact(egui::Sense::click())
-                            .on_hover_cursor(egui::CursorIcon::PointingHand)
-                            .on_hover_text(if open {
-                                tr("recolher detalhes")
-                            } else {
-                                tr("ver entrada e resultado")
-                            });
-                        if resp.clicked() {
-                            open = !open;
-                            ui.ctx().data_mut(|d| d.insert_temp(key, open));
-                        }
-                        if open {
-                            tool_details(ui, pal, dark, input, result.as_ref());
-                        }
                     });
+                    let resp = row
+                        .response
+                        .interact(egui::Sense::click())
+                        .on_hover_cursor(egui::CursorIcon::PointingHand)
+                        .on_hover_text(if open {
+                            tr("recolher detalhes")
+                        } else {
+                            tr("ver entrada e resultado")
+                        });
+                    if resp.clicked() {
+                        open = !open;
+                        ui.ctx().data_mut(|d| d.insert_temp(key, open));
+                    }
+                    if open {
+                        ui.horizontal_top(|ui| {
+                            ui.add_space(MARK_W + 6.0);
+                            ui.vertical(|ui| tool_details(ui, pal, dark, input, result.as_ref()));
+                        });
+                    }
                 });
             });
         }
         LiveItem::Status { text, at } => {
-            ui.horizontal_top(|ui| {
-                timeline_mark(ui, pal.text_weak, None, 9.0);
+            ui.horizontal(|ui| {
+                timeline_mark(ui, pal.text_weak, None, MARK_H / 2.0);
                 ui.scope(|ui| {
                     ui.set_opacity(enter_alpha(*at));
                     ui.add(
@@ -2901,11 +2918,12 @@ fn live_item(
         }
         LiveItem::Think { text, at } => {
             ui.horizontal_top(|ui| {
+                let line_h = ui.text_style_height(&egui::TextStyle::Small);
                 timeline_mark(
                     ui,
                     Tone::Warning.color(dark),
                     Some(crate::icons::PSYCHOLOGY),
-                    10.0,
+                    2.0 + line_h / 2.0,
                 );
                 ui.scope(|ui| {
                     ui.set_opacity(enter_alpha(*at));
