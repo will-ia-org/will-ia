@@ -53,6 +53,12 @@ pub enum EngineEvent {
         merged: Vec<TurnId>,
         result: TurnResult,
     },
+    /// Usuário interrompeu com a fila parada (sem processo vivo): as
+    /// mensagens pendentes foram canceladas sem rodar.
+    Cancelled {
+        thread: ThreadId,
+        turn_ids: Vec<TurnId>,
+    },
     /// Processo morreu com pendências; cada uma vira um Dropped.
     Dropped {
         thread: ThreadId,

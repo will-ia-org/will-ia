@@ -137,6 +137,9 @@ pub struct Runner {
     raw_log: Option<std::fs::File>,
     resumed: bool,
     thread_env: ThreadEnv,
+    /// `interrupt` escrito no stdin e ainda sem `result`: o próximo `result`
+    /// é do turno interrompido (marca `interrupted`, sem texto de diagnóstico).
+    interrupt_sent: bool,
 }
 
 impl Runner {
@@ -167,6 +170,7 @@ impl Runner {
             raw_log: None,
             resumed: false,
             thread_env,
+            interrupt_sent: false,
         };
         tokio::spawn(runner.run());
         handle
@@ -340,18 +344,31 @@ impl Runner {
                 });
             }
             RunnerCommand::Interrupt => {
-                if self.proc_.is_some() {
+                if self.proc_.is_some() && self.pending.iter().any(|p| p.accepted) {
                     let span = self.current_turn_span();
                     match self.write_stdin(&interrupt_line()).await {
-                        Ok(()) => span.in_scope(|| {
-                            tracing::info!(thread_id = %self.thread, "interrupção enviada ao claude")
-                        }),
+                        Ok(()) => {
+                            self.interrupt_sent = true;
+                            span.in_scope(|| {
+                                tracing::info!(thread_id = %self.thread, "interrupção enviada ao claude")
+                            })
+                        }
                         Err(e) => span.in_scope(|| {
                             tracing::warn!(thread_id = %self.thread, error = %e, "falha ao enviar interrupção")
                         }),
                     }
+                } else if !self.pending.is_empty() {
+                    // Nada rodando ainda (processo subindo/sem processo): cancela a
+                    // fila em vez de ignorar — senão o botão "fica vermelho e nada acontece".
+                    let ids: Vec<TurnId> = self.pending.drain(..).map(|p| p.turn_id).collect();
+                    tracing::info!(thread_id = %self.thread, n = ids.len(), "interrupção: fila cancelada sem processo em turno");
+                    self.sync_shared();
+                    self.emit(EngineEvent::Cancelled {
+                        thread: self.thread,
+                        turn_ids: ids,
+                    });
                 } else {
-                    tracing::debug!(thread_id = %self.thread, "interrupção ignorada: sem processo vivo");
+                    tracing::debug!(thread_id = %self.thread, "interrupção ignorada: sem processo vivo nem fila");
                 }
             }
             RunnerCommand::Reconfigure(cfg) => {
@@ -686,9 +703,17 @@ impl Runner {
                 });
             }
             StreamLine::Result {
-                result,
+                mut result,
                 stale_session,
             } => {
+                if self.interrupt_sent {
+                    // `result` do turno interrompido: sem texto de diagnóstico, sem
+                    // contar como erro do modelo.
+                    self.interrupt_sent = false;
+                    result.interrupted = true;
+                    result.is_error = true;
+                    result.text.clear();
+                }
                 if stale_session {
                     self.current_turn_span().in_scope(|| {
                         tracing::warn!(thread_id = %self.thread, "result indica sessão expirada; aguardando exit para recomeçar")

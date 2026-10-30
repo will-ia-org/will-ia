@@ -316,6 +316,9 @@ pub struct ThreadsPage {
     /// Eventos de turnos antigos sendo baixados do servidor (id do turno → tarefa),
     /// para reconstruir a faixa de atividade retroativamente.
     loading_events: HashMap<String, Task<Value>>,
+    /// "Interromper" clicado e ainda sem o servidor fechar o turno (botão vira
+    /// "interrompendo…"); expira sozinho em 20 s.
+    interrupting: HashMap<ThreadId, std::time::Instant>,
     /// Triggers por thread alvo (id → "nome (fonte)"), para o ícone de raio.
     triggers: Loader<Value>,
     trigger_map: HashMap<String, Vec<String>>,
@@ -846,6 +849,7 @@ impl ThreadsPage {
                 l.push(delta);
             }
             Event::TurnFinished { thread_id, .. } | Event::TurnFailed { thread_id, .. } => {
+                self.interrupting.remove(thread_id);
                 if let Some(mut l) = self.live.remove(thread_id) {
                     l.flush_text();
                     l.finished_secs = Some(l.started.map(|s| s.elapsed().as_secs()).unwrap_or(0));
@@ -1333,9 +1337,11 @@ impl ThreadsPage {
             "Reset" => cx
                 .svc
                 .call(move |c| async move { c.reset_thread(&sid).await }),
-            "Interromper" => cx
-                .svc
-                .call(move |c| async move { c.interrupt_thread(&sid).await }),
+            "Interromper" => {
+                self.interrupting.insert(id, std::time::Instant::now());
+                cx.svc
+                    .call(move |c| async move { c.interrupt_thread(&sid).await })
+            }
             _ => return,
         };
         self.action_task = Some((what, t));
@@ -1755,7 +1761,9 @@ impl ThreadsPage {
                                 );
                             }
                         }
-                        if is_err {
+                        if ui::s(turn, "error_kind") == "interrupted" {
+                            interrupted_card(ui, pal);
+                        } else if is_err {
                             let msg = if text.is_empty() {
                                 ui::s(turn, "error_kind")
                             } else {
@@ -2103,20 +2111,35 @@ impl ThreadsPage {
                             // Interromper: só com turno em execução, em vermelho
                             // (à esquerda de Anexar; manda o interrupt ao claude).
                             if t.pending > 0 || has_live {
+                                let interrupting = self
+                                    .interrupting
+                                    .get(&t.id)
+                                    .is_some_and(|at| at.elapsed().as_secs() < 20);
                                 let b = egui::Button::new(
-                                    egui::RichText::new(tr("Interromper"))
-                                        .color(egui::Color32::WHITE),
+                                    egui::RichText::new(if interrupting {
+                                        tr("interrompendo…")
+                                    } else {
+                                        tr("Interromper")
+                                    })
+                                    .color(egui::Color32::WHITE),
                                 )
-                                .fill(egui::Color32::from_rgb(200, 60, 60))
+                                .fill(if interrupting {
+                                    egui::Color32::from_rgb(200, 60, 60).linear_multiply(0.55)
+                                } else {
+                                    egui::Color32::from_rgb(200, 60, 60)
+                                })
                                 .min_size(egui::vec2(96.0, 34.0));
                                 if ui
-                                    .add(b)
+                                    .add_enabled(!interrupting, b)
                                     .on_hover_text(tr(
-                                        "Para o turno atual (o processo continua vivo).",
+                                        "Para o turno atual (o processo continua vivo); se a mensagem ainda estiver na fila, cancela a fila.",
                                     ))
                                     .clicked()
                                 {
                                     self.action(cx, t.id, "Interromper");
+                                }
+                                if interrupting {
+                                    ui.ctx().request_repaint_after(std::time::Duration::from_millis(300));
                                 }
                             }
                         });
@@ -2651,6 +2674,34 @@ fn assistant_card(
                             }
                         });
                     });
+                });
+            });
+    });
+    ui.add_space(8.0);
+}
+
+/// Turno interrompido pelo usuário: cartão neutro, não é erro do modelo.
+fn interrupted_card(ui: &mut egui::Ui, pal: &ui::Palette) {
+    ui.horizontal(|ui| {
+        ui.add_space(4.0);
+        egui::Frame::new()
+            .fill(pal.card_alt)
+            .stroke(egui::Stroke::new(1.0, pal.border))
+            .corner_radius(10.0)
+            .inner_margin(egui::Margin::symmetric(12, 6))
+            .show(ui, |ui| {
+                ui.horizontal(|ui| {
+                    ui.label(
+                        crate::icons::CLOSE
+                            .rich_text()
+                            .size(14.0)
+                            .color(pal.text_weak),
+                    );
+                    ui.label(
+                        egui::RichText::new(tr("Turno interrompido por você."))
+                            .small()
+                            .color(pal.text_weak),
+                    );
                 });
             });
     });

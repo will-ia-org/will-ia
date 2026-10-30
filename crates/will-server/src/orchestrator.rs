@@ -881,7 +881,13 @@ async fn handle_engine_event(state: &Arc<AppState>, ev: EngineEvent) {
         } => {
             let span = tracing::info_span!("turn", thread_id = %thread, turn_id = %turn_id);
             async {
-            if let Err(e) = storage.finish_turn(turn_id, &result, None).await {
+            if let Err(e) = storage
+                .finish_turn(
+                    turn_id,
+                    &result,
+                    if result.interrupted { Some("interrupted") } else { None },
+                )
+                .await {
                 tracing::error!(error = %e, "turno concluído mas não gravado no banco");
             }
             for m in &merged {
@@ -895,6 +901,7 @@ async fn handle_engine_event(state: &Arc<AppState>, ev: EngineEvent) {
                     model: None,
                     session_id: None,
                     usage: None,
+                    interrupted: false,
                 };
                 if let Err(e) = storage.finish_turn(*m, &merged_res, Some("merged")).await {
                     tracing::warn!(merged_turn_id = %m, error = %e, "turno mesclado não gravado");
@@ -953,6 +960,29 @@ async fn handle_engine_event(state: &Arc<AppState>, ev: EngineEvent) {
             .instrument(span)
             .await;
         }
+        EngineEvent::Cancelled { thread, turn_ids } => {
+            let res = TurnResult {
+                text: String::new(),
+                is_error: true,
+                cost_usd: None,
+                duration_ms: None,
+                model: None,
+                session_id: None,
+                usage: None,
+                interrupted: true,
+            };
+            for tid in &turn_ids {
+                let _ = storage.finish_turn(*tid, &res, Some("interrupted")).await;
+                state.bus.emit(Event::TurnFailed {
+                    thread_id: thread,
+                    turn_id: Some(*tid),
+                    error: "interrompido pelo usuário".into(),
+                    kind: "interrupted".into(),
+                });
+            }
+            let _ = storage.set_thread_status(thread, ThreadStatus::Idle).await;
+            emit_thread_updated(state, thread).await;
+        }
         EngineEvent::Dropped {
             thread,
             turn_id,
@@ -969,6 +999,7 @@ async fn handle_engine_event(state: &Arc<AppState>, ev: EngineEvent) {
                 model: None,
                 session_id: None,
                 usage: None,
+                    interrupted: false,
             };
             if let Err(e) = storage.finish_turn(turn_id, &res, Some("dropped")).await {
                 tracing::error!(error = %e, "turno descartado não gravado no banco");

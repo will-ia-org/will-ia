@@ -294,6 +294,7 @@ pub fn parse_line(line: &str) -> StreamLine {
                         .and_then(|s| s.as_str())
                         .map(|s| s.to_string()),
                     usage: v.get("usage").cloned(),
+                    interrupted: false,
                 },
                 stale_session: stale,
             }

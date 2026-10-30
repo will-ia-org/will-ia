@@ -211,4 +211,8 @@ pub struct TurnResult {
     pub model: Option<String>,
     pub session_id: Option<String>,
     pub usage: Option<serde_json::Value>,
+    /// O turno foi interrompido pelo usuário (`interrupt` no stdin ou fila
+    /// cancelada): não é falha do modelo; a UI mostra um cartão neutro.
+    #[serde(default)]
+    pub interrupted: bool,
 }
