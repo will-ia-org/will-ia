@@ -64,6 +64,8 @@ struct LiveTurn {
     /// Texto em streaming ainda não fechado em bloco (`TextDelta`).
     text: String,
     started: Option<std::time::Instant>,
+    /// Duração total quando o turno terminou (cartão vira faixa recolhida).
+    finished_secs: Option<u64>,
 }
 
 impl LiveTurn {
@@ -289,6 +291,9 @@ pub struct ThreadsPage {
     /// Roteiros/áudios já gerados por turno (memória + disco): ouvir de novo não
     /// refaz resumo nem TTS.
     speak_cache: crate::speak_cache::SpeakCache,
+    /// Linhas do tempo de turnos já concluídos (id do turno → atividade), mantidas
+    /// em memória para a faixa recolhida acima da resposta.
+    done_live: HashMap<String, LiveTurn>,
     /// Triggers por thread alvo (id → "nome (fonte)"), para o ícone de raio.
     triggers: Loader<Value>,
     trigger_map: HashMap<String, Vec<String>>,
@@ -319,7 +324,8 @@ fn title_of(t: &ThreadSummary) -> String {
 
 fn status_tone(t: &ThreadSummary) -> Tone {
     match t.status {
-        ThreadStatus::Running => Tone::Info,
+        // processando: âmbar (a lista/cabeçalho usam a bolinha pulsante)
+        ThreadStatus::Running => Tone::Warning,
         ThreadStatus::Live => Tone::Success,
         ThreadStatus::Error => Tone::Danger,
         ThreadStatus::Archived => Tone::Neutral,
@@ -753,7 +759,15 @@ impl ThreadsPage {
                 l.push(delta);
             }
             Event::TurnFinished { thread_id, .. } | Event::TurnFailed { thread_id, .. } => {
-                self.live.remove(thread_id);
+                if let Some(mut l) = self.live.remove(thread_id) {
+                    l.flush_text();
+                    l.finished_secs = Some(l.started.map(|s| s.elapsed().as_secs()).unwrap_or(0));
+                    if let Some(tid) = l.turn_id.clone() {
+                        if !l.items.is_empty() {
+                            self.done_live.insert(tid, l);
+                        }
+                    }
+                }
                 if self.selected == Some(*thread_id) {
                     self.turns.loaded_at = None;
                 }
@@ -1261,7 +1275,11 @@ impl ThreadsPage {
                             ui.set_width(ui.available_width());
                             ui.spacing_mut().item_spacing = egui::vec2(6.0, 0.0);
                             ui.horizontal(|ui| {
-                                ui::dot(ui, status_tone(t));
+                                if self.live.contains_key(&t.id) || t.pending > 0 || t.status == ThreadStatus::Running {
+                                    ui::pulse_dot(ui);
+                                } else {
+                                    ui::dot(ui, status_tone(t));
+                                }
                                 origin_icon(ui, pal, t);
                                 if let Some(names) = self.trigger_map.get(&t.id.to_string()) {
                                     trigger_icon(ui, pal, names);
@@ -1405,6 +1423,9 @@ impl ThreadsPage {
                     // Título truncado: um nome longo não pode empurrar o "i" nem
                     // invadir os botões alinhados à direita.
                     let w = (ui.available_width() - 490.0).max(160.0);
+                    if self.live.contains_key(&t.id) || t.pending > 0 {
+                        ui::pulse_dot(ui);
+                    }
                     origin_icon(ui, pal, t);
                     if let Some(names) = self.trigger_map.get(&t.id.to_string()) {
                         trigger_icon(ui, pal, names);
@@ -1584,6 +1605,10 @@ impl ThreadsPage {
                         }
                         let text = ui::s(turn, "text");
                         let is_err = ui::b(turn, "is_error");
+                        // atividade do turno (ferramentas, falas intermediárias), recolhida
+                        if let Some(done) = self.done_live.get(&ui::s(turn, "id")) {
+                            activity_strip(ui, pal, &mut self.md_cache, done, &ui::s(turn, "id"));
+                        }
                         if is_err {
                             let msg = if text.is_empty() {
                                 ui::s(turn, "error_kind")
@@ -2523,9 +2548,10 @@ fn live_card(
     let phase = ((t * 2.0) as usize) % 4;
     let dots = ".".repeat(phase);
     let dark = ui.visuals().dark_mode;
+    let amber = Tone::Warning.color(dark);
     egui::Frame::new()
         .fill(pal.card)
-        .stroke(egui::Stroke::new(1.0, pal.accent.linear_multiply(0.55)))
+        .stroke(egui::Stroke::new(1.0, amber.linear_multiply(0.7)))
         .corner_radius(egui::CornerRadius {
             nw: 3,
             ne: 12,
@@ -2535,16 +2561,9 @@ fn live_card(
         .inner_margin(egui::Margin::symmetric(14, 10))
         .show(ui, |ui| {
             ui.set_width(ui.available_width() * 0.88);
-            // ---- cabeçalho: pulso, título, tempo, contadores ----
+            // ---- cabeçalho: pulso âmbar, título, tempo, contadores ----
             ui.horizontal(|ui| {
-                let (r, _) = ui.allocate_exact_size(egui::vec2(12.0, 12.0), egui::Sense::hover());
-                let pulse = 0.5 + 0.5 * (t * 4.0).sin() as f32;
-                ui.painter().circle_filled(
-                    r.center(),
-                    3.0 + 2.5 * pulse,
-                    pal.accent.linear_multiply(0.35),
-                );
-                ui.painter().circle_filled(r.center(), 3.0, pal.accent);
+                ui::pulse_dot(ui);
                 ui.label(
                     egui::RichText::new(trf("Claude está trabalhando{}", &[&dots]))
                         .font(ui::medium(13.0))
@@ -2580,7 +2599,7 @@ fn live_card(
             let line_color = pal.border;
             let start_y = ui.cursor().top();
             for (idx, item) in live.items.iter().enumerate() {
-                live_item(ui, pal, cache, dark, idx, item);
+                live_item(ui, pal, cache, dark, idx, item, false);
             }
             // texto em streaming (ainda aberto)
             if !live.text.is_empty() {
@@ -2600,6 +2619,90 @@ fn live_card(
     ui.add_space(8.0);
 }
 
+/// Faixa recolhida acima da resposta com a atividade do turno concluído
+/// (ferramentas, falas intermediárias); clique expande a linha do tempo.
+fn activity_strip(
+    ui: &mut egui::Ui,
+    pal: &ui::Palette,
+    cache: &mut egui_commonmark::CommonMarkCache,
+    done: &LiveTurn,
+    turn_id: &str,
+) {
+    let dark = ui.visuals().dark_mode;
+    let key = egui::Id::unique(("activity-open", turn_id));
+    let mut open = ui.ctx().data(|d| d.get_temp::<bool>(key)).unwrap_or(false);
+    let tools = done.tools_total();
+    let failed = done.items.iter().any(|i| {
+        matches!(
+            i,
+            LiveItem::Tool {
+                result: Some((_, true)),
+                ..
+            }
+        )
+    });
+    ui.with_layout(egui::Layout::left_to_right(egui::Align::Min), |ui| {
+        ui.add_space(4.0);
+        egui::Frame::new()
+            .fill(if open {
+                pal.card_alt
+            } else {
+                egui::Color32::TRANSPARENT
+            })
+            .stroke(egui::Stroke::new(1.0, pal.border.linear_multiply(0.7)))
+            .corner_radius(8.0)
+            .inner_margin(egui::Margin::symmetric(10, 5))
+            .show(ui, |ui| {
+                ui.set_width(ui.available_width() * 0.88);
+                let header = ui.horizontal(|ui| {
+                    ui.spacing_mut().item_spacing.x = 6.0;
+                    let chevron = if open {
+                        crate::icons::EXPAND_MORE
+                    } else {
+                        crate::icons::CHEVRON_RIGHT
+                    };
+                    ui.label(chevron.rich_text().size(14.0).color(pal.text_weak));
+                    ui.label(crate::icons::BUILD.rich_text().size(13.0).color(if failed {
+                        Tone::Danger.color(dark)
+                    } else {
+                        pal.text_weak
+                    }));
+                    let mut parts: Vec<String> = vec![tr("atividade do turno").to_string()];
+                    if tools > 0 {
+                        parts.push(trf("{} ferramenta(s)", &[&tools]));
+                    }
+                    if let Some(secs) = done.finished_secs {
+                        parts.push(format!("{secs} s"));
+                    }
+                    ui.label(
+                        egui::RichText::new(parts.join(" · "))
+                            .size(11.5)
+                            .color(pal.text_weak),
+                    );
+                    if failed {
+                        ui::badge(ui, tr("com falha"), Tone::Danger);
+                    }
+                });
+                if header
+                    .response
+                    .interact(egui::Sense::click())
+                    .on_hover_cursor(egui::CursorIcon::PointingHand)
+                    .clicked()
+                {
+                    open = !open;
+                    ui.ctx().data_mut(|d| d.insert_temp(key, open));
+                }
+                if open {
+                    ui.add_space(6.0);
+                    for (idx, item) in done.items.iter().enumerate() {
+                        live_item(ui, pal, cache, dark, idx, item, true);
+                    }
+                }
+            });
+    });
+    ui.add_space(4.0);
+}
+
 /// Opacidade de entrada (0→1 em ~280 ms) a partir do instante em que o item chegou.
 fn enter_alpha(at: std::time::Instant) -> f32 {
     (at.elapsed().as_secs_f32() / 0.28).clamp(0.0, 1.0)
@@ -2610,9 +2713,12 @@ fn timeline_mark(
     ui: &mut egui::Ui,
     color: egui::Color32,
     icon: Option<crate::icons::MaterialIcon>,
+    center_y: f32,
 ) {
     let (r, _) = ui.allocate_exact_size(egui::vec2(18.0, 20.0), egui::Sense::hover());
-    let c = egui::pos2(r.center().x, r.top() + 10.0);
+    // `center_y` alinha o marcador com a primeira linha do item (cada tipo tem
+    // margem interna diferente).
+    let c = egui::pos2(r.center().x, r.top() + center_y);
     // apaga o trilho atrás do marcador
     ui.painter().circle_filled(c, 7.0, ui.visuals().panel_fill);
     match icon {
@@ -2635,11 +2741,12 @@ fn live_item(
     dark: bool,
     idx: usize,
     item: &LiveItem,
+    finished: bool,
 ) {
     match item {
         LiveItem::Say { text, at } => {
             ui.horizontal_top(|ui| {
-                timeline_mark(ui, pal.accent, Some(crate::icons::CHAT_BUBBLE));
+                timeline_mark(ui, pal.accent, Some(crate::icons::CHAT_BUBBLE), 16.0);
                 ui.vertical(|ui| say_block(ui, pal, cache, text, enter_alpha(*at)));
             });
         }
@@ -2660,7 +2767,7 @@ fn live_item(
             let key = egui::Id::unique(("live-tool-open", idx, name.as_str()));
             let mut open = ui.ctx().data(|d| d.get_temp::<bool>(key)).unwrap_or(false);
             ui.horizontal_top(|ui| {
-                timeline_mark(ui, status_color, Some(icon));
+                timeline_mark(ui, status_color, Some(icon), 13.0);
                 ui.scope(|ui| {
                     ui.set_opacity(alpha);
                     ui.vertical(|ui| {
@@ -2707,6 +2814,13 @@ fn live_item(
                                     ui.with_layout(
                                         egui::Layout::right_to_left(egui::Align::Center),
                                         |ui| match result {
+                                            None if finished => {
+                                                ui.label(
+                                                    egui::RichText::new(tr("sem resultado"))
+                                                        .size(10.5)
+                                                        .color(pal.text_weak),
+                                                );
+                                            }
                                             None => {
                                                 ui.add(egui::Spinner::new().size(12.0));
                                                 ui.label(
@@ -2769,7 +2883,7 @@ fn live_item(
         }
         LiveItem::Status { text, at } => {
             ui.horizontal_top(|ui| {
-                timeline_mark(ui, pal.text_weak, None);
+                timeline_mark(ui, pal.text_weak, None, 9.0);
                 ui.scope(|ui| {
                     ui.set_opacity(enter_alpha(*at));
                     ui.add(
@@ -2791,6 +2905,7 @@ fn live_item(
                     ui,
                     Tone::Warning.color(dark),
                     Some(crate::icons::PSYCHOLOGY),
+                    10.0,
                 );
                 ui.scope(|ui| {
                     ui.set_opacity(enter_alpha(*at));

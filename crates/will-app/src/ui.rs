@@ -505,6 +505,24 @@ pub fn dot(ui: &mut Ui, tone: Tone) {
         .circle_filled(rect.center(), 4.0, tone.color(ui.visuals().dark_mode));
 }
 
+/// Bolinha **pulsante** (anel que respira em volta do ponto): estado "em
+/// processamento". Usa a cor âmbar de `Tone::Warning`; pede repaint contínuo.
+pub fn pulse_dot(ui: &mut Ui) {
+    let dark = ui.visuals().dark_mode;
+    let color = Tone::Warning.color(dark);
+    let (rect, _) = ui.allocate_exact_size(egui::vec2(10.0, 10.0), egui::Sense::hover());
+    let t = ui.input(|i| i.time);
+    let pulse = 0.5 + 0.5 * (t * 4.0).sin() as f32;
+    ui.painter().circle_filled(
+        rect.center(),
+        3.0 + 3.0 * pulse,
+        color.linear_multiply(0.30),
+    );
+    ui.painter().circle_filled(rect.center(), 4.0, color);
+    ui.ctx()
+        .request_repaint_after(std::time::Duration::from_millis(50));
+}
+
 /// Interruptor estilo "switch".
 pub fn toggle(ui: &mut Ui, on: &mut bool) -> egui::Response {
     let size = egui::vec2(44.0, 24.0);
