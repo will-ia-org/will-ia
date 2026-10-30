@@ -279,6 +279,7 @@ async fn handoff_flow_against_mock_server() {
             model: None,
             session_id: None,
             usage: None,
+            interrupted: false,
         },
     });
     let item = expect_type(&mut in_rx, "conversation.item.create").await;
@@ -397,6 +398,7 @@ async fn handoff_flow_against_mock_server() {
             model: None,
             session_id: None,
             usage: None,
+            interrupted: false,
         },
     });
     let res = tokio::time::timeout(Duration::from_millis(300), async {
@@ -483,6 +485,7 @@ async fn brain_result_after_stop_becomes_notification() {
             model: None,
             session_id: None,
             usage: None,
+            interrupted: false,
         },
     });
     let ev = wait_event(&mut events, |e| matches!(e, Event::Notification { .. })).await;
