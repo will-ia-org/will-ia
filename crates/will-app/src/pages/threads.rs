@@ -2687,10 +2687,7 @@ fn activity_strip(
                             ui::badge(ui, tr("com falha"), Tone::Danger);
                         }
                     });
-                    if header
-                        .response
-                        .interact(egui::Sense::click())
-                        .on_hover_cursor(egui::CursorIcon::PointingHand)
+                    if full_row_click(ui, &header.response.rect, ("activity-hdr", turn_id))
                         .clicked()
                     {
                         open = !open;
@@ -2708,6 +2705,23 @@ fn activity_strip(
         });
     });
     ui.add_space(4.0);
+}
+
+/// Área de clique que cobre a **linha inteira** (toda a largura do `ui`) na
+/// altura do conteúdo desenhado — o `InnerResponse` de um `horizontal` só
+/// cobre o que foi desenhado, e deixava a maior parte da linha sem reação.
+fn full_row_click(
+    ui: &mut egui::Ui,
+    drawn: &egui::Rect,
+    salt: impl std::hash::Hash,
+) -> egui::Response {
+    let full = ui.max_rect();
+    let rect = egui::Rect::from_min_max(
+        egui::pos2(full.left(), drawn.top()),
+        egui::pos2(full.right(), drawn.bottom()),
+    );
+    ui.interact(rect, ui.id().with(salt), egui::Sense::click())
+        .on_hover_cursor(egui::CursorIcon::PointingHand)
 }
 
 /// Opacidade de entrada (0→1 em ~280 ms) a partir do instante em que o item chegou.
@@ -2883,10 +2897,7 @@ fn live_item(
                                 });
                             });
                     });
-                    let resp = row
-                        .response
-                        .interact(egui::Sense::click())
-                        .on_hover_cursor(egui::CursorIcon::PointingHand)
+                    let resp = full_row_click(ui, &row.response.rect, ("tool-row", idx))
                         .on_hover_text(if open {
                             tr("recolher detalhes")
                         } else {
