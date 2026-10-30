@@ -126,7 +126,7 @@ o passo 1 de novo e atualize o segredo do repositório (`gh secret set WILL_TELE
 
 ## Dashboard "will-ia — Operação" (Axiom)
 
-Criado em 2026-10-30 na org `will-ia` (`app.axiom.co/will-ia-1dhc/dashboards`), 14 painéis: instâncias
+Criado em 2026-10-30 na org `will-ia` (`app.axiom.co/will-ia-1dhc/dashboards`), 17 painéis: instalações (servidores, por SO),
 ativas, turnos, erros e avisos (indicadores); eventos por nível; erros/avisos por módulo; uso por módulo
 e spans por tipo (pizzas); mensagens por canal; duração dos turnos p50/p95; custo Claude por instância;
 ferramentas mais chamadas; instâncias (última atividade, versão, IP); quedas e relatórios de falha.
