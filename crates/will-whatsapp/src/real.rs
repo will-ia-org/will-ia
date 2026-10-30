@@ -18,6 +18,7 @@ use std::path::{Path, PathBuf};
 use std::str::FromStr;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
+use std::time::Instant;
 use tokio::sync::mpsc;
 use whatsapp_rust::bot::{Bot, BotHandle};
 use whatsapp_rust::buffa;
@@ -156,7 +157,7 @@ impl WhatsAppBackend for RealBackend {
         match will_storage::whatsapp::read_lid_mappings(&self.store_path).await {
             Ok(v) => v,
             Err(e) => {
-                tracing::debug!(error = %e, "lid_pn_mapping indisponível");
+                tracing::debug!(account_id = %self.shared.account_id, error = %e, "lid_pn_mapping indisponível");
                 vec![]
             }
         }
@@ -176,11 +177,13 @@ impl WhatsAppBackend for RealBackend {
             let client = self.client.lock().clone();
             if let Some(c) = client {
                 if !c.is_connected() {
+                    tracing::info!(account_id = %self.shared.account_id, "sessão já iniciada; reconexão imediata");
                     c.reconnect_immediately().await;
                 }
             }
             return Ok(());
         }
+        tracing::info!(account_id = %self.shared.account_id, pairing_by_code = pair_phone.is_some(), "iniciando sessão whatsapp-rust");
         std::fs::create_dir_all(&self.dir)
             .map_err(|e| format!("criar {}: {e}", self.dir.display()))?;
         self.secure_files();
@@ -214,6 +217,7 @@ impl WhatsAppBackend for RealBackend {
     async fn disconnect(&self) -> Result<(), String> {
         let handle = self.handle.lock().await.take();
         if let Some(h) = handle {
+            tracing::info!(account_id = %self.shared.account_id, "encerrando sessão whatsapp-rust");
             h.shutdown().await;
         }
         *self.client.lock() = None;
@@ -225,6 +229,7 @@ impl WhatsAppBackend for RealBackend {
         let client = self.client.lock().clone();
         if let Some(c) = client {
             if c.is_connected() {
+                tracing::info!(account_id = %self.shared.account_id, "logout remoto do WhatsApp");
                 c.logout().await;
             }
         }
@@ -260,7 +265,7 @@ impl WhatsAppBackend for RealBackend {
             }
             None => {
                 if quote_message_id.is_some() {
-                    tracing::debug!("reply_to fora do cache; enviando sem citação");
+                    tracing::debug!(account_id = %self.shared.account_id, "reply_to fora do cache; enviando sem citação");
                 }
                 wa::Message::text(text)
             }
@@ -292,10 +297,16 @@ impl WhatsAppBackend for RealBackend {
             "audio" => MediaType::Audio,
             _ => MediaType::Document,
         };
+        let bytes = data.len();
+        let started = Instant::now();
         let upload = client
             .upload(data, media_type, UploadOptions::new())
             .await
-            .map_err(|e| format!("upload: {e}"))?;
+            .map_err(|e| {
+                tracing::warn!(account_id = %self.shared.account_id, bytes, error = %e, "upload de mídia falhou");
+                format!("upload: {e}")
+            })?;
+        tracing::debug!(account_id = %self.shared.account_id, bytes, class, duration_ms = started.elapsed().as_millis() as u64, "mídia enviada ao CDN");
         let caption = caption.map(str::to_string);
         let message = match class {
             "image" => image_message(
@@ -355,6 +366,7 @@ impl WhatsAppBackend for RealBackend {
             .map
             .get(message_id)
             .map(|c| Arc::clone(&c.message));
+        let cached_hit = cached.is_some();
         let (bytes, mime, name) = if let Some(msg) = cached {
             let base = msg.get_base_message();
             let (dl, mime, name): (&dyn Downloadable, Option<String>, Option<String>) =
@@ -394,6 +406,7 @@ impl WhatsAppBackend for RealBackend {
                 "mídia indisponível: mensagem fora do cache e sem referência de download".into(),
             );
         };
+        tracing::debug!(account_id = %self.shared.account_id, msg_id = %message_id, bytes = bytes.len(), from_cache = cached_hit, "mídia baixada do CDN");
         let ext = ext_for_mime(mime.as_deref().unwrap_or(""));
         let safe_id = sanitize(message_id);
         let file = match name.as_deref().map(sanitize).filter(|n| !n.is_empty()) {
@@ -557,7 +570,10 @@ impl WhatsAppBackend for RealBackend {
         let upload = client
             .upload(data, MediaType::Audio, UploadOptions::new())
             .await
-            .map_err(|e| format!("upload: {e}"))?;
+            .map_err(|e| {
+                tracing::warn!(account_id = %self.shared.account_id, error = %e, "upload de voz falhou");
+                format!("upload: {e}")
+            })?;
         let message = audio_message(
             upload,
             AudioOptions {
@@ -665,18 +681,21 @@ impl Shared {
                 code: c.code.clone(),
             }),
             WaEvent::Connected(_) => {
+                tracing::info!(account_id = %self.account_id, "whatsapp-rust: conectado");
                 self.connected.store(true, Ordering::SeqCst);
                 let me = me_json(&client);
                 *self.me.lock() = Some(me.clone());
                 out.push(BackendEvent::Connected { me });
             }
             WaEvent::Disconnected(d) => {
+                tracing::warn!(account_id = %self.account_id, reason = %d.reason, "whatsapp-rust: desconectado");
                 self.connected.store(false, Ordering::SeqCst);
                 out.push(BackendEvent::Disconnected {
                     reason: d.reason.to_string(),
                 });
             }
             WaEvent::LoggedOut(_) => {
+                tracing::warn!(account_id = %self.account_id, "whatsapp-rust: sessão deslogada");
                 self.connected.store(false, Ordering::SeqCst);
                 out.push(BackendEvent::LoggedOut);
             }
@@ -685,6 +704,7 @@ impl Shared {
             WaEvent::StreamReplaced(_) => {
                 self.connected.store(false, Ordering::SeqCst);
                 tracing::warn!(
+                    account_id = %self.account_id,
                     "sessão do WhatsApp substituída por outra conexão (conflict=replaced)"
                 );
                 out.push(BackendEvent::Disconnected {
@@ -761,6 +781,7 @@ impl Shared {
         }
         for ev in out {
             if self.tx.send((self.account_id.clone(), ev)).await.is_err() {
+                tracing::warn!(account_id = %self.account_id, "canal de eventos do módulo fechado; evento descartado");
                 break;
             }
         }
@@ -772,15 +793,19 @@ impl Shared {
             .map(|j| j.to_non_ad_string())
             .unwrap_or_default();
         let mut stream = h.stream();
+        let started = Instant::now();
+        let mut conversations = 0usize;
+        let mut messages = 0usize;
         loop {
             let conv = match stream.next_conversation() {
                 Ok(Some(c)) => c,
                 Ok(None) => break,
                 Err(e) => {
-                    tracing::warn!("history sync: {e}");
+                    tracing::warn!(account_id = %self.account_id, conversations, error = %e, "history sync falhou");
                     break;
                 }
             };
+            conversations += 1;
             let chat_jid = Jid::from_str(&conv.id)
                 .map(|j| j.to_non_ad_string())
                 .unwrap_or_else(|_| conv.id.clone());
@@ -838,6 +863,7 @@ impl Shared {
                     .unwrap_or_else(Utc::now);
                 let base = msg.get_base_message();
                 let (kind, text, media_ref) = classify(base);
+                messages += 1;
                 if let (Ok(cj), Ok(sj)) = (Jid::from_str(&chat_jid), Jid::from_str(&sender)) {
                     self.cache.lock().insert(
                         id.clone(),
@@ -866,6 +892,7 @@ impl Shared {
                 }));
             }
         }
+        tracing::info!(account_id = %self.account_id, conversations, messages, duration_ms = started.elapsed().as_millis() as u64, "history sync processado");
     }
 }
 

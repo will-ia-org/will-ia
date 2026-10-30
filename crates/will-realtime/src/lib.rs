@@ -24,6 +24,7 @@ use std::sync::{Arc, Weak};
 use std::time::Duration;
 use tokio::sync::{broadcast, mpsc};
 use tokio_util::sync::CancellationToken;
+use tracing::Instrument;
 use will_core::settings::RealtimeSettings;
 use will_core::{BrainHost, Event, EventBus, Module, ModuleStatus, ThreadId, TurnId};
 
@@ -134,6 +135,7 @@ impl RealtimeManager {
     pub async fn start(self: &Arc<Self>) -> Result<(), String> {
         let cfg = self.config.read().clone();
         if !cfg.settings.enabled {
+            tracing::debug!("voz desabilitada nas configurações; start ignorado");
             return Err("voz desabilitada nas configurações".into());
         }
         let Some(key) = cfg
@@ -142,14 +144,23 @@ impl RealtimeManager {
             .map(|k| k.expose_secret().trim().to_string())
             .filter(|k| !k.is_empty())
         else {
+            tracing::warn!("voz: API key da OpenAI não configurada");
             return Err("API key da OpenAI não configurada".into());
         };
         if self.is_active() {
+            tracing::debug!("voz: start ignorado, sessão já ativa");
             return Err("sessão de voz já ativa".into());
         }
         self.spawn_brain_listener();
 
         let id = self.next_session_id.fetch_add(1, Ordering::SeqCst);
+        let span = tracing::info_span!(
+            "voice_session",
+            session_id = id,
+            thread_id = tracing::field::Empty,
+            model = %cfg.settings.model,
+            user = self.deps.owner.as_deref().unwrap_or("local"),
+        );
         let runner = Arc::new(SessionRunner::new(
             id,
             Arc::clone(self),
@@ -158,9 +169,26 @@ impl RealtimeManager {
             cfg.endpoint.clone(),
         ));
         self.set_state("connecting", None);
-        let ws = match runner.connect().await {
-            Ok(ws) => ws,
+        let connect_started = std::time::Instant::now();
+        let ws = match runner.connect().instrument(span.clone()).await {
+            Ok(ws) => {
+                span.in_scope(|| {
+                    tracing::info!(
+                        duration_ms = connect_started.elapsed().as_millis() as u64,
+                        activation = %cfg.settings.activation,
+                        "voz: sessão realtime conectada"
+                    )
+                });
+                ws
+            }
             Err(e) => {
+                span.in_scope(|| {
+                    tracing::error!(
+                        duration_ms = connect_started.elapsed().as_millis() as u64,
+                        error = %e,
+                        "voz: falha ao abrir sessão realtime"
+                    )
+                });
                 self.set_state("error", Some(e.clone()));
                 self.voice.lock().last_error = Some(e.clone());
                 self.set_state("stopped", None);
@@ -192,7 +220,7 @@ impl RealtimeManager {
             v.last_error = None;
         }
         self.ptt_down.store(false, Ordering::SeqCst);
-        let task = tokio::spawn(runner.run(ws, cmd_rx, cancel));
+        let task = tokio::spawn(runner.run(ws, cmd_rx, cancel).instrument(span));
         *handle.task.lock() = Some(task);
         self.deps.bus.log(
             "info",
@@ -207,6 +235,7 @@ impl RealtimeManager {
     pub async fn stop(&self) {
         let handle = self.session.lock().take();
         let Some(handle) = handle else { return };
+        tracing::info!(session_id = handle.id, "voz: encerrando sessão a pedido");
         handle.cancel.cancel();
         let task = handle.task.lock().take();
         if let Some(task) = task {
@@ -282,6 +311,7 @@ impl RealtimeManager {
         }
         let session = self.session.lock().clone();
         if let Some(h) = session {
+            tracing::debug!(session_id = h.id, down, "voz: push-to-talk");
             h.send(Cmd::Ptt(down));
         }
     }
@@ -290,6 +320,7 @@ impl RealtimeManager {
     pub fn commit(&self) {
         let session = self.session.lock().clone();
         if let Some(h) = session {
+            tracing::debug!(session_id = h.id, "voz: commit manual");
             h.send(Cmd::Commit);
         }
     }
@@ -387,6 +418,18 @@ impl RealtimeManager {
             usage.text_cached + usage.audio_cached,
             usd
         );
+        tracing::info!(
+            session_id = id,
+            duration_secs = duration.as_secs(),
+            responses = usage.responses,
+            audio_in = usage.audio_in,
+            audio_out = usage.audio_out,
+            text_in = usage.text_in,
+            text_out = usage.text_out,
+            cached = usage.text_cached + usage.audio_cached,
+            usd,
+            "voz: sessão encerrada"
+        );
         let units = serde_json::to_value(&usage).unwrap_or(Value::Null);
         *self.last_session.lock() = Some(json!({
             "session": id,
@@ -412,7 +455,7 @@ impl RealtimeManager {
         };
         tokio::spawn(async move {
             if let Err(e) = storage.add_ai_cost(&rec).await {
-                tracing::warn!(error = %e, "não gravou custo da sessão de voz");
+                tracing::warn!(session_id = id, error = %e, "não gravou custo da sessão de voz");
             }
         });
         self.deps.bus.log("info", "realtime", summary.clone());
@@ -449,7 +492,7 @@ impl RealtimeManager {
                         mgr.on_bus_event(event);
                     }
                     Err(broadcast::error::RecvError::Lagged(n)) => {
-                        tracing::warn!(n, "realtime: eventos do cérebro perdidos");
+                        tracing::warn!(lost = n, "realtime: eventos do cérebro perdidos (lag)");
                     }
                     Err(broadcast::error::RecvError::Closed) => break,
                 }
@@ -462,9 +505,17 @@ impl RealtimeManager {
             Event::TurnFinished {
                 turn_id, result, ..
             } => {
-                let Some(_task) = self.pending.lock().remove(&turn_id) else {
+                let Some(task) = self.pending.lock().remove(&turn_id) else {
                     return;
                 };
+                tracing::info!(
+                    turn_id = %turn_id,
+                    thread_id = %task.thread_id,
+                    is_error = result.is_error,
+                    chars = result.text.chars().count(),
+                    waited_secs = (chrono::Utc::now() - task.started_at).num_seconds(),
+                    "voz: resultado do cérebro recebido"
+                );
                 let limit = self.config.read().settings.brain_speech_limit_chars;
                 let clean = clean_for_speech(&result.text, limit);
                 let speech = format!("[Resultado do cérebro para a tarefa {turn_id}]: {clean}");
@@ -490,6 +541,7 @@ impl RealtimeManager {
                 if !matched {
                     return;
                 }
+                tracing::warn!(turn_id = ?turn_id, %thread_id, error = %error, "voz: tarefa do cérebro falhou");
                 let limit = self.config.read().settings.brain_speech_limit_chars;
                 let clean = clean_for_speech(&error, limit.min(400));
                 let speech = format!("[O cérebro falhou: {clean}]");
@@ -506,8 +558,16 @@ impl RealtimeManager {
             session.is_some_and(|h| h.send(Cmd::BrainText(speech)))
         };
         if delivered {
+            tracing::debug!(
+                chars = full_text.chars().count(),
+                "voz: resultado do cérebro injetado na sessão"
+            );
             return;
         }
+        tracing::info!(
+            chars = full_text.chars().count(),
+            "voz: sem sessão ativa; resultado do cérebro vira notificação"
+        );
         let body: String = full_text.chars().take(NOTIFICATION_BODY_CHARS).collect();
         self.deps.bus.emit(Event::Notification {
             title: title.to_string(),

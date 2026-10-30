@@ -13,8 +13,14 @@ pub async fn scaffold(State(state): State<App>) -> ApiResult<Value> {
     let kb = state
         .kb_path()
         .ok_or_else(|| bad("pasta da base de conhecimento não configurada"))?;
-    let created = crate::kb::scaffold(&kb).map_err(bad)?;
-    let _ = crate::mcp_json::write(&state).await;
+    let created = crate::kb::scaffold(&kb).map_err(|e| {
+        tracing::error!(path = %kb.display(), error = %e, "esqueleto da KB não criado");
+        bad(e)
+    })?;
+    tracing::info!(path = %kb.display(), created = created.len(), "esqueleto da KB criado/atualizado");
+    if let Err(e) = crate::mcp_json::write(&state).await {
+        tracing::warn!(error = %e, "não regravou o .mcp.json após o esqueleto");
+    }
     crate::modules::refresh_engine(&state, false).await;
     // Skill do agent-browser entra junto com o esqueleto, se o CLI já existir.
     let browser = state.browser.read().clone();

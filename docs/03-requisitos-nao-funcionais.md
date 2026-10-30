@@ -76,6 +76,6 @@ Convenção: `RNF-<categoria>-<nº>`.
 
 | ID | Requisito |
 |---|---|
-| RNF-PRIV-01 | Nenhuma telemetria é enviada pelo serviço. Os únicos destinos de rede são: Anthropic (via Claude Code), OpenAI (Realtime), Telegram, servidores do WhatsApp (se pareado) e APIs do Google (se conectado). |
+| RNF-PRIV-01 | Telemetria **opt-in e desligada por padrão** (`docs/29`): só com `telemetry.enabled` o serviço envia logs/spans redigidos ao endpoint OTLP configurado (Axiom ou outro). Fora isso, os únicos destinos de rede são: Anthropic (via Claude Code), OpenAI (Realtime), Telegram, servidores do WhatsApp (se pareado) e APIs do Google (se conectado). |
 | RNF-PRIV-03 | O índice local do WhatsApp e anexos baixados (WhatsApp/Gmail) ficam em disco local com retenção configurável e são apagados ao desvincular/desconectar, se o usuário optar. |
 | RNF-PRIV-02 | Áudio da sessão de voz não é gravado em disco por padrão; transcrições são salvas apenas se habilitado. |

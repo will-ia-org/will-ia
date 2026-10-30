@@ -30,6 +30,7 @@ use teloxide::types::{AllowedUpdate, BotCommand};
 use teloxide::{Bot, RequestError};
 use tokio::task::JoinHandle;
 use tokio_util::sync::CancellationToken;
+use tracing::Instrument;
 use will_core::settings::TelegramSettings;
 use will_core::{
     ApprovalId, Event, EventBus, Module, ModuleStatus, Origin, SharedThreadHost, ThreadId,
@@ -163,10 +164,23 @@ impl TelegramModule {
         if self.cancel.lock().is_some() {
             return Ok(());
         }
+        let span = tracing::info_span!(
+            "tg_conn",
+            attempt = 1u32,
+            reason = "start",
+            ok = tracing::field::Empty
+        );
+        let res = self.start_in().instrument(span.clone()).await;
+        span.record("ok", res.is_ok());
+        res
+    }
+
+    async fn start_in(self: &Arc<Self>) -> Result<(), String> {
         self.set_status(ModuleStatus::Starting);
 
         if self.settings.allowed_chats.is_empty() || self.settings.allowed_users.is_empty() {
             let msg = "allowlists vazias: configure pelo menos um chat ID e um user ID (mande /start ao bot para descobrir os seus)".to_string();
+            tracing::warn!(ok = false, "telegram não subiu: allowlists vazias");
             self.set_status(ModuleStatus::Error(msg.clone()));
             return Err(msg);
         }
@@ -175,10 +189,12 @@ impl TelegramModule {
             Ok(me) => me,
             Err(e) => {
                 let msg = format!("getMe falhou: {e}");
+                tracing::error!(ok = false, error = %e, "getMe falhou");
                 self.set_status(ModuleStatus::Error(msg.clone()));
                 return Err(msg);
             }
         };
+        tracing::info!(bot_id = me.user.id.0, "bot conectado ao Telegram");
         *self.bot_username.lock() = me.user.username.clone();
         self.bus.log(
             "info",
@@ -208,7 +224,7 @@ impl TelegramModule {
                 .map(|(c, d)| BotCommand::new(*c, *d)),
         );
         if let Err(e) = self.bot.set_my_commands(cmds).await {
-            tracing::warn!("setMyCommands: {e}");
+            tracing::warn!(error = %e, "setMyCommands falhou");
         }
         self.bus.log(
             "info",
@@ -236,6 +252,11 @@ impl TelegramModule {
         }
 
         let offset = self.storage.telegram_offset().await.unwrap_or(0);
+        tracing::debug!(
+            offset,
+            bindings = self.bindings.lock().by_key.len(),
+            "estado do Telegram carregado"
+        );
         self.offset.store(offset, Ordering::SeqCst);
 
         if self.settings.announce_boot {
@@ -246,6 +267,7 @@ impl TelegramModule {
         for s in saved {
             if s.status_message_id.is_some() || !s.stack.is_empty() {
                 if let Some((chat_id, topic_id)) = text::parse_thread_key(&s.thread_key) {
+                    tracing::info!(key = %s.thread_key, "status órfão limpo no boot");
                     let conv = self.conv(&s.thread_key, chat_id, topic_id).await;
                     conv.clear().await;
                 }
@@ -264,6 +286,7 @@ impl TelegramModule {
         drop(tasks);
 
         self.set_status(ModuleStatus::Running);
+        tracing::info!(ok = true, "bot no ar, ouvindo updates");
         self.bus
             .log("info", "telegram", "bot no ar, ouvindo updates");
         Ok(())
@@ -282,9 +305,11 @@ impl TelegramModule {
                 .is_err()
             {
                 // o long poll pode estar pendurado; aborta
+                tracing::debug!("tarefa do Telegram não encerrou em 2s; abortada");
                 t.abort();
             }
         }
+        tracing::info!(channel = "telegram", "bot parado");
         self.set_status(ModuleStatus::Stopped);
         self.bus.log("info", "telegram", "bot parado");
     }
@@ -409,6 +434,7 @@ impl TelegramModule {
         }
         let origin = Origin::Telegram { chat_id, topic_id };
         let summary = self.host.ensure_thread(&origin, title).await?;
+        tracing::info!(channel = "telegram", key, thread_id = %summary.id, "thread vinculada à thread key");
         self.bind(key, summary.id);
         let conv = self.conv(key, chat_id, topic_id).await;
         if conv.thread_id() != Some(summary.id) {
@@ -422,7 +448,7 @@ impl TelegramModule {
         self.unbind_key(key);
         self.convs.lock().remove(key);
         if let Err(e) = self.storage.delete_telegram_status(key).await {
-            tracing::warn!(key, "delete_telegram_status: {e}");
+            tracing::warn!(key, error = %e, "delete_telegram_status falhou");
         }
     }
 
@@ -432,19 +458,25 @@ impl TelegramModule {
         let when = chrono::Local::now().format("%d/%m/%Y %H:%M:%S");
         let text = format!("🟢 <b>Bot no ar</b>\nSubi agora ({when}). Pode mandar ver.");
         for chat_id in &self.settings.allowed_chats {
-            if let Err(e) = self
-                .sender
-                .send_one(*chat_id, None, &text, true, None, None)
-                .await
-            {
-                tracing::warn!(chat_id, "aviso de boot falhou: {e}");
+            let span = sender::outbound_span(*chat_id, None, None, "boot");
+            async {
+                let started = Instant::now();
+                let res = self
+                    .sender
+                    .send_one(*chat_id, None, &text, true, None, None)
+                    .await;
+                sender::note_outbound(&res, started, false);
             }
+            .instrument(span)
+            .await;
         }
     }
 
     // ---------- long polling ----------
 
     async fn poll_loop(self: Arc<Self>, cancel: CancellationToken) {
+        // tentativas consecutivas com falha no getUpdates (0 = saudável)
+        let mut failures: u32 = 0;
         loop {
             if cancel.is_cancelled() {
                 break;
@@ -462,26 +494,33 @@ impl TelegramModule {
             };
             match res {
                 Ok(updates) => {
+                    if failures > 0 {
+                        tracing::info!(name: "tg_conn", attempt = failures + 1, reason = "getUpdates", ok = true, "polling do Telegram restabelecido");
+                        failures = 0;
+                    }
+                    tracing::debug!(updates = updates.len(), offset, "getUpdates");
                     for u in updates {
                         let next = i64::from(u.id.0) + 1;
                         if next > self.offset.load(Ordering::SeqCst) {
                             self.offset.store(next, Ordering::SeqCst);
                             if let Err(e) = self.storage.set_telegram_offset(next).await {
-                                tracing::warn!("persistir offset: {e}");
+                                tracing::warn!(offset = next, error = %e, "persistir offset falhou");
                             }
                         }
                         self.handle_update(u).await;
                     }
                 }
                 Err(RequestError::RetryAfter(s)) => {
-                    tracing::warn!("getUpdates: rate limit, esperando {}s", s.seconds());
+                    failures += 1;
+                    tracing::warn!(name: "tg_conn", attempt = failures, reason = "rate_limit", ok = false, retry_after_secs = s.seconds(), "getUpdates: rate limit");
                     tokio::select! {
                         _ = cancel.cancelled() => break,
                         _ = tokio::time::sleep(s.duration()) => {}
                     }
                 }
                 Err(e) => {
-                    tracing::error!("getUpdates: {e}");
+                    failures += 1;
+                    tracing::error!(name: "tg_conn", attempt = failures, reason = "getUpdates", ok = false, error = %e, "getUpdates falhou; nova tentativa em 3s");
                     self.bus.log("warn", "telegram", format!("getUpdates: {e}"));
                     tokio::select! {
                         _ = cancel.cancelled() => break,
@@ -490,7 +529,7 @@ impl TelegramModule {
                 }
             }
         }
-        tracing::info!("long polling encerrado");
+        tracing::info!(channel = "telegram", "long polling encerrado");
     }
 }
 

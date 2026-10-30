@@ -15,6 +15,7 @@ whatsapp-real = ["whatsapp", "will-whatsapp/real"]
 [dependencies]
 will-core.workspace = true
 will-storage.workspace = true
+will-telemetry.workspace = true
 will-engine.workspace = true
 will-mcp.workspace = true
 will-realtime.workspace = true

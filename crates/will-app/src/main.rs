@@ -17,6 +17,7 @@ mod hotkey;
 mod i18n;
 mod icon;
 mod icons;
+mod logging;
 mod oauth_cb;
 mod pages;
 mod permissions;
@@ -108,6 +109,7 @@ fn main() -> anyhow::Result<()> {
             let Some(_lock) = app_ipc::acquire_or_forward("show")? else {
                 return Ok(());
             };
+            logging::init();
             let profile = profiles::pick(
                 cli.url.as_deref(),
                 cli.token.as_deref(),

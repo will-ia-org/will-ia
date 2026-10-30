@@ -11,6 +11,7 @@ pub async fn events_ws(ws: WebSocketUpgrade, State(state): State<App>) -> Respon
 }
 
 async fn handle_events(mut socket: WebSocket, state: App) {
+    tracing::debug!("WS de eventos conectado");
     let mut rx = state.bus.subscribe();
     // snapshot inicial de status dos módulos
     let snapshot: Vec<(will_core::Module, will_core::ModuleStatus)> = state
@@ -39,7 +40,10 @@ async fn handle_events(mut socket: WebSocket, state: App) {
                             if socket.send(Message::Text(t.into())).await.is_err() { break; }
                         }
                     }
-                    Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => continue,
+                    Err(tokio::sync::broadcast::error::RecvError::Lagged(n)) => {
+                        tracing::warn!(skipped = n, "WS de eventos atrasado: eventos pulados");
+                        continue;
+                    }
                     Err(_) => break,
                 }
             }
@@ -51,6 +55,7 @@ async fn handle_events(mut socket: WebSocket, state: App) {
             }
         }
     }
+    tracing::debug!("WS de eventos encerrado");
 }
 
 /// Áudio da voz: binário PCM16 24 kHz nos dois sentidos + controle em JSON.
@@ -63,6 +68,7 @@ pub async fn voice_ws(
 }
 
 async fn handle_voice(socket: WebSocket, state: App, user: String) {
+    tracing::info!(%user, "WS de áudio da voz conectado");
     let rt = crate::modules::voice_manager_for(&state, &user);
     let (mut tx, mut rx_ws) = socket.split();
     let mut audio_rx = rt.subscribe_audio_out();
@@ -108,4 +114,5 @@ async fn handle_voice(socket: WebSocket, state: App, user: String) {
         }
     }
     send_task.abort();
+    tracing::info!(%user, "WS de áudio da voz encerrado");
 }

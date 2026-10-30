@@ -69,7 +69,10 @@ pub fn parse_line(line: &str) -> StreamLine {
     }
     let v: Value = match serde_json::from_str(s) {
         Ok(v) => v,
-        Err(_) => return StreamLine::Other,
+        Err(e) => {
+            tracing::debug!(bytes = s.len(), error = %e, "linha não-JSON do claude ignorada");
+            return StreamLine::Other;
+        }
     };
     let ty = v.get("type").and_then(|t| t.as_str()).unwrap_or("");
     match ty {

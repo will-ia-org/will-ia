@@ -216,6 +216,11 @@ Convenção de identificação: `RF-<módulo>-<nº>`. Prioridade: **M** (Must, M
 | RF-LOG-01 | Logs estruturados em arquivo com rotação diária e retenção configurável. | M |
 | RF-LOG-02 | A seção Logs da UI mostra os últimos eventos com filtro por módulo e nível. | S |
 | RF-LOG-03 | Botão "Exportar diagnóstico" gera um zip com logs (segredos redigidos), configuração sanitizada e versões. | C |
+| RF-LOG-04 | Telemetria **opt-in** (`docs/29`): logs e spans do servidor (e do app) saem por **OTLP/HTTP (Protobuf)** para o Axiom (preset) ou qualquer endpoint OTLP (`provider = otlp`, endpoint + cabeçalhos); token no cofre (`telemetry_token`). | M |
+| RF-LOG-05 | Todo evento carrega a identidade da instância (`instance_id`, host, SO, versão, processo, rótulo) e os campos dos spans abertos (`thread_id`, `turn_id`, `tool`, `channel`, `account_id`…); spans têm `trace_id`/`span_id` reais. | M |
+| RF-LOG-06 | Métricas de uso num `heartbeat` (start + 5 min): eventos por nível e por módulo, spans por nome (turnos, chamadas de ferramenta, mensagens…), descartes e contadores de envio. | M |
+| RF-LOG-07 | Relatórios de falha: no start o servidor envia o que ficou em `will-ia-fatal.log`, `service.err.log` e `setup.log` desde o último envio. | S |
+| RF-LOG-08 | Sem rede, os lotes vão para um spool em disco (NDJSON, 20 MB) e são reenviados; a aba Telemetria mostra enviados/falhas/fila, `instance_id` e tem "Enviar evento de teste". | S |
 
 ## RF-INST — Instalador (`will-ia-setup`, ADR-0021)
 

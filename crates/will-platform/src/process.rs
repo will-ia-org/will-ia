@@ -70,6 +70,9 @@ mod windows {
                 );
                 if ok == 0 {
                     tracing::warn!(
+                        name: "platform",
+                        op = "job_object",
+                        ok = false,
                         "SetInformationJobObject falhou; filhos não morrem com o serviço"
                     );
                     return 0;
@@ -88,7 +91,9 @@ mod windows {
         // SAFETY: handles válidos; o filho acabou de ser criado por nós.
         let ok = unsafe { AssignProcessToJobObject(job, h as HANDLE) };
         if ok == 0 {
-            tracing::warn!(pid = ?child.id(), "AssignProcessToJobObject falhou");
+            tracing::warn!(name: "platform", op = "job_object", ok = false, pid = ?child.id(), "AssignProcessToJobObject falhou");
+        } else {
+            tracing::debug!(name: "platform", op = "job_object", ok = true, pid = ?child.id(), "filho anexado ao Job Object");
         }
     }
 }

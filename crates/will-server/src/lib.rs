@@ -2,6 +2,7 @@
 //! O binário `will-ia` vive em `crates/will-desktop`.
 
 pub mod api;
+pub mod api_trace;
 pub mod app;
 pub mod auth;
 pub mod engine_cfg;
@@ -11,6 +12,7 @@ pub mod logging;
 pub mod mcp_json;
 pub mod modules;
 pub mod orchestrator;
+pub mod telemetry;
 pub mod tls;
 
 pub use app::{AppState, RunOptions, ServerHandle, UiHook};

@@ -11,6 +11,7 @@ pub mod mcp;
 pub mod network;
 pub mod scheduler;
 pub mod telegram;
+pub mod telemetry;
 pub mod voice;
 pub mod whatsapp;
 
@@ -219,6 +220,7 @@ fn section_label(s: &str) -> &str {
         "scheduler" => tr("Agendamentos"),
         "browser" => tr("Browser CDP"),
         "network" => tr("Rede"),
+        "telemetry" => tr("Telemetria"),
         other => other,
     }
 }
@@ -230,6 +232,8 @@ pub struct SettingsPages {
     /// Aba "Status do serviço" de Geral (antiga página Início): módulos, motor,
     /// primeiros passos e permissões do macOS.
     pub status: crate::pages::dashboard::DashboardPage,
+    /// Aba "Telemetria" de Geral: envio opcional dos logs ao Axiom.
+    pub telemetry: telemetry::TelemetryPage,
     pub engine: engine::EnginePage,
     pub kb: kb::KbPage,
     pub voice: voice::VoicePage,
@@ -246,6 +250,7 @@ pub struct SettingsPages {
 impl SettingsPages {
     pub fn on_event(&mut self, ev: &will_core::Event) {
         self.status.on_event(ev);
+        self.telemetry.on_event(ev);
         self.engine.on_event(ev);
         self.voice.on_event(ev);
         self.telegram.on_event(ev);
@@ -284,12 +289,13 @@ impl SettingsPages {
                     &[
                         ui::Tab::new("settings", tr("Aplicativo")),
                         ui::Tab::new("status", tr("Status do serviço")),
+                        ui::Tab::new("telemetry", tr("Telemetria")),
                     ],
                 );
-                if tab == "status" {
-                    self.status.ui(ui, cx);
-                } else {
-                    self.general.ui(ui, cx, st);
+                match tab {
+                    "status" => self.status.ui(ui, cx),
+                    "telemetry" => self.telemetry.ui(ui, cx, st),
+                    _ => self.general.ui(ui, cx, st),
                 }
             }
             SettingsSection::Engine => self.engine.ui(ui, cx, st),

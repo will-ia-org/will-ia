@@ -99,11 +99,18 @@ pub async fn wait_callback(
         };
         let (mut stream, _) = match accept {
             Ok(Ok(s)) => s,
-            Ok(Err(e)) => return Err(GoogleError::Io(e.to_string())),
+            Ok(Err(e)) => {
+                tracing::warn!(error = %e, "oauth: accept no loopback falhou");
+                return Err(GoogleError::Io(e.to_string()));
+            }
             Err(_) => {
+                tracing::warn!(
+                    timeout_secs = timeout.as_secs(),
+                    "oauth: tempo esgotado aguardando o callback"
+                );
                 return Err(GoogleError::OAuth(
                     "tempo esgotado aguardando autorização (5 min)".into(),
-                ))
+                ));
             }
         };
         let head = match tokio::time::timeout(Duration::from_secs(5), read_head(&mut stream)).await
@@ -121,6 +128,7 @@ pub async fn wait_callback(
         }
         let get = |k: &str| query.iter().find(|(a, _)| a == k).map(|(_, v)| v.clone());
         if let Some(err) = get("error") {
+            tracing::warn!(reason = %err, "oauth: autorização negada pelo Google/usuário");
             let _ = respond(
                 &mut stream,
                 200,
@@ -134,6 +142,7 @@ pub async fn wait_callback(
             return Err(GoogleError::OAuth(format!("autorização negada: {err}")));
         }
         if get("state").as_deref() != Some(expected_state) {
+            tracing::warn!("oauth: callback com state inválido (anti-CSRF); ignorado");
             let _ = respond(
                 &mut stream,
                 400,
@@ -145,9 +154,11 @@ pub async fn wait_callback(
             continue;
         }
         let Some(code) = get("code").filter(|c| !c.is_empty()) else {
+            tracing::warn!("oauth: callback sem código; ignorado");
             let _ = respond(&mut stream, 400, false, "Código ausente", "").await;
             continue;
         };
+        tracing::info!("oauth: código de autorização recebido no loopback");
         let _ = respond(
             &mut stream,
             200,
@@ -275,6 +286,7 @@ pub async fn fetch_userinfo(
     let status = resp.status();
     let text = resp.text().await?;
     if !status.is_success() {
+        tracing::warn!(http_status = status.as_u16(), "oauth: userinfo falhou");
         return Err(crate::client::parse_api_error(status.as_u16(), &text));
     }
     serde_json::from_str(&text).map_err(|e| GoogleError::Http(format!("userinfo inválido: {e}")))

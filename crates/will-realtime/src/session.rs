@@ -220,10 +220,16 @@ impl SessionRunner {
             .map_err(|_| "API key inválida".to_string())?;
         req.headers_mut().insert("Authorization", auth);
         // Sem header `OpenAI-Beta`: a API Realtime GA (/v1/realtime) rejeita o formato beta.
+        tracing::debug!(session_id = self.id, model = %self.settings.model, "realtime: abrindo WebSocket");
         match connect_async(req).await {
             Ok((ws, _resp)) => Ok(ws),
             Err(tokio_tungstenite::tungstenite::Error::Http(resp)) => {
                 let status = resp.status();
+                tracing::error!(
+                    session_id = self.id,
+                    http_status = status.as_u16(),
+                    "realtime: handshake recusado"
+                );
                 let body = resp
                     .body()
                     .as_ref()
@@ -254,12 +260,23 @@ impl SessionRunner {
                 Some(s) => s,
                 None => {
                     if attempt >= RECONNECT_BACKOFF.len() {
+                        tracing::error!(
+                            session_id = self.id,
+                            attempts = attempt,
+                            "realtime: desisti de reconectar; sessão encerrada"
+                        );
                         self.mgr
                             .set_state("stopped", Some("conexão perdida".into()));
                         break;
                     }
                     let wait = RECONNECT_BACKOFF[attempt];
                     attempt += 1;
+                    tracing::info!(
+                        session_id = self.id,
+                        attempt,
+                        wait_ms = wait.as_millis() as u64,
+                        "realtime: reconectando"
+                    );
                     self.mgr.set_state(
                         "connecting",
                         Some(format!(
@@ -272,9 +289,17 @@ impl SessionRunner {
                         _ = tokio::time::sleep(wait) => {}
                     }
                     match self.connect().await {
-                        Ok(s) => s,
+                        Ok(s) => {
+                            tracing::info!(
+                                session_id = self.id,
+                                attempt,
+                                ok = true,
+                                "realtime: reconectado"
+                            );
+                            s
+                        }
                         Err(e) => {
-                            tracing::warn!(attempt, error = %e, "realtime: reconexão falhou");
+                            tracing::warn!(session_id = self.id, attempt, ok = false, error = %e, "realtime: reconexão falhou");
                             self.mgr.deps.bus.log(
                                 "warn",
                                 "realtime",
@@ -291,7 +316,7 @@ impl SessionRunner {
                     break;
                 }
                 Outcome::Lost(reason) => {
-                    tracing::warn!(reason = %reason, "realtime: conexão perdida");
+                    tracing::warn!(session_id = self.id, reason = %reason, "realtime: conexão perdida");
                     self.mgr
                         .deps
                         .bus
@@ -305,6 +330,7 @@ impl SessionRunner {
             }
         }
         let usage = self.usage.lock().clone();
+        tracing::debug!(session_id = self.id, "realtime: loop da sessão terminou");
         self.mgr
             .session_finished(self.id, usage, self.started.elapsed());
         self.mgr.session_ended(self.id);
@@ -319,9 +345,10 @@ impl SessionRunner {
         let (mut sink, mut source): (WsSink, WsSource) = ws.split();
         let mut conn = Conn::default();
         let variant = *self.variant.lock();
-        tracing::info!(variant = variant.as_str(), model = %self.settings.model, "realtime: enviando session.update");
+        tracing::info!(session_id = self.id, variant = variant.as_str(), model = %self.settings.model, "realtime: enviando session.update");
         if let Err(e) = send_json(&mut sink, &proto::session_update(variant, &self.settings)).await
         {
+            tracing::warn!(session_id = self.id, error = %e, "realtime: session.update não enviado");
             return Outcome::Lost(e);
         }
         let mut flush = tokio::time::interval(FLUSH_INTERVAL);
@@ -374,6 +401,11 @@ impl SessionRunner {
             }
             Cmd::Ptt(false) | Cmd::Commit => self.flush_audio(conn, sink, true).await,
             Cmd::BrainText(text) => {
+                tracing::debug!(
+                    session_id = self.id,
+                    chars = text.chars().count(),
+                    "realtime: injetando texto do cérebro"
+                );
                 send_json(sink, &proto::user_text_item(&text)).await?;
                 send_json(sink, &proto::response_create()).await
             }
@@ -405,6 +437,11 @@ impl SessionRunner {
                 tracing::debug!("realtime: commit ignorado (sem áudio)");
                 return Ok(());
             }
+            tracing::debug!(
+                session_id = self.id,
+                bytes = conn.uncommitted_bytes,
+                "realtime: commit de áudio"
+            );
             conn.uncommitted_bytes = 0;
             send_json(sink, &proto::audio_commit()).await?;
             send_json(sink, &proto::response_create()).await?;
@@ -425,11 +462,12 @@ impl SessionRunner {
         };
         match event {
             ServerEvent::SessionCreated => {
-                tracing::info!("realtime: session.created");
+                tracing::info!(session_id = self.id, "realtime: session.created");
             }
             ServerEvent::SessionUpdated => {
                 self.session_updated.store(true, Ordering::SeqCst);
                 tracing::info!(
+                    session_id = self.id,
                     variant = self.variant.lock().as_str(),
                     "realtime: session.updated"
                 );
@@ -488,7 +526,9 @@ impl SessionRunner {
             }
             ServerEvent::AudioDone => {
                 tracing::debug!(
+                    session_id = self.id,
                     bytes = conn.audio_bytes,
+                    audio_ms = pcm_ms(conn.audio_bytes),
                     "realtime: áudio da resposta completo"
                 );
             }
@@ -509,10 +549,17 @@ impl SessionRunner {
                 }
                 conn.response_active = false;
                 conn.speaking_announced = false;
-                if let Some(s) = status.as_deref() {
-                    if s != "completed" {
-                        tracing::info!(status = s, "realtime: response.done");
+                let total = self.usage.lock().total();
+                match status.as_deref() {
+                    Some("completed") | None => {
+                        tracing::debug!(session_id = self.id, status = ?status, tokens_total = total, "realtime: response.done")
                     }
+                    Some(s) => tracing::info!(
+                        session_id = self.id,
+                        status = s,
+                        tokens_total = total,
+                        "realtime: response.done"
+                    ),
                 }
                 let pending = self.mgr.pending_count();
                 if pending > 0 {
@@ -531,7 +578,9 @@ impl SessionRunner {
             } => {
                 self.on_error(sink, code, message, param).await?;
             }
-            ServerEvent::RateLimits => tracing::debug!("realtime: rate_limits.updated"),
+            ServerEvent::RateLimits => {
+                tracing::debug!(session_id = self.id, "realtime: rate_limits.updated")
+            }
             ServerEvent::Other(kind) => tracing::trace!(kind = %kind, "realtime: evento ignorado"),
         }
         Ok(())
@@ -552,7 +601,7 @@ impl SessionRunner {
                 *v = v.other();
                 *v
             };
-            tracing::warn!(error = %message, variant = next.as_str(), "realtime: session.update rejeitado; tentando outra variante");
+            tracing::warn!(session_id = self.id, error = %message, variant = next.as_str(), "realtime: session.update rejeitado; tentando outra variante");
             self.mgr.deps.bus.log(
                 "warn",
                 "realtime",
@@ -572,7 +621,7 @@ impl SessionRunner {
             // Erro antes do `session.updated`: a configuração foi rejeitada e a sessão
             // seguiu com os padrões do servidor (sem persona, sem ferramentas).
             let msg = format!("configuração da sessão rejeitada pela OpenAI ({message}). A voz funciona, mas SEM persona e SEM ferramentas (ask_brain, list_threads). Corrija em Configurações › Voz e reinicie a voz.");
-            tracing::error!(code = ?code, param = ?param, "realtime: {msg}");
+            tracing::error!(session_id = self.id, code = ?code, param = ?param, error = %message, "realtime: configuração da sessão rejeitada (sem persona/ferramentas)");
             self.mgr.deps.bus.log("error", "realtime", msg.clone());
             self.mgr.deps.bus.emit(will_core::Event::Notification {
                 title: "Voz: configuração rejeitada".into(),
@@ -581,7 +630,7 @@ impl SessionRunner {
             self.mgr.set_state("error", Some(msg));
             return Ok(());
         }
-        tracing::error!(code = ?code, param = ?param, error = %message, "realtime: erro do servidor");
+        tracing::error!(session_id = self.id, code = ?code, param = ?param, error = %message, "realtime: erro do servidor");
         self.mgr
             .deps
             .bus
@@ -595,6 +644,12 @@ impl SessionRunner {
         if text.is_empty() {
             return;
         }
+        tracing::debug!(
+            session_id = self.id,
+            role,
+            chars = text.chars().count(),
+            "realtime: transcrição"
+        );
         self.mgr
             .audio_control(json!({"type": "transcript", "role": role, "text": text}));
         if self.settings.save_transcripts {
@@ -605,7 +660,7 @@ impl SessionRunner {
                 .add_voice_transcript(role, &text)
                 .await
             {
-                tracing::warn!(error = %e, "realtime: falha ao salvar transcrição");
+                tracing::warn!(session_id = self.id, role, error = %e, "realtime: falha ao salvar transcrição");
             }
         }
     }
@@ -618,6 +673,14 @@ impl SessionRunner {
         call_id: &str,
         arguments: &str,
     ) -> Result<(), String> {
+        let fc_started = Instant::now();
+        tracing::info!(
+            session_id = self.id,
+            tool = name,
+            call_id,
+            args_len = arguments.len(),
+            "realtime: chamada de ferramenta"
+        );
         let output = match name {
             "ask_brain" => match proto::parse_ask_brain_args(arguments) {
                 Ok(args) => match self
@@ -636,15 +699,20 @@ impl SessionRunner {
                         self.mgr.track_pending(task.turn_id, task.thread_id);
                         self.mgr
                             .set_state("brain_working", Some(task.turn_id.to_string()));
-                        tracing::info!(turn = %task.turn_id, "realtime: tarefa delegada ao cérebro");
+                        tracing::Span::current()
+                            .record("thread_id", tracing::field::display(task.thread_id));
+                        tracing::info!(session_id = self.id, turn_id = %task.turn_id, thread_id = %task.thread_id, new_thread = args.new_thread, "realtime: tarefa delegada ao cérebro");
                         json!({"status": "working", "task_id": task.turn_id.to_string()})
                     }
                     Err(e) => {
-                        tracing::warn!(error = %e, "realtime: ask_brain falhou");
+                        tracing::warn!(session_id = self.id, error = %e, "realtime: ask_brain falhou");
                         json!({"status": "error", "error": e})
                     }
                 },
-                Err(e) => json!({"status": "error", "error": e}),
+                Err(e) => {
+                    tracing::warn!(session_id = self.id, error = %e, "realtime: argumentos de ask_brain inválidos");
+                    json!({"status": "error", "error": e})
+                }
             },
             "brain_status" => {
                 let busy = self.mgr.deps.host.brain_busy().await;
@@ -667,14 +735,28 @@ impl SessionRunner {
                         .collect();
                     json!({"threads": items, "count": list.len()})
                 }
-                Err(e) => json!({"status": "error", "error": e}),
+                Err(e) => {
+                    tracing::warn!(session_id = self.id, error = %e, "realtime: list_threads falhou");
+                    json!({"status": "error", "error": e})
+                }
             },
             other => {
-                tracing::warn!(tool = other, "realtime: ferramenta desconhecida");
+                tracing::warn!(
+                    session_id = self.id,
+                    tool = other,
+                    "realtime: ferramenta desconhecida"
+                );
                 json!({"status": "error", "error": format!("ferramenta desconhecida: {other}")})
             }
         };
         conn.response_active = true;
+        tracing::debug!(
+            session_id = self.id,
+            tool = name,
+            call_id,
+            duration_ms = fc_started.elapsed().as_millis() as u64,
+            "realtime: resultado da ferramenta devolvido"
+        );
         send_json(sink, &proto::function_call_output(call_id, &output)).await?;
         send_json(sink, &proto::response_create()).await
     }
@@ -696,7 +778,7 @@ impl SessionRunner {
             return Ok(());
         }
         let played_ms = played_ms.min(total_ms);
-        tracing::info!(item = %item, played_ms, total_ms, "realtime: barge-in");
+        tracing::info!(session_id = self.id, item = %item, played_ms, total_ms, "realtime: barge-in");
         self.mgr.audio_control(json!({"type": "stop_playback"}));
         // Com `interrupt_response` o servidor costuma cancelar sozinho; mandamos o
         // response.cancel mesmo assim (idempotente: `response_cancel_not_active` é ignorado).

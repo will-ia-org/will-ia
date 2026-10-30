@@ -24,6 +24,9 @@ pub struct EngineConfig {
     pub kill_grace: std::time::Duration,
     /// Diretório para gravar o stream bruto (`claude-<data>.log`), se ligado.
     pub raw_log_dir: Option<PathBuf>,
+    /// Id curto do token do Claude em uso (o `id` do cadastro, nunca o segredo).
+    /// Só para rastreio nos logs (`engine_proc.token_id`).
+    pub token_id: Option<String>,
 }
 
 impl EngineConfig {

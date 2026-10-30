@@ -53,6 +53,11 @@ pub async fn set_policy(
     };
     state.registry.set_policy(&name, p);
     state.storage.set_tool_policy(&name, p).await?;
+    tracing::info!(
+        tool = %name,
+        policy = p.map(|p| p.as_str()).unwrap_or("default"),
+        "política da ferramenta alterada"
+    );
     {
         let mut s = state.settings.write();
         match p {
@@ -128,6 +133,7 @@ pub async fn decide(
     let via = format!("ui:{}", me.author());
     let ok = state.host().decide_approval(id, d, &via);
     if !ok {
+        tracing::warn!(approval_id = %id, user = %me.username, "decisão recebida para pedido que não está mais pendente");
         return Err(bad("pedido não está mais pendente"));
     }
     Ok(Json(json!({ "ok": true })))
@@ -214,6 +220,7 @@ pub async fn external_put(
     if !["stdio", "http", "sse"].contains(&e.kind.as_str()) {
         return Err(bad("tipo deve ser stdio, http ou sse"));
     }
+    let (kind, enabled) = (e.kind.clone(), e.enabled);
     {
         let mut s = state.settings.write();
         s.external_mcps.retain(|x| x.name != name);
@@ -221,6 +228,7 @@ pub async fn external_put(
         s.external_mcps.sort_by(|a, b| a.name.cmp(&b.name));
     }
     state.save_settings().await.map_err(internal)?;
+    tracing::info!(server = %name, kind, enabled, "MCP externo salvo");
     crate::modules::apply_section(&state, "external_mcps").await;
     external_list(State(state)).await
 }
@@ -239,6 +247,7 @@ pub async fn external_delete(
         return Err(bad("servidor não encontrado"));
     }
     state.save_settings().await.map_err(internal)?;
+    tracing::info!(server = %name, "MCP externo removido");
     crate::modules::apply_section(&state, "external_mcps").await;
     Ok(Json(json!({ "ok": true })))
 }
@@ -284,6 +293,11 @@ pub async fn external_test(State(state): State<App>, Path(name): Path<String>) -
         .ok_or_else(|| bad("servidor não encontrado"))?;
     let def = resolve(&state, &e).await;
     let r = will_mcp::external::test_external(&def, Duration::from_secs(45)).await;
+    if r.ok {
+        tracing::info!(server = %name, tools = r.tools.len(), "teste de MCP externo: ok");
+    } else {
+        tracing::warn!(server = %name, error = r.error.as_deref().unwrap_or(""), "teste de MCP externo: falhou");
+    }
     {
         let mut s = state.settings.write();
         if let Some(x) = s.external_mcps.iter_mut().find(|x| x.name == name) {
@@ -297,6 +311,11 @@ pub async fn external_test(State(state): State<App>, Path(name): Path<String>) -
 pub async fn external_import_claude(State(state): State<App>) -> ApiResult<Value> {
     let servers = crate::mcp_json::read_claude_user_mcps().map_err(bad)?;
     let imported = crate::mcp_json::import_servers(&state, &servers).await;
+    tracing::info!(
+        found = servers.len(),
+        imported = imported.len(),
+        "MCPs importados do ~/.claude.json"
+    );
     state.save_settings().await.map_err(internal)?;
     crate::modules::apply_section(&state, "external_mcps").await;
     Ok(Json(
@@ -327,6 +346,7 @@ pub async fn external_import_json(
             .ok_or_else(|| bad("esperado objeto com mcpServers"))?,
     };
     let imported = crate::mcp_json::import_servers(&state, &servers).await;
+    tracing::info!(imported = imported.len(), "MCPs importados de JSON colado");
     state.save_settings().await.map_err(internal)?;
     crate::modules::apply_section(&state, "external_mcps").await;
     Ok(Json(

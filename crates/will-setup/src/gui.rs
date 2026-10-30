@@ -377,6 +377,7 @@ impl SetupApp {
                             self.progress = f;
                             self.status = text.clone();
                         }
+                        install::append_setup_log(&self.plan.data_dir, &text);
                         self.log.push(text);
                     }
                     Msg::Finished(o) => done = Some(o),

@@ -259,9 +259,23 @@ pub async fn write(state: &AppState) -> Result<Option<PathBuf>, String> {
     let url = state.mcp_url.read().clone();
     let v = render(&settings, &url, mcp_enabled);
     let text = serde_json::to_string_pretty(&v).map_err(|e| e.to_string())? + "\n";
-    std::fs::write(&path, &text).map_err(|e| format!("gravar .mcp.json: {e}"))?;
-    let _ = state.storage.set_mcp_json_hash(&hash(&text)).await;
-    write_settings_local(&kb)?;
+    std::fs::write(&path, &text).map_err(|e| {
+        tracing::error!(path = %path.display(), error = %e, "falha ao gravar .mcp.json");
+        format!("gravar .mcp.json: {e}")
+    })?;
+    if let Err(e) = state.storage.set_mcp_json_hash(&hash(&text)).await {
+        tracing::warn!(error = %e, "hash do .mcp.json não gravado");
+    }
+    write_settings_local(&kb).map_err(|e| {
+        tracing::error!(error = %e, "falha ao gravar .claude/settings.local.json");
+        e
+    })?;
+    tracing::debug!(
+        path = %path.display(),
+        servers = v["mcpServers"].as_object().map(|m| m.len()).unwrap_or(0),
+        will_ia = mcp_enabled && !url.is_empty(),
+        ".mcp.json regravado"
+    );
     Ok(Some(path))
 }
 

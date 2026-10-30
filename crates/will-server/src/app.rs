@@ -182,6 +182,9 @@ pub async fn start(opts: RunOptions) -> anyhow::Result<ServerHandle> {
         .await,
     );
     tracing::info!(backend = secrets.backend(), "segredos");
+    if let Some(t) = crate::logging::telemetry() {
+        t.start(paths.logs_dir.clone());
+    }
 
     let approvals = ApprovalManager::new(bus.clone());
     let registry = Arc::new(ToolRegistry::new());
@@ -238,6 +241,11 @@ pub async fn start(opts: RunOptions) -> anyhow::Result<ServerHandle> {
     let host = Arc::new(Host::new(state.clone()));
     *state.host.write() = Some(host.clone());
 
+    crate::telemetry::apply(&state).await;
+    crate::telemetry::ship_crash_reports(&state);
+    if let Some(t) = crate::logging::telemetry() {
+        t.heartbeat("start");
+    }
     crate::auth::bootstrap_admin(&state).await;
     let _ = state.storage.purge_expired_sessions().await;
     crate::orchestrator::spawn_engine_loop(state.clone());

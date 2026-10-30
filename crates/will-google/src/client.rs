@@ -12,6 +12,7 @@ use secrecy::{ExposeSecret, SecretString};
 use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
+use tracing::Instrument;
 use will_core::settings::GoogleSettings;
 use will_core::EventBus;
 use will_storage::google::GoogleAccount;
@@ -251,6 +252,18 @@ impl GoogleClient {
     }
 
     async fn refresh(&self, account: &GoogleAccount) -> Result<String> {
+        let span = tracing::info_span!(
+            "oauth",
+            account_id = %account.id,
+            step = "refresh",
+            ok = tracing::field::Empty
+        );
+        let res = self.refresh_in(account).instrument(span.clone()).await;
+        span.record("ok", res.is_ok());
+        res
+    }
+
+    async fn refresh_in(&self, account: &GoogleAccount) -> Result<String> {
         let key = if account.secret_ref.is_empty() {
             refresh_token_key(&account.id)
         } else {
@@ -259,18 +272,30 @@ impl GoogleClient {
         let refresh = match self.secrets.get(&key).await.map_err(GoogleError::Secret)? {
             Some(s) => s,
             None => {
+                tracing::warn!(
+                    ok = false,
+                    "oauth: refresh token ausente no cofre; conta precisa reautorizar"
+                );
                 self.mark_reauthorize(account).await;
                 return Err(GoogleError::Reauthorize(account.email.clone()));
             }
         };
         let client = self.oauth_client().await?;
         let rt = RefreshToken::new(refresh.expose_secret().to_string());
+        let started = Instant::now();
         match client
             .exchange_refresh_token(&rt)
             .request_async(&self.oauth_http)
             .await
         {
             Ok(tr) => {
+                tracing::info!(
+                    ok = true,
+                    duration_ms = started.elapsed().as_millis() as u64,
+                    ttl_secs = tr.expires_in().map(|d| d.as_secs()),
+                    rotated_refresh_token = tr.refresh_token().is_some(),
+                    "oauth: access token renovado"
+                );
                 let token = tr.access_token().secret().to_string();
                 let ttl = tr.expires_in().unwrap_or(Duration::from_secs(3600));
                 let ttl = ttl
@@ -299,17 +324,28 @@ impl GoogleClient {
             Err(RequestTokenError::ServerResponse(e))
                 if *e.error() == BasicErrorResponseType::InvalidGrant =>
             {
+                tracing::warn!(
+                    ok = false,
+                    reason = "invalid_grant",
+                    "oauth: refresh token revogado/expirado"
+                );
                 self.mark_reauthorize(account).await;
                 Err(GoogleError::Reauthorize(account.email.clone()))
             }
-            Err(RequestTokenError::ServerResponse(e)) => Err(GoogleError::OAuth(format!(
-                "renovação de token falhou: {}{}",
-                e.error(),
-                e.error_description()
-                    .map(|d| format!(" ({d})"))
-                    .unwrap_or_default()
-            ))),
-            Err(e) => Err(GoogleError::Http(format!("renovação de token: {e}"))),
+            Err(RequestTokenError::ServerResponse(e)) => {
+                tracing::error!(ok = false, reason = %e.error(), "oauth: renovação de token recusada pelo Google");
+                Err(GoogleError::OAuth(format!(
+                    "renovação de token falhou: {}{}",
+                    e.error(),
+                    e.error_description()
+                        .map(|d| format!(" ({d})"))
+                        .unwrap_or_default()
+                )))
+            }
+            Err(e) => {
+                tracing::error!(ok = false, error = %e, "oauth: renovação de token falhou (rede)");
+                Err(GoogleError::Http(format!("renovação de token: {e}")))
+            }
         }
     }
 
@@ -317,8 +353,9 @@ impl GoogleClient {
         self.invalidate_token(&account.id);
         if account.status != STATUS_REAUTHORIZE {
             if let Err(e) = self.set_status(&account.id, STATUS_REAUTHORIZE).await {
-                tracing::warn!(module = "google", error = %e, "não foi possível marcar conta como reauthorize");
+                tracing::warn!(account_id = %account.id, error = %e, "não foi possível marcar conta como reauthorize");
             }
+            tracing::warn!(account_id = %account.id, domain = crate::email_domain(&account.email), "conta Google marcada como reauthorize");
             self.bus.log(
                 "warn",
                 "google",
@@ -349,6 +386,7 @@ impl GoogleClient {
         req.request_async(&self.oauth_http)
             .await
             .map_err(|e| GoogleError::OAuth(format!("revogação falhou: {e}")))?;
+        tracing::info!(account_id = %account.id, "oauth: refresh token revogado no Google");
         Ok(())
     }
 
@@ -427,24 +465,33 @@ impl GoogleClient {
     {
         let mut attempt = 0u32;
         let mut refreshed_after_401 = false;
+        let started = Instant::now();
         loop {
             attempt += 1;
             let token = self.access_token(account).await?;
             let resp = match build(&self.http, &token).send().await {
                 Ok(r) => r,
                 Err(e) => {
-                    if attempt < MAX_ATTEMPTS && (e.is_timeout() || e.is_connect()) {
-                        tokio::time::sleep(backoff(attempt, None)).await;
+                    let timeout = e.is_timeout();
+                    let connect = e.is_connect();
+                    let err: GoogleError = e.into();
+                    if attempt < MAX_ATTEMPTS && (timeout || connect) {
+                        let wait = backoff(attempt, None);
+                        tracing::warn!(account_id = %account.id, attempt, timeout, retry_in_ms = wait.as_millis() as u64, error = %err, "Google API: erro de rede; nova tentativa");
+                        tokio::time::sleep(wait).await;
                         continue;
                     }
-                    return Err(e.into());
+                    tracing::error!(account_id = %account.id, attempt, duration_ms = started.elapsed().as_millis() as u64, error = %err, "Google API: erro de rede");
+                    return Err(err);
                 }
             };
             let status = resp.status();
             if status.is_success() {
+                tracing::debug!(account_id = %account.id, attempt, http_status = status.as_u16(), duration_ms = started.elapsed().as_millis() as u64, "Google API: ok");
                 return Ok(resp);
             }
             if status == reqwest::StatusCode::UNAUTHORIZED && !refreshed_after_401 {
+                tracing::info!(account_id = %account.id, http_status = 401u16, "Google API: 401; renovando token uma vez");
                 refreshed_after_401 = true;
                 self.invalidate_token(&account.id);
                 continue;
@@ -456,11 +503,16 @@ impl GoogleClient {
                 .and_then(|s| s.trim().parse::<u64>().ok())
                 .map(Duration::from_secs);
             if (status.as_u16() == 429 || status.is_server_error()) && attempt < MAX_ATTEMPTS {
-                tokio::time::sleep(backoff(attempt, retry_after)).await;
+                let wait = backoff(attempt, retry_after);
+                tracing::warn!(account_id = %account.id, attempt, http_status = status.as_u16(), retry_in_ms = wait.as_millis() as u64, rate_limit = status.as_u16() == 429, "Google API: resposta de erro; nova tentativa");
+                tokio::time::sleep(wait).await;
                 continue;
             }
             let text = resp.text().await.unwrap_or_default();
-            return Err(parse_api_error(status.as_u16(), &text));
+            let err = parse_api_error(status.as_u16(), &text);
+            tracing::Span::current().record("http_status", status.as_u16());
+            tracing::warn!(account_id = %account.id, attempt, http_status = status.as_u16(), duration_ms = started.elapsed().as_millis() as u64, error = %err, "Google API: falhou");
+            return Err(err);
         }
     }
 
@@ -516,10 +568,12 @@ impl GoogleClient {
         }
         .await;
         if let Err(e) = result {
+            tracing::warn!(account_id = %account.id, bytes = total, error = %e, "download para arquivo falhou");
             drop(file);
             let _ = tokio::fs::remove_file(dest).await;
             return Err(e);
         }
+        tracing::debug!(account_id = %account.id, bytes = total, "download para arquivo concluído");
         Ok((total, ctype))
     }
 
@@ -582,6 +636,7 @@ impl GoogleClient {
             .and_then(|v| v.to_str().ok())
             .map(|s| s.to_string())
             .ok_or_else(|| GoogleError::Http("upload resumable sem Location".into()))?;
+        tracing::debug!(account_id = %account.id, total_bytes = total, "upload resumable: sessão aberta");
         let mut f = tokio::fs::File::open(file).await?;
         let mut offset = 0u64;
         let mut buf = vec![0u8; RESUMABLE_CHUNK as usize];
@@ -627,13 +682,18 @@ impl GoogleClient {
                     .and_then(|n| n.trim().parse::<u64>().ok())
                     .map(|n| n + 1)
                     .unwrap_or(end);
+                tracing::debug!(account_id = %account.id, offset, total_bytes = total, "upload resumable: bloco aceito");
                 continue;
             }
             if status.is_success() {
+                tracing::info!(account_id = %account.id, total_bytes = total, http_status = status.as_u16(), "upload resumable concluído");
                 return Self::json_body(resp).await;
             }
             let text = resp.text().await.unwrap_or_default();
-            return Err(parse_api_error(status.as_u16(), &text));
+            let err = parse_api_error(status.as_u16(), &text);
+            tracing::Span::current().record("http_status", status.as_u16());
+            tracing::warn!(account_id = %account.id, http_status = status.as_u16(), offset, total_bytes = total, error = %err, "upload resumable falhou");
+            return Err(err);
         }
     }
 

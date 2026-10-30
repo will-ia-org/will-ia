@@ -19,6 +19,7 @@ use std::sync::{Arc, Weak};
 use std::time::Duration;
 use tokio::sync::mpsc;
 use tokio_util::sync::CancellationToken;
+use tracing::Instrument;
 use will_core::settings::{WhatsAppAccountRef, WhatsAppSettings};
 use will_core::{AppPaths, Event, EventBus, ModuleStatus};
 use will_storage::whatsapp::{WaContact, WaMessage};
@@ -79,6 +80,39 @@ impl ConnState {
             ConnState::Degraded(_) => "degraded",
         }
     }
+}
+
+/// Span `wa_conn` de uma (re)conexão/pareamento de conta; `ok` é gravado depois.
+fn conn_span(account_id: &str, attempt: u32, reason: &'static str) -> tracing::Span {
+    tracing::info_span!(
+        "wa_conn",
+        account_id = %account_id,
+        attempt,
+        reason,
+        ok = tracing::field::Empty
+    )
+}
+
+/// Chama `backend.connect` dentro de um span `wa_conn`, registrando resultado.
+async fn connect_traced(
+    acc: &WaAccount,
+    phone: Option<String>,
+    attempt: u32,
+    reason: &'static str,
+) -> Result<(), String> {
+    let span = conn_span(&acc.id, attempt, reason);
+    let res = async {
+        let res = acc.backend.connect(phone).await;
+        match &res {
+            Ok(()) => tracing::info!(ok = true, "conexão do WhatsApp iniciada"),
+            Err(e) => tracing::warn!(ok = false, error = %e, "conexão do WhatsApp falhou"),
+        }
+        res
+    }
+    .instrument(span.clone())
+    .await;
+    span.record("ok", res.is_ok());
+    res
 }
 
 /// Rótulo gerado automaticamente ("Conta N"); substituído pelo nome do perfil ao conectar.
@@ -254,7 +288,7 @@ impl WhatsAppModule {
     fn insert_account(&self, r: &WhatsAppAccountRef) -> Arc<WaAccount> {
         let dir = self.account_dir(&r.id);
         if let Err(e) = std::fs::create_dir_all(&dir) {
-            tracing::warn!("criar {}: {e}", dir.display());
+            tracing::warn!(account_id = %r.id, path = %dir.display(), error = %e, "criar pasta da conta falhou");
         }
         let backend = (self.factory)(&r.id, dir, self.tx.clone());
         let acc = WaAccount::new(r, backend);
@@ -308,6 +342,7 @@ impl WhatsAppModule {
         }
         *self.settings.write() = s;
         for acc in removed {
+            tracing::info!(account_id = %acc.id, "conta WhatsApp removida das configurações");
             self.deps.bus.log(
                 "info",
                 LOG_MODULE,
@@ -320,6 +355,7 @@ impl WhatsAppModule {
             self.disconnect_account(&acc, "conta removida").await;
         }
         for acc in to_disable {
+            tracing::info!(account_id = %acc.id, "conta WhatsApp desativada");
             self.disconnect_account(&acc, "conta desativada").await;
         }
         if self.started.load(Ordering::SeqCst) {
@@ -430,6 +466,7 @@ impl WhatsAppModule {
     pub async fn start(self: &Arc<Self>) -> Result<(), String> {
         let s = self.settings();
         if !s.enabled {
+            tracing::info!("WhatsApp desligado nas configurações");
             self.deps
                 .bus
                 .log("info", LOG_MODULE, "WhatsApp desligado nas configurações");
@@ -437,6 +474,7 @@ impl WhatsAppModule {
         }
         self.ensure_loops();
         let accounts = self.accounts();
+        tracing::info!(accounts = accounts.len(), "módulo WhatsApp iniciando");
         if accounts.is_empty() {
             self.deps.bus.log(
                 "info",
@@ -449,7 +487,7 @@ impl WhatsAppModule {
                 continue;
             }
             if acc.has_session() {
-                if let Err(e) = acc.backend.connect(None).await {
+                if let Err(e) = connect_traced(acc, None, 1, "start").await {
                     acc.set_state(ConnState::Degraded(e.clone()));
                     self.deps.bus.log(
                         "warn",
@@ -459,6 +497,7 @@ impl WhatsAppModule {
                     self.schedule_reconnect(acc);
                 }
             } else {
+                tracing::info!(account_id = %acc.id, "conta sem sessão; aguardando pareamento");
                 self.deps.bus.log(
                     "info",
                     LOG_MODULE,
@@ -472,6 +511,7 @@ impl WhatsAppModule {
 
     /// Desliga: cancela tarefas e fecha as conexões (as sessões permanecem no disco).
     pub async fn stop(&self) {
+        tracing::info!("módulo WhatsApp parando");
         if let Some(t) = self.token.lock().take() {
             t.cancel();
         }
@@ -484,9 +524,12 @@ impl WhatsAppModule {
 
     async fn disconnect_account(&self, acc: &Arc<WaAccount>, reason: &str) {
         acc.stopping.store(true, Ordering::SeqCst);
-        let _ = acc.backend.disconnect().await;
+        if let Err(e) = acc.backend.disconnect().await {
+            tracing::warn!(account_id = %acc.id, reason, error = %e, "desconectar falhou");
+        }
         acc.stopping.store(false, Ordering::SeqCst);
         if matches!(acc.state(), ConnState::Connected | ConnState::Pairing(_)) {
+            tracing::info!(account_id = %acc.id, reason, "conta WhatsApp desconectada");
             acc.set_state(ConnState::Disconnected);
             self.emit(
                 "disconnected",
@@ -532,6 +575,7 @@ impl WhatsAppModule {
                     created_at: Some(Utc::now()),
                 };
                 let acc = self.insert_account(&r);
+                tracing::info!(account_id = %acc.id, "nova conta WhatsApp criada para pareamento");
                 self.deps.bus.log(
                     "info",
                     LOG_MODULE,
@@ -544,12 +588,14 @@ impl WhatsAppModule {
         self.ensure_loops();
         *acc.last_qr.write() = None;
         *acc.last_pair_code.write() = None;
-        acc.set_state(ConnState::Pairing(if phone.is_some() {
+        let by_code = phone.is_some();
+        acc.set_state(ConnState::Pairing(if by_code {
             "code".into()
         } else {
             "qr".into()
         }));
-        if let Err(e) = acc.backend.connect(phone).await {
+        tracing::info!(account_id = %acc.id, by_code, "pareamento do WhatsApp iniciado");
+        if let Err(e) = connect_traced(&acc, phone, 1, "pair").await {
             acc.set_state(ConnState::Degraded(e.clone()));
             self.publish_module_status();
             return Err(e);
@@ -567,11 +613,13 @@ impl WhatsAppModule {
         remove: bool,
     ) -> Result<(), String> {
         let acc = self.get_account(account_id)?;
+        tracing::info!(account_id = %acc.id, clear_index, remove, "desvinculando conta WhatsApp");
         acc.stopping.store(true, Ordering::SeqCst);
         acc.unlinking.store(true, Ordering::SeqCst);
         let res = acc.backend.logout().await;
         acc.stopping.store(false, Ordering::SeqCst);
         if let Err(e) = &res {
+            tracing::warn!(account_id = %acc.id, error = %e, "logout remoto falhou");
             self.deps.bus.log(
                 "warn",
                 LOG_MODULE,
@@ -618,12 +666,16 @@ impl WhatsAppModule {
         let acc = self.get_account(account_id)?;
         self.ensure_loops();
         acc.stopping.store(true, Ordering::SeqCst);
-        let _ = acc.backend.disconnect().await;
+        if let Err(e) = acc.backend.disconnect().await {
+            tracing::warn!(account_id = %acc.id, error = %e, "desconectar antes de reconectar falhou");
+        }
         acc.stopping.store(false, Ordering::SeqCst);
         acc.backoff_attempt.store(0, Ordering::SeqCst);
-        acc.backend.connect(None).await.inspect_err(|e| {
-            acc.set_state(ConnState::Degraded(e.clone()));
-        })
+        connect_traced(&acc, None, 1, "manual")
+            .await
+            .inspect_err(|e| {
+                acc.set_state(ConnState::Degraded(e.clone()));
+            })
     }
 
     /// Altera rótulo e/ou ativação de uma conta. Desativar desconecta; ativar
@@ -651,7 +703,7 @@ impl WhatsAppModule {
                 && acc.has_session()
                 && !acc.is_connected()
             {
-                if let Err(e) = acc.backend.connect(None).await {
+                if let Err(e) = connect_traced(&acc, None, 1, "enable").await {
                     acc.set_state(ConnState::Degraded(e));
                 }
             }
@@ -787,13 +839,14 @@ impl WhatsAppModule {
             tracing::warn!("loop de eventos do WhatsApp já em execução");
             return;
         };
+        tracing::debug!("loop de eventos do WhatsApp iniciado");
         loop {
             tokio::select! {
                 _ = token.cancelled() => break,
                 ev = rx.recv() => match ev {
                     Some((account_id, ev)) => match self.account(&account_id) {
                         Some(acc) => self.handle_event(&acc, ev).await,
-                        None => tracing::debug!("evento de conta WhatsApp desconhecida/removida {account_id} ignorado"),
+                        None => tracing::debug!(account_id = %account_id, "evento de conta WhatsApp desconhecida/removida ignorado"),
                     },
                     None => {
                         tracing::warn!("canal de eventos dos backends WhatsApp fechado");
@@ -802,6 +855,7 @@ impl WhatsAppModule {
                 }
             }
         }
+        tracing::info!("loop de eventos do WhatsApp encerrado");
         *self.events.lock().await = Some(rx);
     }
 
@@ -829,7 +883,7 @@ impl WhatsAppModule {
                     tracing::info!(account = %acc.id, mappings = n, chats, contacts, "identidades LID religadas");
                 }
             }
-            Err(e) => tracing::warn!("wa_relink_names: {e}"),
+            Err(e) => tracing::warn!(account_id = %acc.id, error = %e, "wa_relink_names falhou"),
         }
     }
 
@@ -856,13 +910,23 @@ impl WhatsAppModule {
             let days = self.settings().retention_days;
             if days > 0 {
                 match self.deps.storage.wa_prune(days as i64).await {
-                    Ok(n) if n > 0 => self.deps.bus.log(
-                        "info",
-                        LOG_MODULE,
-                        format!("poda do índice: {n} mensagens removidas (> {days} dias)"),
-                    ),
-                    Ok(_) => {}
+                    Ok(n) if n > 0 => {
+                        tracing::info!(
+                            removed = n,
+                            retention_days = days,
+                            "poda do índice do WhatsApp"
+                        );
+                        self.deps.bus.log(
+                            "info",
+                            LOG_MODULE,
+                            format!("poda do índice: {n} mensagens removidas (> {days} dias)"),
+                        )
+                    }
+                    Ok(_) => {
+                        tracing::debug!(retention_days = days, "poda do índice: nada a remover")
+                    }
                     Err(e) => {
+                        tracing::warn!(error = %e, "poda do índice do WhatsApp falhou");
                         self.deps
                             .bus
                             .log("warn", LOG_MODULE, format!("poda do índice falhou: {e}"))
@@ -889,6 +953,7 @@ impl WhatsAppModule {
         }
         let attempt = acc.backoff_attempt.fetch_add(1, Ordering::SeqCst);
         let delay = (BACKOFF_MIN_SECS << attempt.min(6)).min(BACKOFF_MAX_SECS);
+        tracing::info!(account_id = %acc.id, attempt = attempt + 1, delay_secs = delay, "reconexão do WhatsApp agendada");
         let token = self.token.lock().clone();
         let me = Arc::clone(self);
         let acc = Arc::clone(acc);
@@ -909,6 +974,7 @@ impl WhatsAppModule {
                 return;
             }
             if matches!(acc.state(), ConnState::LoggedOut) || me.account(&acc.id).is_none() {
+                tracing::debug!(account_id = %acc.id, "reconexão cancelada: conta deslogada ou removida");
                 return;
             }
             me.deps.bus.log(
@@ -920,7 +986,7 @@ impl WhatsAppModule {
                     attempt + 1
                 ),
             );
-            if let Err(e) = acc.backend.connect(None).await {
+            if let Err(e) = connect_traced(&acc, None, attempt + 1, "backoff").await {
                 acc.set_state(ConnState::Degraded(e.clone()));
                 me.deps.bus.log(
                     "warn",
@@ -935,6 +1001,7 @@ impl WhatsAppModule {
     async fn handle_event(self: &Arc<Self>, acc: &Arc<WaAccount>, ev: BackendEvent) {
         match ev {
             BackendEvent::Qr { code, timeout_secs } => {
+                tracing::info!(account_id = %acc.id, timeout_secs, "QR de pareamento gerado");
                 let svg = qr_svg(&code);
                 let detail = json!({"account_id": acc.id, "data": code, "svg": svg, "timeout_secs": timeout_secs, "at": Utc::now().to_rfc3339()});
                 *acc.last_qr.write() = Some(detail.clone());
@@ -942,6 +1009,7 @@ impl WhatsAppModule {
                 self.emit("qr", detail);
             }
             BackendEvent::PairCode { code } => {
+                tracing::info!(account_id = %acc.id, "código de pareamento gerado");
                 *acc.last_pair_code.write() = Some(code.clone());
                 acc.set_state(ConnState::Pairing("code".into()));
                 self.emit("code", json!({"account_id": acc.id, "code": code}));
@@ -976,8 +1044,9 @@ impl WhatsAppModule {
                 *acc.last_qr.write() = None;
                 *acc.last_pair_code.write() = None;
                 *acc.last_sync.write() = Some(Utc::now());
-                acc.backoff_attempt.store(0, Ordering::SeqCst);
+                let attempts = acc.backoff_attempt.swap(0, Ordering::SeqCst);
                 acc.set_state(ConnState::Connected);
+                tracing::info!(name: "wa_conn", account_id = %acc.id, attempt = attempts + 1, reason = "connected", ok = true, "WhatsApp conectado");
                 self.emit("connected", json!({"account_id": acc.id, "me": me}));
                 self.deps.bus.log(
                     "info",
@@ -987,6 +1056,7 @@ impl WhatsAppModule {
                 self.publish_module_status();
             }
             BackendEvent::Disconnected { reason } => {
+                tracing::warn!(name: "wa_conn", account_id = %acc.id, attempt = acc.backoff_attempt.load(Ordering::SeqCst), reason = %reason, ok = false, stopping = acc.stopping.load(Ordering::SeqCst), "WhatsApp desconectado");
                 if !matches!(acc.state(), ConnState::LoggedOut) {
                     acc.set_state(if acc.stopping.load(Ordering::SeqCst) {
                         ConnState::Disconnected
@@ -1009,6 +1079,7 @@ impl WhatsAppModule {
             BackendEvent::LoggedOut => {
                 *acc.me.write() = None;
                 let by_user = acc.unlinking.swap(false, Ordering::SeqCst);
+                tracing::warn!(name: "wa_conn", account_id = %acc.id, attempt = 0u32, reason = if by_user { "unlinked" } else { "revoked" }, ok = false, "sessão do WhatsApp encerrada");
                 if by_user {
                     // Desvinculado pelo próprio usuário (unlink): fica "desconectado", sem alarme.
                     acc.set_state(ConnState::Disconnected);
@@ -1042,7 +1113,7 @@ impl WhatsAppModule {
             BackendEvent::ContactUpdate(mut c) => {
                 c.account_id = acc.id.clone();
                 if let Err(e) = self.deps.storage.wa_upsert_contact(&c).await {
-                    tracing::warn!("wa_upsert_contact: {e}");
+                    tracing::warn!(account_id = %acc.id, error = %e, "wa_upsert_contact falhou");
                 }
                 // Nome da agenda chegou pelo JID de telefone: propaga ao LID/chat.
                 if c.name.is_some() {
@@ -1059,7 +1130,9 @@ impl WhatsAppModule {
                 if subject.is_none() && participants.is_empty() {
                     match acc.backend.fetch_group(&jid).await {
                         Ok(meta) => self.upsert_group_json(acc, &jid, &meta).await,
-                        Err(e) => tracing::debug!("fetch_group {jid}: {e}"),
+                        Err(e) => {
+                            tracing::debug!(account_id = %acc.id, chat_id = %jid, error = %e, "fetch_group falhou")
+                        }
                     }
                 } else if let Err(e) = self
                     .deps
@@ -1074,7 +1147,7 @@ impl WhatsAppModule {
                     )
                     .await
                 {
-                    tracing::warn!("wa_upsert_group: {e}");
+                    tracing::warn!(account_id = %acc.id, chat_id = %jid, error = %e, "wa_upsert_group falhou");
                 }
             }
             BackendEvent::ChatArchived { jid, archived } => {
@@ -1083,7 +1156,7 @@ impl WhatsAppModule {
                     .wa_upsert_chat(&acc.id, &jid, None, is_group_jid(&jid))
                     .await;
                 if let Err(e) = st.wa_set_chat_archived(&acc.id, &jid, archived).await {
-                    tracing::warn!("wa_set_chat_archived: {e}");
+                    tracing::warn!(account_id = %acc.id, chat_id = %jid, error = %e, "wa_set_chat_archived falhou");
                 }
             }
         }
@@ -1100,11 +1173,23 @@ impl WhatsAppModule {
             .wa_upsert_group(&acc.id, jid, subject, description, &participants, &admins)
             .await
         {
-            tracing::warn!("wa_upsert_group: {e}");
+            tracing::warn!(account_id = %acc.id, chat_id = %jid, error = %e, "wa_upsert_group falhou");
         }
     }
 
     async fn index_message(&self, acc: &WaAccount, m: IncomingMessage) {
+        tracing::debug!(
+            name: "inbound",
+            channel = "whatsapp",
+            account_id = %acc.id,
+            chat_id = %m.chat_jid,
+            msg_id = %m.id,
+            kind = %m.kind,
+            from_me = m.from_me,
+            is_group = m.is_group,
+            text_len = m.text.as_ref().map(|t| t.chars().count()).unwrap_or(0),
+            "mensagem indexada"
+        );
         let st = &self.deps.storage;
         let chat_name = m.chat_name.clone().or_else(|| {
             if !m.is_group && !m.from_me {
@@ -1117,7 +1202,7 @@ impl WhatsAppModule {
             .wa_upsert_chat(&acc.id, &m.chat_jid, chat_name.as_deref(), m.is_group)
             .await
         {
-            tracing::warn!("wa_upsert_chat: {e}");
+            tracing::warn!(account_id = %acc.id, chat_id = %m.chat_jid, error = %e, "wa_upsert_chat falhou");
             return;
         }
         if !m.from_me && !m.sender_jid.is_empty() {
@@ -1132,7 +1217,7 @@ impl WhatsAppModule {
                 push_name: m.sender_name.clone(),
             };
             if let Err(e) = st.wa_upsert_contact(&c).await {
-                tracing::debug!("wa_upsert_contact: {e}");
+                tracing::debug!(account_id = %acc.id, error = %e, "wa_upsert_contact falhou");
             }
         }
         // Chat 1:1 por LID com telefone conhecido (mensagem minha): grava o
@@ -1147,7 +1232,7 @@ impl WhatsAppModule {
                     push_name: None,
                 };
                 if let Err(e) = st.wa_upsert_contact(&c).await {
-                    tracing::debug!("wa_upsert_contact (chat lid): {e}");
+                    tracing::debug!(account_id = %acc.id, error = %e, "wa_upsert_contact (chat lid) falhou");
                 }
             }
         }
@@ -1167,7 +1252,7 @@ impl WhatsAppModule {
             read: m.from_me,
         };
         if let Err(e) = st.wa_insert_message(&msg).await {
-            tracing::warn!("wa_insert_message: {e}");
+            tracing::warn!(account_id = %acc.id, chat_id = %msg.chat_jid, msg_id = %msg.id, error = %e, "wa_insert_message falhou");
         }
         *acc.last_sync.write() = Some(Utc::now());
     }
@@ -1180,6 +1265,7 @@ impl WhatsAppModule {
         kind: &str,
     ) {
         let st = &self.deps.storage;
+        tracing::debug!(account_id = %acc.id, chat_id = %chat_jid, kind, ids = message_ids.len(), "recibo recebido");
         if message_ids.is_empty() {
             if kind == "read" {
                 let _ = st.wa_mark_read(&acc.id, chat_jid).await;
@@ -1206,7 +1292,9 @@ impl WhatsAppModule {
                     // Mensagem nossa não indexada (enviada do telefone): só atualiza outbox se existir.
                     let _ = st.wa_set_outbox_status(&acc.id, id, kind, None).await;
                 }
-                Err(e) => tracing::debug!("wa_get_message {id}: {e}"),
+                Err(e) => {
+                    tracing::debug!(account_id = %acc.id, msg_id = %id, error = %e, "wa_get_message falhou")
+                }
             }
         }
         if mark_chat {

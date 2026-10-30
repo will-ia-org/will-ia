@@ -30,15 +30,29 @@ impl ToolRegistry {
 
     pub fn add_provider(&self, p: Arc<dyn ToolProvider>) {
         let mut g = self.providers.write();
+        let replaced = g.iter().any(|x| x.family() == p.family());
         g.retain(|x| x.family() != p.family());
+        tracing::debug!(
+            family = p.family(),
+            tools = p.tools().len(),
+            available = p.available(),
+            replaced,
+            "provedor de ferramentas registrado"
+        );
         g.push(p);
     }
 
     pub fn remove_family(&self, family: &str) {
-        self.providers.write().retain(|x| x.family() != family);
+        let mut g = self.providers.write();
+        let before = g.len();
+        g.retain(|x| x.family() != family);
+        if g.len() != before {
+            tracing::debug!(family, "provedor de ferramentas removido");
+        }
     }
 
     pub fn set_overrides(&self, m: BTreeMap<String, ToolPolicy>) {
+        tracing::debug!(overrides = m.len(), "políticas de ferramentas carregadas");
         *self.overrides.write() = m;
     }
 
@@ -52,6 +66,11 @@ impl ToolRegistry {
                 g.remove(tool);
             }
         }
+        tracing::info!(
+            tool,
+            policy = policy.map(|p| p.as_str()).unwrap_or("default"),
+            "política aplicada à ferramenta"
+        );
     }
 
     pub fn policy_for(&self, spec: &ToolSpec) -> (ToolPolicy, bool) {

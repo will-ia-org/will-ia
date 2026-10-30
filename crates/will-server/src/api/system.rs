@@ -111,6 +111,7 @@ pub const SECRET_KEYS: &[&str] = &[
     "openai_api_key",
     "telegram_bot_token",
     "google_client_secret",
+    crate::telemetry::TOKEN_KEY,
 ];
 
 async fn secrets_present(state: &App) -> BTreeMap<String, bool> {
@@ -165,9 +166,11 @@ pub async fn put_settings(
         if let Some(p) = &new.kb.path {
             let pb = state.paths.resolve_user_path(p);
             if !pb.is_dir() {
+                tracing::warn!(path = %pb.display(), "KB recusada: pasta não existe");
                 return Err(bad("a pasta informada não existe"));
             }
             if will_platform::is_dangerous_kb(&pb) {
+                tracing::warn!(path = %pb.display(), "KB recusada: pasta perigosa (home/raiz)");
                 return Err(bad(
                     "pasta perigosa (home ou raiz do disco); escolha uma subpasta dedicada",
                 ));
@@ -176,6 +179,7 @@ pub async fn put_settings(
     }
     *state.settings.write() = new;
     state.save_settings().await.map_err(internal)?;
+    tracing::info!(section = %body.section, "configurações salvas");
     crate::modules::apply_section(&state, &body.section).await;
     get_settings(State(state)).await
 }
@@ -208,11 +212,13 @@ pub async fn set_secret(State(state): State<App>, Json(body): Json<SetSecret>) -
         )
         .await
         .map_err(internal)?;
+    tracing::info!(key = %body.key, "segredo gravado no cofre");
     // efeitos colaterais
     match body.key.as_str() {
         "openai_api_key" => crate::modules::apply_section(&state, "realtime").await,
         "telegram_bot_token" => crate::modules::apply_section(&state, "telegram").await,
         "google_client_secret" => crate::modules::apply_section(&state, "google").await,
+        crate::telemetry::TOKEN_KEY => crate::modules::apply_section(&state, "telemetry").await,
         _ => {}
     }
     Ok(Json(
@@ -225,6 +231,10 @@ pub async fn delete_secret(State(state): State<App>, Path(key): Path<String>) ->
         return Err(bad("chave de segredo não permitida"));
     }
     state.secrets.delete(&key).await.map_err(internal)?;
+    tracing::info!(%key, "segredo removido do cofre");
+    if key == crate::telemetry::TOKEN_KEY {
+        crate::modules::apply_section(&state, "telemetry").await;
+    }
     Ok(Json(json!({ "ok": true })))
 }
 
@@ -249,6 +259,7 @@ pub async fn logs(State(state): State<App>, Query(q): Query<LogsQuery>) -> ApiRe
 
 pub async fn diagnostics(State(state): State<App>) -> Result<axum::response::Response, ApiError> {
     use axum::response::IntoResponse;
+    tracing::info!("diagnóstico exportado");
     let s = state.settings();
     let sanitized = serde_json::to_string_pretty(&s).unwrap_or_default();
     let logs = state
@@ -314,6 +325,7 @@ fn ui_cmd(state: App, cmd: &str) -> ApiResult<Value> {
     let hook = state.ui_hook.read().clone();
     match hook {
         Some(h) => {
+            tracing::debug!(cmd, "comando de UI repassado ao app");
             h(cmd);
             Ok(Json(json!({ "ok": true })))
         }

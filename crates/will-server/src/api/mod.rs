@@ -11,6 +11,7 @@ pub mod kb;
 pub mod mcp;
 pub mod schedules;
 pub mod system;
+pub mod telemetry;
 pub mod threads;
 pub mod users;
 pub mod ws;
@@ -114,6 +115,7 @@ async fn auth(State(state): State<App>, mut req: Request, next: Next) -> Respons
         return ApiError(StatusCode::UNAUTHORIZED, "token de sessão inválido".into())
             .into_response();
     };
+    tracing::Span::current().record("user", p.username.as_str());
     req.extensions_mut().insert(p);
     req.extensions_mut().insert(BearerToken(t));
     next.run(req).await
@@ -153,6 +155,7 @@ pub fn is_admin_path(method: &axum::http::Method, path: &str) -> bool {
         || p == "/browser/launch"
         || p == "/browser/close"
         || p == "/network/cert"
+        || p.starts_with("/telemetry/")
 }
 
 /// Aplica [`require_admin`] só nos caminhos de configuração.
@@ -276,6 +279,9 @@ pub fn router(state: App) -> Router {
         )
         .route("/browser/install/chromium", post(browser::install_chromium))
         .route("/browser/install/skill", post(browser::install_skill))
+        .route("/telemetry/status", get(telemetry::status))
+        .route("/telemetry/test", post(telemetry::test))
+        .route("/telemetry/client-config", get(telemetry::client_config))
         .route("/telegram/test", post(integrations::telegram_test))
         .route("/telegram/status", get(integrations::telegram_status))
         .route("/voice/start", post(integrations::voice_start))
@@ -321,7 +327,9 @@ pub fn router(state: App) -> Router {
         )
         .layer(axum::middleware::from_fn(admin_gate))
         .layer(axum::middleware::from_fn_with_state(state.clone(), auth))
-        .layer(axum::extract::DefaultBodyLimit::max(8 * 1024 * 1024));
+        .layer(axum::extract::DefaultBodyLimit::max(8 * 1024 * 1024))
+        // Mais externa: o span `api` cobre também 401/403 do `auth`/`admin_gate`.
+        .layer(axum::middleware::from_fn(crate::api_trace::api_span));
     Router::new()
         .nest("/api", api)
         .fallback(not_found)

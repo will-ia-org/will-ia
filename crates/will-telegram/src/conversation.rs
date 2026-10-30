@@ -3,7 +3,9 @@
 //! resposta final sai como mensagem nova (reply à última mensagem do usuário) e a
 //! mensagem de status é apagada depois de um atraso.
 
-use crate::sender::{is_missing_message, is_not_modified, TelegramSender};
+use crate::sender::{
+    is_missing_message, is_not_modified, note_outbound, outbound_span, TelegramSender,
+};
 use crate::text::{clip, escape_html, markdown_to_html};
 use parking_lot::Mutex;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -11,6 +13,7 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 use teloxide::payloads::setters::*;
 use teloxide::prelude::Requester;
+use tracing::Instrument;
 use will_core::ThreadId;
 use will_storage::telegram::{StackEntry, TelegramStatusState};
 use will_storage::Storage;
@@ -121,7 +124,7 @@ impl Conversation {
     async fn save(&self) {
         let snap = self.snapshot();
         if let Err(e) = self.storage.save_telegram_status(&snap).await {
-            tracing::warn!(key = %self.key, "salvar telegram_status: {e}");
+            tracing::warn!(key = %self.key, error = %e, "salvar telegram_status falhou");
         }
     }
 
@@ -194,35 +197,50 @@ impl Conversation {
             return;
         };
 
-        let bot = self.sender.bot();
-        let res = bot
-            .edit_message_text(
-                teloxide::types::ChatId(self.chat_id),
-                teloxide::types::MessageId(status_id),
-                body.clone(),
-            )
-            .parse_mode(teloxide::types::ParseMode::Html)
-            .await;
-        match res {
-            Ok(_) => {}
-            Err(e) if is_not_modified(&e) => {}
-            Err(e) if is_missing_message(&e) => self.create_status(&body).await,
-            Err(e) => tracing::warn!(key = %self.key, "editar status: {e}"),
+        let span = outbound_span(self.chat_id, self.topic_id, self.thread_id(), "status_edit");
+        async {
+            let started = Instant::now();
+            let bot = self.sender.bot();
+            let res = bot
+                .edit_message_text(
+                    teloxide::types::ChatId(self.chat_id),
+                    teloxide::types::MessageId(status_id),
+                    body.clone(),
+                )
+                .parse_mode(teloxide::types::ParseMode::Html)
+                .await;
+            match res {
+                Ok(_) => note_outbound(&Ok::<(), String>(()), started, true),
+                Err(e) if is_not_modified(&e) => {
+                    note_outbound(&Ok::<(), String>(()), started, true)
+                }
+                Err(e) if is_missing_message(&e) => {
+                    tracing::debug!(key = %self.key, message_id = status_id, "status sumiu; recriando");
+                    self.create_status(&body).await
+                }
+                Err(e) => note_outbound(&Err::<(), _>(e), started, true),
+            }
         }
+        .instrument(span)
+        .await
     }
 
     async fn create_status(&self, body: &str) {
-        match self
-            .sender
-            .send_one(self.chat_id, self.topic_id, body, true, None, None)
-            .await
-        {
-            Ok(m) => {
+        let span = outbound_span(self.chat_id, self.topic_id, self.thread_id(), "status");
+        async {
+            let started = Instant::now();
+            let res = self
+                .sender
+                .send_one(self.chat_id, self.topic_id, body, true, None, None)
+                .await;
+            note_outbound(&res, started, true);
+            if let Ok(m) = res {
                 self.state.lock().status_message_id = Some(m.id.0);
                 self.save().await;
             }
-            Err(e) => tracing::warn!(key = %self.key, "criar status: {e}"),
         }
+        .instrument(span)
+        .await
     }
 
     /// Fim do turno: resposta final (reply à última mensagem do usuário na pilha) →
@@ -245,7 +263,7 @@ impl Conversation {
             clean.to_string()
         };
 
-        let (reply_to, status_id) = {
+        let (reply_to, status_id, thread_id) = {
             let s = self.state.lock();
             let last_user = s
                 .stack
@@ -253,8 +271,21 @@ impl Conversation {
                 .rev()
                 .find(|e| e.role == "user")
                 .and_then(|e| e.message_id);
-            (last_user.or(s.last_user_message_id), s.status_message_id)
+            (
+                last_user.or(s.last_user_message_id),
+                s.status_message_id,
+                s.thread_id,
+            )
         };
+        tracing::debug!(
+            key = %self.key,
+            thread_id = ?thread_id,
+            is_error,
+            html,
+            text_len = final_text.chars().count(),
+            ?reply_to,
+            "finalize: enviando resposta final"
+        );
 
         let sent = if html {
             let html_text = markdown_to_html(&final_text);
@@ -262,6 +293,7 @@ impl Conversation {
                 .send_html_or_plain(
                     self.chat_id,
                     self.topic_id,
+                    thread_id,
                     &html_text,
                     &final_text,
                     reply_to,
@@ -269,11 +301,18 @@ impl Conversation {
                 .await
         } else {
             self.sender
-                .send_text(self.chat_id, self.topic_id, &final_text, false, reply_to)
+                .send_text(
+                    self.chat_id,
+                    self.topic_id,
+                    thread_id,
+                    &final_text,
+                    false,
+                    reply_to,
+                )
                 .await
         };
         if let Err(e) = sent {
-            tracing::error!(key = %self.key, "enviar resposta final: {e}");
+            tracing::error!(key = %self.key, thread_id = ?thread_id, error = %e, "enviar resposta final falhou");
         }
 
         if let Some(id) = status_id {

@@ -9,12 +9,13 @@ use will_core::{Module, ModuleStatus, ToolPolicy};
 use will_mcp::McpServerDeps;
 
 pub async fn start_all(state: &Arc<AppState>) {
+    tracing::info!("subindo módulos");
     spawn_status_sync(state);
     start_mcp(state).await;
     register_core_tools(state);
     refresh_engine(state, false).await;
     crate::orchestrator::retitle_placeholder_threads(state).await;
-    let _ = crate::mcp_json::write(state).await;
+    write_mcp_json(state).await;
     start_realtime(state).await;
     start_scheduler(state);
     start_browser(state).await;
@@ -25,6 +26,40 @@ pub async fn start_all(state: &Arc<AppState>) {
     #[cfg(feature = "whatsapp")]
     start_whatsapp(state).await;
     recompute_engine_status(state);
+    tracing::info!("módulos no ar");
+}
+
+/// Regrava o `.mcp.json` da KB, logando a falha (os chamadores não param por ela).
+async fn write_mcp_json(state: &Arc<AppState>) {
+    if let Err(e) = crate::mcp_json::write(state).await {
+        tracing::warn!(error = %e, "não regravou o .mcp.json da base de conhecimento");
+    }
+}
+
+/// Um evento por mudança de status de módulo, no span `module` (nome, status
+/// e motivo), para rastrear ciclo de vida em qualquer máquina.
+fn log_module_status(module: Module, status: &ModuleStatus) {
+    let (label, reason) = match status {
+        ModuleStatus::Disabled => ("stopped", String::new()),
+        ModuleStatus::Starting => ("starting", String::new()),
+        ModuleStatus::Running => ("running", String::new()),
+        ModuleStatus::Degraded(r) => ("degraded", r.clone()),
+        ModuleStatus::Error(r) => ("error", r.clone()),
+        ModuleStatus::Stopped => ("stopped", String::new()),
+    };
+    let span = tracing::info_span!(
+        "module",
+        module = module.as_str(),
+        status = label,
+        reason = %crate::logging::redact(&reason)
+    );
+    let _entered = span.entered();
+    match status {
+        ModuleStatus::Error(_) => tracing::error!("módulo com erro"),
+        ModuleStatus::Degraded(_) => tracing::warn!("módulo degradado"),
+        ModuleStatus::Disabled => tracing::info!("módulo desligado nas configurações"),
+        _ => tracing::info!("status do módulo"),
+    }
 }
 
 // ----- estado dos módulos (semântica em `will_core::ModuleStatus`) -----
@@ -44,6 +79,7 @@ fn spawn_status_sync(state: &Arc<AppState>) {
             };
             match ev {
                 Ok(will_core::Event::ModuleStatus { module, status }) => {
+                    log_module_status(module, &status);
                     #[cfg(feature = "google")]
                     if matches!(
                         module,
@@ -56,7 +92,10 @@ fn spawn_status_sync(state: &Arc<AppState>) {
                     state.module_status.write().insert(module, status);
                 }
                 Ok(_) => {}
-                Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => continue,
+                Err(tokio::sync::broadcast::error::RecvError::Lagged(n)) => {
+                    tracing::warn!(skipped = n, "sincronização de status: eventos perdidos");
+                    continue;
+                }
                 Err(_) => break,
             }
         }
@@ -170,6 +209,7 @@ pub fn recompute_google_status(state: &Arc<AppState>) {
 }
 
 pub async fn stop_all(state: &Arc<AppState>) {
+    tracing::info!("parando módulos");
     let managers: Vec<Arc<will_realtime::RealtimeManager>> =
         state.voice.read().values().cloned().collect();
     for m in managers {
@@ -193,6 +233,7 @@ pub async fn stop_all(state: &Arc<AppState>) {
     if let Some(m) = state.mcp.lock().await.take() {
         m.stop();
     }
+    tracing::info!("módulos parados");
 }
 
 fn policy_overrides(state: &AppState) -> std::collections::BTreeMap<String, ToolPolicy> {
@@ -224,6 +265,7 @@ pub async fn start_mcp(state: &Arc<AppState>) {
     overrides.extend(policy_overrides(state));
     state.registry.set_overrides(overrides);
     if let Some(old) = state.mcp.lock().await.take() {
+        tracing::info!("servidor MCP anterior parado para reiniciar");
         old.stop();
     }
     if !enabled {
@@ -231,6 +273,17 @@ pub async fn start_mcp(state: &Arc<AppState>) {
         state.set_module_status(Module::Mcp, ModuleStatus::Disabled);
         return;
     }
+    tracing::debug!(
+        port,
+        approval_timeout_secs = timeout,
+        overrides = state
+            .registry
+            .listing()
+            .iter()
+            .filter(|t| t.overridden)
+            .count(),
+        "iniciando servidor MCP"
+    );
     let st = state.clone();
     let deps = McpServerDeps {
         registry: state.registry.clone(),
@@ -260,14 +313,12 @@ pub async fn start_mcp(state: &Arc<AppState>) {
             *state.mcp_url.write() = srv.url();
             *state.mcp.lock().await = Some(srv);
             if let Err(e) = ensure_script_token(state).await {
-                tracing::warn!(error = %e, "token de scripts do MCP indisponível");
-                state
-                    .bus
-                    .log("warn", "mcp", format!("Token para scripts: {e}"));
+                tracing::warn!(target: "will_mcp", error = %e, "Token para scripts: {e}");
             }
             state.set_module_status(Module::Mcp, ModuleStatus::Running);
         }
         Err(e) => {
+            tracing::error!(port, error = %e, "servidor MCP não subiu");
             *state.mcp_url.write() = String::new();
             state.set_module_status(Module::Mcp, ModuleStatus::Error(e));
         }
@@ -306,9 +357,7 @@ pub async fn rotate_script_token(state: &Arc<AppState>) -> Result<String, String
         .await?;
     state.tokens.revoke_generic();
     state.tokens.register_generic(&t);
-    state
-        .bus
-        .log("info", "mcp", "Token para scripts regenerado.".to_string());
+    tracing::info!(target: "will_mcp", "Token para scripts regenerado.");
     Ok(t)
 }
 
@@ -335,6 +384,14 @@ pub async fn refresh_engine(state: &Arc<AppState>, restart_live: bool) -> usize 
     let settings = state.settings();
     let url = state.mcp_url.read().clone();
     let cfg = crate::engine_cfg::build(&settings, &state.paths, token.as_ref(), &url, &ext_env);
+    tracing::debug!(
+        restart_live,
+        token_id = cfg.token_id.as_deref().unwrap_or(""),
+        has_token = token.is_some(),
+        mcp_url = !url.is_empty(),
+        external_env = ext_env.len(),
+        "configuração do motor reconstruída"
+    );
     if restart_live {
         state.engine.reconfigure(cfg)
     } else {
@@ -346,6 +403,10 @@ pub async fn refresh_engine(state: &Arc<AppState>, restart_live: bool) -> usize 
 /// Browser CDP: proxy em loopback + lançamento do navegador sob demanda.
 pub async fn start_browser(state: &Arc<AppState>) {
     let cfg = state.settings().browser;
+    tracing::debug!(
+        enabled = cfg.enabled,
+        "aplicando configuração do Browser CDP"
+    );
     // Pasta das capturas/downloads do agent-browser (dentro do inbox da KB).
     if cfg.enabled {
         if let Some(kb) = state.kb_path().filter(|p| p.is_dir()) {
@@ -376,6 +437,7 @@ pub async fn start_browser(state: &Arc<AppState>) {
 /// Scheduler (agendamentos): laço único em processo; `enabled` liga/desliga.
 pub fn start_scheduler(state: &Arc<AppState>) {
     let cfg = state.settings().scheduler;
+    tracing::debug!(enabled = cfg.enabled, "aplicando configuração do scheduler");
     let existing = state.scheduler.read().clone();
     match existing {
         Some(m) => m.update_config(cfg),
@@ -411,6 +473,12 @@ pub async fn start_realtime(state: &Arc<AppState>) {
     *state.voice_key.write() = key.clone();
     let managers: Vec<Arc<will_realtime::RealtimeManager>> =
         state.voice.read().values().cloned().collect();
+    tracing::debug!(
+        enabled = s.enabled,
+        has_key = key.is_some(),
+        sessions = managers.len(),
+        "aplicando configuração de voz"
+    );
     for m in managers {
         m.update(s.clone(), key.clone());
     }
@@ -431,6 +499,7 @@ pub async fn openai_key(state: &AppState) -> Option<SecretString> {
 #[cfg(feature = "telegram")]
 pub async fn start_telegram(state: &Arc<AppState>) {
     if let Some(t) = state.telegram.write().await.take() {
+        tracing::info!("módulo Telegram anterior parado para reiniciar");
         t.stop().await;
     }
     state.registry.remove_family("telegram");
@@ -472,6 +541,7 @@ pub async fn start_telegram(state: &Arc<AppState>) {
             *state.telegram.write().await = Some(module);
         }
         Err(e) => {
+            tracing::error!(error = %e, "módulo Telegram não subiu");
             state.set_module_status(Module::Telegram, ModuleStatus::Error(e));
         }
     }
@@ -570,7 +640,10 @@ pub async fn start_whatsapp(state: &Arc<AppState>) {
     if s.enabled {
         match module.start().await {
             Ok(()) => state.set_module_status(Module::WhatsApp, module.module_status()),
-            Err(e) => state.set_module_status(Module::WhatsApp, ModuleStatus::Error(e)),
+            Err(e) => {
+                tracing::error!(error = %e, "módulo WhatsApp não subiu");
+                state.set_module_status(Module::WhatsApp, ModuleStatus::Error(e))
+            }
         }
     } else {
         module.stop().await;
@@ -597,8 +670,9 @@ pub async fn sync_whatsapp_accounts(
         }
     };
     if changed {
+        tracing::info!("contas do WhatsApp sincronizadas nas configurações");
         if let Err(e) = state.save_settings().await {
-            tracing::warn!("salvar contas do WhatsApp nas configurações: {e}");
+            tracing::warn!(error = %e, "salvar contas do WhatsApp nas configurações");
         }
         state.bus.emit(will_core::Event::SettingsChanged {
             section: "whatsapp".into(),
@@ -620,8 +694,11 @@ pub async fn maybe_finish_onboarding(state: &Arc<AppState>) {
         )
     };
     if !done && kb_ok && token_ok {
+        tracing::info!("onboarding concluído (KB válida + token ativo)");
         state.settings.write().general.onboarding_done = true;
-        let _ = state.save_settings().await;
+        if let Err(e) = state.save_settings().await {
+            tracing::warn!(error = %e, "onboarding concluído mas configurações não salvas");
+        }
         state.bus.emit(will_core::Event::SettingsChanged {
             section: "general".into(),
         });
@@ -630,6 +707,7 @@ pub async fn maybe_finish_onboarding(state: &Arc<AppState>) {
 
 /// Aplica uma seção alterada.
 pub async fn apply_section(state: &Arc<AppState>, section: &str) {
+    tracing::info!(section, "configurações aplicadas");
     state.bus.emit(will_core::Event::SettingsChanged {
         section: section.to_string(),
     });
@@ -637,6 +715,7 @@ pub async fn apply_section(state: &Arc<AppState>, section: &str) {
         maybe_finish_onboarding(state).await;
     }
     match section {
+        "telemetry" => crate::telemetry::apply(state).await,
         "engine" => {
             // Troca de permissões/modelo/allowlist exige novo processo; aplicamos sem derrubar
             // (vale no próximo spawn). Troca de token é via activate_token.
@@ -644,7 +723,7 @@ pub async fn apply_section(state: &Arc<AppState>, section: &str) {
             recompute_engine_status(state);
         }
         "kb" => {
-            let _ = crate::mcp_json::write(state).await;
+            write_mcp_json(state).await;
             register_core_tools(state);
             let browser = state.browser.read().clone();
             if let Some(b) = browser {
@@ -666,20 +745,19 @@ pub async fn apply_section(state: &Arc<AppState>, section: &str) {
         }
         "mcp" => {
             start_mcp(state).await;
-            let _ = crate::mcp_json::write(state).await;
+            write_mcp_json(state).await;
             refresh_engine(state, false).await;
         }
         "external_mcps" => {
-            let _ = crate::mcp_json::write(state).await;
+            write_mcp_json(state).await;
             refresh_engine(state, false).await;
         }
         "realtime" => start_realtime(state).await,
         "scheduler" => start_scheduler(state),
         "network" => {
-            state.bus.log(
-                "warn",
-                "network",
-                "Configurações de rede salvas; valem no próximo início do servidor.".to_string(),
+            tracing::warn!(
+                target: "will_network",
+                "Configurações de rede salvas; valem no próximo início do servidor."
             );
         }
         "browser" => {
@@ -706,13 +784,26 @@ pub async fn activate_token(state: &Arc<AppState>, id: &str) -> Result<usize, St
         .iter()
         .find(|t| t.id == id)
         .cloned()
-        .ok_or("token não encontrado")?;
+        .ok_or_else(|| {
+            tracing::warn!(token_id = id, "ativação: token não encontrado");
+            "token não encontrado".to_string()
+        })?;
     let secret = state
         .secrets
         .get(&entry.secret_ref)
         .await
-        .map_err(|e| e.to_string())?
-        .ok_or("segredo do token ausente no keyring")?;
+        .map_err(|e| {
+            tracing::error!(token_id = id, error = %e, "ativação: falha ao ler o segredo do token");
+            e.to_string()
+        })?
+        .ok_or_else(|| {
+            tracing::error!(
+                token_id = id,
+                "ativação: segredo do token ausente no keyring"
+            );
+            "segredo do token ausente no keyring".to_string()
+        })?;
+    tracing::info!(token_id = id, label = %entry.label, "testando token antes de ativar");
     let res = test_token(state, &secret).await;
     {
         let mut s = state.settings.write();
@@ -723,6 +814,11 @@ pub async fn activate_token(state: &Arc<AppState>, id: &str) -> Result<usize, St
         }
     }
     if !res.ok {
+        tracing::warn!(
+            token_id = id,
+            error = %crate::logging::redact(res.error.as_deref().unwrap_or("token reprovado")),
+            "token reprovado no teste; não ativado"
+        );
         state.save_settings().await?;
         return Err(res.error.unwrap_or_else(|| "token reprovado".into()));
     }
@@ -738,13 +834,13 @@ pub async fn activate_token(state: &Arc<AppState>, id: &str) -> Result<usize, St
     state.save_settings().await?;
     let n = refresh_engine(state, true).await;
     recompute_engine_status(state);
-    state.bus.log(
-        "info",
-        "engine",
-        format!(
-            "Token '{}' ativado; {} thread(s) derrubada(s), voltam com --resume.",
-            entry.label, n
-        ),
+    tracing::info!(
+        target: "will_engine",
+        token_id = id,
+        restarted = n,
+        "Token '{}' ativado; {} thread(s) derrubada(s), voltam com --resume.",
+        entry.label,
+        n
     );
     maybe_finish_onboarding(state).await;
     Ok(n)

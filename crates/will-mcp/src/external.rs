@@ -22,6 +22,8 @@ pub struct ResolvedExternal {
 /// Faz `initialize` + `tools/list` e retorna o resultado do teste.
 pub async fn test_external(def: &ResolvedExternal, timeout: Duration) -> McpTestResult {
     let at = Some(chrono::Utc::now());
+    let started = std::time::Instant::now();
+    tracing::info!(server = %def.name, kind = %def.kind, timeout_secs = timeout.as_secs(), "testando MCP externo");
     let fut = async {
         match def.kind.as_str() {
             "stdio" => {
@@ -69,7 +71,7 @@ pub async fn test_external(def: &ResolvedExternal, timeout: Duration) -> McpTest
                     .list_all_tools()
                     .await
                     .map_err(|e| format!("tools/list: {e}"))?;
-                let names = tools.iter().map(|t| t.name.to_string()).collect();
+                let names: Vec<String> = tools.iter().map(|t| t.name.to_string()).collect();
                 let _ = client.cancel().await;
                 Ok::<_, String>((info, names))
             }
@@ -116,27 +118,37 @@ pub async fn test_external(def: &ResolvedExternal, timeout: Duration) -> McpTest
             other => Err(format!("tipo desconhecido: {other}")),
         }
     };
+    let duration_ms = || started.elapsed().as_millis() as u64;
     match tokio::time::timeout(timeout, fut).await {
-        Ok(Ok((server_name, tools))) => McpTestResult {
-            at,
-            ok: true,
-            tools,
-            server_name,
-            error: None,
-        },
-        Ok(Err(e)) => McpTestResult {
-            at,
-            ok: false,
-            tools: vec![],
-            server_name: None,
-            error: Some(e),
-        },
-        Err(_) => McpTestResult {
-            at,
-            ok: false,
-            tools: vec![],
-            server_name: None,
-            error: Some("tempo esgotado".into()),
-        },
+        Ok(Ok((server_name, tools))) => {
+            tracing::info!(server = %def.name, tools = tools.len(), duration_ms = duration_ms(), "MCP externo respondeu");
+            McpTestResult {
+                at,
+                ok: true,
+                tools,
+                server_name,
+                error: None,
+            }
+        }
+        Ok(Err(e)) => {
+            tracing::warn!(server = %def.name, error = %e, duration_ms = duration_ms(), "MCP externo falhou no teste");
+            McpTestResult {
+                at,
+                ok: false,
+                tools: vec![],
+                server_name: None,
+                error: Some(e),
+            }
+        }
+        Err(_) => {
+            tracing::warn!(server = %def.name, timeout_secs = timeout.as_secs(), "MCP externo: tempo esgotado");
+            McpTestResult {
+                at,
+                ok: false,
+                tools: vec![],
+                server_name: None,
+                error: Some("tempo esgotado".into()),
+            }
+        }
     }
 }

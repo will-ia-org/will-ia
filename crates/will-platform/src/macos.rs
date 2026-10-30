@@ -59,24 +59,36 @@ pub fn microphone_status() -> Authorization {
     let media = NSString::from_str(AV_MEDIA_TYPE_AUDIO);
     // SAFETY: seletor de classe documentado do AVFoundation; argumento é um NSString vivo.
     let st: isize = unsafe { msg_send![cls, authorizationStatusForMediaType: &*media] };
-    match st {
+    let auth = match st {
         0 => Authorization::NotDetermined,
         1 => Authorization::Restricted,
         2 => Authorization::Denied,
         3 => Authorization::Authorized,
         _ => Authorization::Unknown,
-    }
+    };
+    tracing::debug!(name: "platform", permission = "microphone", status = auth.label(), granted = auth == Authorization::Authorized, "estado da permissão de microfone");
+    auth
 }
 
 /// Pede a permissão de microfone agora (diálogo do sistema se `NotDetermined`;
 /// senão o callback recebe o estado atual). O callback roda numa thread do sistema.
 pub fn request_microphone(on_done: impl Fn(bool) + Send + Sync + 'static) {
     let Some(cls) = AnyClass::get(c"AVCaptureDevice") else {
+        tracing::warn!(name: "platform", permission = "microphone", granted = false, "AVCaptureDevice indisponível; permissão não pedida");
         on_done(false);
         return;
     };
+    tracing::info!(name: "platform", permission = "microphone", "pedindo permissão de microfone ao sistema");
     let media = NSString::from_str(AV_MEDIA_TYPE_AUDIO);
-    let block = block2::RcBlock::new(move |granted: Bool| on_done(granted.as_bool()));
+    let block = block2::RcBlock::new(move |granted: Bool| {
+        let granted = granted.as_bool();
+        if granted {
+            tracing::info!(name: "platform", permission = "microphone", granted, "permissão de microfone concedida");
+        } else {
+            tracing::warn!(name: "platform", permission = "microphone", granted, "permissão de microfone negada");
+        }
+        on_done(granted)
+    });
     // SAFETY: seletor de classe documentado; o bloco é retido pelo AVFoundation até a resposta.
     unsafe {
         let _: () = msg_send![cls, requestAccessForMediaType: &*media, completionHandler: &*block];
@@ -113,6 +125,7 @@ impl SettingsPane {
 
 /// Abre o painel de Ajustes correspondente.
 pub fn open_settings(pane: SettingsPane) -> Result<(), String> {
+    tracing::info!(name: "platform", op = "open_settings", pane = ?pane, "abrindo painel de Ajustes do Sistema");
     crate::open_url(pane.url())
 }
 
@@ -120,13 +133,15 @@ pub fn open_settings(pane: SettingsPane) -> Result<(), String> {
 /// Precisa rodar na thread principal; devolve `false` fora dela ou se o AppKit recusar.
 pub fn become_accessory() -> bool {
     let Some(mtm) = MainThreadMarker::new() else {
-        tracing::warn!("become_accessory fora da thread principal");
+        tracing::warn!(name: "platform", op = "become_accessory", ok = false, "become_accessory fora da thread principal");
         return false;
     };
     let app = NSApplication::sharedApplication(mtm);
     let ok = app.setActivationPolicy(NSApplicationActivationPolicy::Accessory);
-    if !ok {
-        tracing::warn!("AppKit recusou a política de ativação Accessory");
+    if ok {
+        tracing::info!(name: "platform", op = "become_accessory", ok, "processo escondido do Dock (política Accessory)");
+    } else {
+        tracing::warn!(name: "platform", op = "become_accessory", ok, "AppKit recusou a política de ativação Accessory");
     }
     ok
 }
@@ -137,12 +152,13 @@ pub fn become_accessory() -> bool {
 pub fn run_main_loop() -> ! {
     match MainThreadMarker::new() {
         Some(mtm) => {
+            tracing::info!(name: "platform", op = "run_main_loop", "entregando a thread principal ao AppKit");
             NSApplication::sharedApplication(mtm).run();
             // `run` só retorna depois de `stop:`; não é o nosso caso.
             std::process::exit(0)
         }
         None => {
-            tracing::error!("run_main_loop fora da thread principal; aguardando para sempre");
+            tracing::error!(name: "platform", op = "run_main_loop", ok = false, "run_main_loop fora da thread principal; aguardando para sempre");
             loop {
                 std::thread::park();
             }
@@ -177,11 +193,21 @@ pub fn activate_bundle(bundle: &Path, args: &[String]) -> std::io::Result<()> {
     if !args.is_empty() {
         cmd.arg("--args").args(args);
     }
-    cmd.stdin(Stdio::null())
+    let res = cmd
+        .stdin(Stdio::null())
         .stdout(Stdio::null())
         .stderr(Stdio::null())
         .spawn()
-        .map(|_| ())
+        .map(|_| ());
+    match &res {
+        Ok(()) => {
+            tracing::info!(name: "platform", op = "activate", ok = true, bundle = %bundle.display(), args = args.len(), "app ativado pelo LaunchServices")
+        }
+        Err(e) => {
+            tracing::warn!(name: "platform", op = "activate", ok = false, bundle = %bundle.display(), error = %e, "open -a falhou")
+        }
+    }
+    res
 }
 
 /// Traz o próprio app para frente pelo LaunchServices. `false` se não estamos
@@ -189,15 +215,10 @@ pub fn activate_bundle(bundle: &Path, args: &[String]) -> std::io::Result<()> {
 /// então decide se usa o foco do winit.
 pub fn activate_self() -> bool {
     let Some(bundle) = current_bundle() else {
+        tracing::debug!(name: "platform", op = "activate", "fora de um bundle .app; ativação pelo LaunchServices indisponível");
         return false;
     };
-    match activate_bundle(&bundle, &[]) {
-        Ok(()) => true,
-        Err(e) => {
-            tracing::debug!(error = %e, "open -a falhou");
-            false
-        }
-    }
+    activate_bundle(&bundle, &[]).is_ok()
 }
 
 #[cfg(test)]

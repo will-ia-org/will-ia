@@ -13,6 +13,25 @@ Janela nativa (egui/eframe, crate `will-app`, binário `will-ia-app`, cliente do
 | Notificações nativas | bool | true |
 | Tema | `system` \| `light` \| `dark` | `system` |
 
+Geral tem três abas: **Aplicativo** (`settings`, a tabela acima), **Status do serviço** (`status`, ver adiante) e **Telemetria** (`telemetry`).
+
+### Telemetria (`telemetry`, aba de Geral; `--nav general/telemetry`)
+Envio **opcional e desligado por padrão** de logs, spans e métricas de uso por **OTLP/HTTP (Protobuf)** — o protocolo padrão do OpenTelemetry — para o **Axiom** (preset) ou qualquer outro backend OTLP (`docs/29`). Cards: **Destino (OTLP)** (interruptor, provedor, dataset ou cabeçalhos, token, endpoint), **O que enviar** (nível, rótulo, traces, logs do app, relatórios de falha, nota de privacidade) e **Status** (`GET /api/telemetry/status`: enviados/falhas/fila, `instance_id`, último envio/erro, "Enviar evento de teste").
+
+| Campo | Tipo | Padrão |
+|---|---|---|
+| Ativada | bool | false |
+| Provedor | `axiom` \| `otlp` | `axiom` |
+| Endpoint | URL base (o serviço acrescenta `/v1/logs` e `/v1/traces`) | `https://api.axiom.co` |
+| Dataset (Axiom) | texto | `will-ia` |
+| Cabeçalhos (OTLP genérico) | linhas `Nome: valor` | vazio |
+| Token | segredo `telemetry_token` (`Authorization: Bearer`) | — |
+| Enviar traces | bool | true |
+| Nível mínimo | `error` \| `warn` \| `info` \| `debug` | `info` |
+| Rótulo da instância | texto | vazio |
+| Enviar logs deste app | bool | true |
+| Enviar relatórios de falha | bool | true |
+
 ### Motor Claude
 | Campo | Tipo | Padrão |
 |---|---|---|
@@ -254,6 +273,8 @@ pub struct Settings {
     pub gmail: GmailSettings,
     pub scheduler: SchedulerSettings,
     pub browser: BrowserSettings,     // proxy CDP para o agent-browser (docs/25)
+    pub network: NetworkSettings,
+    pub telemetry: TelemetrySettings, // logs → Axiom, opt-in (aba Telemetria de Geral)
     pub external_mcps: Vec<ExternalMcpServer>,
 }
 ```
@@ -290,7 +311,7 @@ Página com **duas ou mais seções independentes** não empilha cartões numa r
 | Configurações › Rede | `network` | `listen` Escuta · `cert` Certificado em uso |
 | Browser CDP (página) | `browser` | `status` Status · `install` Instalação · `tests` Testes · `traffic` Tráfego CDP (ao vivo) |
 
-Ficam sem abas as páginas curtas de uma seção (Agendamentos, Browser CDP em Configurações) e as de lista + formulário (MCPs externos, Agendamentos, Usuários, Custos); Geral tem as abas Aplicativo · Status do serviço. Em **Custos**, o filtro "Fonte" lista todas as fontes gravadas em `ai_costs` (`voice`, `voice_stt`, `voice_tts`, `voice_summary`, `claude`, `thread_summary`, `telegram_*`) mais qualquer valor novo visto nos dados (rótulo = valor bruto), e vale para o resumo e para os registros. Aprovações usa abas (`pending` · `history`).
+Ficam sem abas as páginas curtas de uma seção (Agendamentos, Browser CDP em Configurações) e as de lista + formulário (MCPs externos, Agendamentos, Usuários, Custos); Geral tem as abas Aplicativo · Status do serviço · Telemetria. Em **Custos**, o filtro "Fonte" lista todas as fontes gravadas em `ai_costs` (`voice`, `voice_stt`, `voice_tts`, `voice_summary`, `claude`, `thread_summary`, `telegram_*`) mais qualquer valor novo visto nos dados (rótulo = valor bruto), e vale para o resumo e para os registros. Aprovações usa abas (`pending` · `history`).
 
 ### Ícones
 

@@ -107,6 +107,9 @@ pub fn build(
         } else {
             None
         },
+        // Só o `id` do cadastro (10 chars), nunca o segredo: identifica nos logs
+        // qual token estava em uso quando o processo subiu.
+        token_id: token.and(e.tokens.iter().find(|t| t.active).map(|t| t.id.clone())),
     }
 }
 

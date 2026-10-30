@@ -58,11 +58,7 @@ pub async fn create(State(state): State<App>, Json(b): Json<CreateBody>) -> ApiR
             b.must_change_password.unwrap_or(true),
         )
         .await?;
-    state.bus.log(
-        "info",
-        "auth",
-        format!("usuário criado: {} ({role})", u.username),
-    );
+    tracing::info!(target: "will_auth", user = %u.username, role, "usuário criado: {} ({role})", u.username);
     Ok(Json(json!(u)))
 }
 
@@ -85,6 +81,7 @@ pub async fn patch(
     if me.user_id.as_deref() == Some(id.as_str())
         && (b.active == Some(false) || b.role.as_deref() == Some("member"))
     {
+        tracing::warn!(user = %me.username, "tentativa de desativar/rebaixar a própria conta");
         return Err(bad("você não pode desativar nem rebaixar a própria conta"));
     }
     let role = b
@@ -102,11 +99,19 @@ pub async fn patch(
         .storage
         .update_user(&id, b.name.as_deref(), email, role, b.active)
         .await?;
+    tracing::info!(
+        by = %me.username,
+        user = %u.username,
+        role = role.unwrap_or(""),
+        active = ?b.active,
+        "usuário alterado"
+    );
     if let Some(pw) = b.password.as_deref().filter(|p| !p.is_empty()) {
         auth::check_password_strength(pw).map_err(bad)?;
         let hash = auth::hash_password(pw).map_err(super::internal)?;
         state.storage.set_password(&id, &hash, true).await?;
         let _ = state.storage.delete_user_sessions(&id).await;
+        tracing::info!(by = %me.username, user = %u.username, "senha redefinida pelo admin; sessões encerradas");
     }
     Ok(Json(json!(u)))
 }
@@ -124,6 +129,7 @@ pub async fn delete(
         .storage
         .update_user(&id, None, None, None, Some(false))
         .await?;
+    tracing::info!(by = %me.username, user = %u.username, "usuário desativado");
     Ok(Json(json!(u)))
 }
 

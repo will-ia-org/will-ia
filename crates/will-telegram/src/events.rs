@@ -2,14 +2,17 @@
 //! sessão expirada, aprovações com botões.
 
 use crate::conversation::Conversation;
+use crate::sender::{note_outbound, outbound_span};
 use crate::text::{escape_html, parse_thread_key, thread_key};
 use crate::{ApprovalMsg, TelegramModule};
 use std::sync::Arc;
+use std::time::Instant;
 use teloxide::payloads::setters::*;
 use teloxide::prelude::Requester;
 use teloxide::types::{ChatAction, ChatId, InlineKeyboardButton, InlineKeyboardMarkup, InputFile};
 use tokio::sync::broadcast::error::RecvError;
 use tokio_util::sync::CancellationToken;
+use tracing::Instrument;
 use will_core::{ApprovalDecision, ApprovalRequest, EngineDelta, Event, Origin, ThreadId};
 
 impl TelegramModule {
@@ -22,11 +25,13 @@ impl TelegramModule {
             };
             match ev {
                 Ok(ev) => self.on_event(ev).await,
-                Err(RecvError::Lagged(n)) => tracing::warn!("eventos perdidos (lag): {n}"),
+                Err(RecvError::Lagged(n)) => {
+                    tracing::warn!(lost = n, "eventos do cérebro perdidos (lag)")
+                }
                 Err(RecvError::Closed) => break,
             }
         }
-        tracing::info!("loop de eventos encerrado");
+        tracing::info!(channel = "telegram", "loop de eventos encerrado");
     }
 
     async fn bound_conv(&self, thread_id: ThreadId) -> Option<Arc<Conversation>> {
@@ -46,6 +51,7 @@ impl TelegramModule {
             }
             Event::ThreadDeleted { thread_id } => {
                 if let Some(key) = self.unbind_thread(thread_id) {
+                    tracing::info!(channel = "telegram", %thread_id, key = %key, "thread apagada; vínculo desfeito");
                     self.convs.lock().remove(&key);
                 }
             }
@@ -62,9 +68,11 @@ impl TelegramModule {
                 thread_id, result, ..
             } => {
                 if let Some(conv) = self.bound_conv(thread_id).await {
+                    tracing::debug!(channel = "telegram", %thread_id, key = %conv.key, is_error = result.is_error, text_len = result.text.chars().count(), "turno terminou; finalizando no Telegram");
                     let me = self.clone();
                     tokio::spawn(
-                        async move { me.finalize(conv, result.text, result.is_error).await },
+                        async move { me.finalize(conv, result.text, result.is_error).await }
+                            .instrument(tracing::Span::current()),
                     );
                 }
             }
@@ -72,12 +80,17 @@ impl TelegramModule {
                 thread_id, error, ..
             } => {
                 if let Some(conv) = self.bound_conv(thread_id).await {
+                    tracing::warn!(channel = "telegram", %thread_id, key = %conv.key, error = %error, "turno falhou; avisando no Telegram");
                     let me = self.clone();
-                    tokio::spawn(async move { me.finalize(conv, error, true).await });
+                    tokio::spawn(
+                        async move { me.finalize(conv, error, true).await }
+                            .instrument(tracing::Span::current()),
+                    );
                 }
             }
             Event::StaleSession { thread_id } => {
                 if let Some(conv) = self.bound_conv(thread_id).await {
+                    tracing::info!(channel = "telegram", %thread_id, key = %conv.key, "sessão expirada; avisando no tópico");
                     conv.push_assistant("♻️ a sessão antiga deste tópico expirou — comecei uma nova e reenviei sua mensagem").await;
                 }
             }
@@ -123,6 +136,7 @@ impl TelegramModule {
         self.sender
             .chat_action(conv.chat_id, conv.topic_id, ChatAction::RecordVoice)
             .await;
+        let tts_started = Instant::now();
         match openai
             .voice_summary(
                 &clean,
@@ -132,19 +146,27 @@ impl TelegramModule {
             .await
         {
             Ok(Some(ogg)) => {
-                let mut req = self.bot.send_voice(
-                    ChatId(conv.chat_id),
-                    InputFile::memory(ogg).file_name("voz.ogg"),
-                );
-                if let Some(t) = crate::sender::topic(conv.topic_id) {
-                    req = req.message_thread_id(t);
+                tracing::debug!(key = %conv.key, text_len = clean.chars().count(), bytes = ogg.len(), duration_ms = tts_started.elapsed().as_millis() as u64, "resumo em áudio gerado");
+                let span = outbound_span(conv.chat_id, conv.topic_id, conv.thread_id(), "voice");
+                async {
+                    let started = Instant::now();
+                    let mut req = self.bot.send_voice(
+                        ChatId(conv.chat_id),
+                        InputFile::memory(ogg).file_name("voz.ogg"),
+                    );
+                    if let Some(t) = crate::sender::topic(conv.topic_id) {
+                        req = req.message_thread_id(t);
+                    }
+                    let res = req.await;
+                    note_outbound(&res, started, false);
                 }
-                if let Err(e) = req.await {
-                    tracing::warn!(key = %conv.key, "sendVoice: {e}");
-                }
+                .instrument(span)
+                .await;
             }
             Ok(None) => {}
-            Err(e) => tracing::warn!(key = %conv.key, "áudio: {e}"),
+            Err(e) => {
+                tracing::warn!(key = %conv.key, error = %e, duration_ms = tts_started.elapsed().as_millis() as u64, "resumo em áudio (TTS) falhou")
+            }
         }
     }
 
@@ -155,6 +177,7 @@ impl TelegramModule {
             .and_then(|k| parse_thread_key(&k))
             .or_else(|| self.sender.default_destination());
         let Some((chat_id, topic_id)) = dest else {
+            tracing::warn!(approval_id = %approval.id, thread_id = ?approval.thread_id, "aprovação sem destino no Telegram");
             return;
         };
         let text = format!(
@@ -166,12 +189,16 @@ impl TelegramModule {
             InlineKeyboardButton::callback("✅ Aprovar", format!("ap:{}:y", approval.id)),
             InlineKeyboardButton::callback("❌ Negar", format!("ap:{}:n", approval.id)),
         ]]);
-        match self
-            .sender
-            .send_one(chat_id, topic_id, &text, true, None, Some(keyboard))
-            .await
-        {
-            Ok(m) => {
+        let span = outbound_span(chat_id, topic_id, approval.thread_id, "approval");
+        async {
+            let started = Instant::now();
+            let res = self
+                .sender
+                .send_one(chat_id, topic_id, &text, true, None, Some(keyboard))
+                .await;
+            note_outbound(&res, started, false);
+            if let Ok(m) = res {
+                tracing::info!(approval_id = %approval.id, message_id = m.id.0, tool = %approval.tool, "pedido de aprovação enviado ao Telegram");
                 self.approval_msgs.lock().insert(
                     approval.id,
                     ApprovalMsg {
@@ -181,7 +208,8 @@ impl TelegramModule {
                     },
                 );
             }
-            Err(e) => tracing::warn!("enviar pedido de aprovação: {e}"),
         }
+        .instrument(span)
+        .await
     }
 }

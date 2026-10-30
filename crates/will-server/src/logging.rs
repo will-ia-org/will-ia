@@ -1,4 +1,5 @@
-//! tracing → stdout + arquivo diário + barramento (aba Logs), com redator de segredos.
+//! tracing → stdout + arquivo diário + barramento (aba Logs) + telemetria OTLP
+//! (`will-telemetry`), com redator de segredos.
 
 use std::sync::OnceLock;
 use tracing_subscriber::layer::SubscriberExt;
@@ -7,23 +8,15 @@ use tracing_subscriber::Layer;
 use will_core::{AppPaths, EventBus};
 
 static GUARD: OnceLock<tracing_appender::non_blocking::WorkerGuard> = OnceLock::new();
+static TELEMETRY: OnceLock<will_telemetry::Handle> = OnceLock::new();
+
+/// Controle da telemetria (OTLP), criado junto com o `tracing`.
+pub fn telemetry() -> Option<&'static will_telemetry::Handle> {
+    TELEMETRY.get()
+}
 
 pub fn redact(s: &str) -> String {
-    static RE: OnceLock<regex::Regex> = OnceLock::new();
-    let re = RE.get_or_init(|| {
-        regex::Regex::new(r"(sk-ant-[A-Za-z0-9_\-]{6})[A-Za-z0-9_\-]+|(sk-[A-Za-z0-9]{4})[A-Za-z0-9\-_]{16,}|(\d{8,}:[A-Za-z0-9_\-]{4})[A-Za-z0-9_\-]{20,}|(Bearer\s+[A-Za-z0-9_\-\.]{4})[A-Za-z0-9_\-\.]+").unwrap()
-    });
-    re.replace_all(s, |c: &regex::Captures| {
-        let keep = c
-            .get(1)
-            .or(c.get(2))
-            .or(c.get(3))
-            .or(c.get(4))
-            .map(|m| m.as_str())
-            .unwrap_or("");
-        format!("{keep}…[redigido]")
-    })
-    .to_string()
+    will_telemetry::redact(s)
 }
 
 struct BusLayer {
@@ -101,10 +94,18 @@ pub fn init(paths: &AppPaths, bus: EventBus) {
     let file_layer = tracing_subscriber::fmt::layer()
         .with_writer(nb)
         .with_ansi(false);
+    let instance = will_telemetry::InstanceInfo::new(
+        will_telemetry::instance_id(&paths.data_dir),
+        "server",
+        env!("CARGO_PKG_VERSION"),
+    );
+    let (otel_layer, handle) = will_telemetry::Telemetry::layer(instance);
+    let _ = TELEMETRY.set(handle);
     let _ = tracing_subscriber::registry()
         .with(filter)
         .with(stdout_layer)
         .with(file_layer)
         .with(BusLayer { bus })
+        .with(otel_layer)
         .try_init();
 }

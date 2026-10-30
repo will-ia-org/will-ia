@@ -114,6 +114,13 @@ Códigos: **401** `token de sessão ausente` / `token de sessão inválido` (tam
 | POST | `/api/mcp/external/import-claude` | lê `~/.claude.json` |
 | POST | `/api/mcp/external/import-json` | `{ json }` bloco `mcpServers` |
 
+### Telemetria (`docs/29`)
+| Método | Rota | Descrição |
+|---|---|---|
+| GET | `/api/telemetry/status` | contadores, fila, último envio/erro, `instance_id` |
+| POST | `/api/telemetry/test` | envia um evento de teste agora (`{ ok, message }`) |
+| GET | `/api/telemetry/client-config` | destino OTLP para o app enviar os próprios logs (admin) |
+
 ### Telegram
 | Método | Rota | Descrição |
 |---|---|---|

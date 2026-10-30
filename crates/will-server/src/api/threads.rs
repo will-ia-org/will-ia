@@ -214,6 +214,7 @@ pub async fn send(
         prompt.push_str(&will_core::attachment_note(a, "pelo app"));
     }
     let mid_turn = state.engine.pending(t) > 0;
+    tracing::debug!(thread_id = %t, user = %me.username, attachments = atts.len(), mid_turn, "mensagem recebida pela API");
     let turn = state
         .host()
         .send_message_from(t, &prompt, &atts, Some(&me.author()))
@@ -261,6 +262,7 @@ pub async fn rename(
 ) -> ApiResult<Value> {
     let t = tid(&id)?;
     state.storage.rename_thread(t, b.title.trim()).await?;
+    tracing::info!(thread_id = %t, "thread renomeada pelo usuário");
     if let Ok(th) = state.host().get_thread(t).await {
         state
             .bus

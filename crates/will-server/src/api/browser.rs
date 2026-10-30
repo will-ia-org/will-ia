@@ -55,13 +55,18 @@ pub async fn traffic_clear(State(state): State<App>) -> ApiResult<Value> {
 /// Sobe o navegador agora (se já há um respondendo, só confirma).
 pub async fn launch(State(state): State<App>) -> ApiResult<Value> {
     let m = module(&state)?;
-    m.ensure_upstream().await.map_err(bad)?;
+    m.ensure_upstream().await.map_err(|e| {
+        tracing::warn!(error = %e, "navegador não lançado");
+        bad(e)
+    })?;
+    tracing::info!("navegador lançado/confirmado pela API");
     Ok(Json(json!(m.status().await)))
 }
 
 pub async fn close(State(state): State<App>) -> ApiResult<Value> {
     let m = module(&state)?;
     m.close_browser().await;
+    tracing::info!("navegador fechado pela API");
     Ok(Json(json!(m.status().await)))
 }
 
@@ -126,12 +131,14 @@ pub async fn install_job(State(state): State<App>) -> ApiResult<Value> {
 pub async fn install_agent_browser(State(state): State<App>) -> ApiResult<Value> {
     let m = module(&state)?;
     m.installer.install_agent_browser().map_err(bad)?;
+    tracing::info!("instalação do agent-browser iniciada");
     Ok(Json(json!(m.installer.job())))
 }
 
 pub async fn install_chromium(State(state): State<App>) -> ApiResult<Value> {
     let m = module(&state)?;
     m.installer.install_chromium().map_err(bad)?;
+    tracing::info!("instalação do Chromium iniciada");
     Ok(Json(json!(m.installer.job())))
 }
 
@@ -140,7 +147,11 @@ pub async fn install_skill(State(state): State<App>) -> ApiResult<Value> {
     let kb = m
         .kb_path()
         .ok_or_else(|| bad("pasta da base de conhecimento não configurada"))?;
-    let path = m.installer.install_skill(&kb).await.map_err(bad)?;
+    let path = m.installer.install_skill(&kb).await.map_err(|e| {
+        tracing::warn!(error = %e, "skill do agent-browser não instalada");
+        bad(e)
+    })?;
+    tracing::info!(%path, "skill do agent-browser instalada na KB");
     Ok(Json(
         json!({ "ok": true, "path": path, "job": m.installer.job() }),
     ))

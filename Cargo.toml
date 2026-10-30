@@ -3,6 +3,7 @@ resolver = "2"
 members = [
   "crates/will-core",
   "crates/will-storage",
+  "crates/will-telemetry",
   "crates/will-engine",
   "crates/will-mcp",
   "crates/will-telegram",
@@ -49,6 +50,7 @@ rust-version = "1.85"
 [workspace.dependencies]
 will-core = { path = "crates/will-core" }
 will-storage = { path = "crates/will-storage" }
+will-telemetry = { path = "crates/will-telemetry" }
 will-engine = { path = "crates/will-engine" }
 will-mcp = { path = "crates/will-mcp" }
 will-telegram = { path = "crates/will-telegram" }
@@ -116,6 +118,10 @@ parking_lot = "0.12"
 dashmap = "6"
 wiremock = "0.6"
 tempfile = "3"
+gethostname = "1"
+# OTLP/HTTP (Protobuf): só os tipos gerados (sem tonic/gRPC).
+opentelemetry-proto = { version = "0.33", default-features = false, features = ["gen-tonic-messages", "logs", "trace"] }
+prost = "0.14"
 # GUI nativa (ADR-0016)
 mime_guess = "2"
 eframe = { version = "0.37", default-features = false, features = ["glow", "x11", "wayland", "default_fonts", "persistence", "clipboard", "links", "accesskit"] }

@@ -65,6 +65,12 @@ impl EnginePool {
             return h.clone();
         }
         let cfg = self.cfg.read().clone();
+        tracing::debug!(
+            thread_id = %thread,
+            resume = session_id.is_some(),
+            runners = self.runners.read().len() + 1,
+            "runner criado para a thread"
+        );
         let h = Runner::spawn(thread, cfg, session_id, thread_env, self.events.clone());
         self.runners.write().insert(thread, h.clone());
         h
@@ -84,26 +90,40 @@ impl EnginePool {
             self.make_room_for(thread);
         }
         let h = self.ensure(thread, session_id, thread_env);
-        h.send(req)
+        let turn_id = req.turn_id;
+        h.send(req).inspect_err(|e| {
+            tracing::error!(thread_id = %thread, %turn_id, error = %e, "runner não aceitou a mensagem")
+        })
     }
 
     pub fn restart(&self, thread: ThreadId, reason: &str) {
-        if let Some(h) = self.runners.read().get(&thread) {
-            let _ = h.command(RunnerCommand::Restart {
-                reason: reason.to_string(),
-            });
+        match self.runners.read().get(&thread) {
+            Some(h) => {
+                let _ = h.command(RunnerCommand::Restart {
+                    reason: reason.to_string(),
+                });
+            }
+            None => {
+                tracing::debug!(thread_id = %thread, reason, "restart ignorado: thread sem runner")
+            }
         }
     }
 
     pub fn reset(&self, thread: ThreadId) {
-        if let Some(h) = self.runners.read().get(&thread) {
-            let _ = h.command(RunnerCommand::Reset);
+        match self.runners.read().get(&thread) {
+            Some(h) => {
+                let _ = h.command(RunnerCommand::Reset);
+            }
+            None => tracing::debug!(thread_id = %thread, "reset ignorado: thread sem runner"),
         }
     }
 
     pub fn interrupt(&self, thread: ThreadId) {
-        if let Some(h) = self.runners.read().get(&thread) {
-            let _ = h.command(RunnerCommand::Interrupt);
+        match self.runners.read().get(&thread) {
+            Some(h) => {
+                let _ = h.command(RunnerCommand::Interrupt);
+            }
+            None => tracing::debug!(thread_id = %thread, "interrupção ignorada: thread sem runner"),
         }
     }
 
@@ -111,14 +131,28 @@ impl EnginePool {
     pub async fn forget(&self, thread: ThreadId) {
         let h = self.runners.write().remove(&thread);
         if let Some(h) = h {
+            tracing::info!(thread_id = %thread, alive = h.alive(), pending = h.pending(), "removendo runner da thread");
             let (tx, rx) = tokio::sync::oneshot::channel();
             let _ = h.command(RunnerCommand::Shutdown(tx));
-            let _ = tokio::time::timeout(Duration::from_secs(10), rx).await;
+            if tokio::time::timeout(Duration::from_secs(10), rx)
+                .await
+                .is_err()
+            {
+                tracing::warn!(thread_id = %thread, "runner não confirmou o encerramento em 10 s");
+            }
         }
     }
 
     /// Atualiza a configuração sem derrubar processos (vale no próximo spawn).
     pub fn set_config(&self, cfg: EngineConfig) {
+        tracing::info!(
+            token_id = cfg.token_id.as_deref().unwrap_or(""),
+            model = cfg.model.as_deref().unwrap_or(""),
+            permission_mode = ?cfg.permission_mode,
+            max_live = cfg.max_live,
+            runners = self.runners.read().len(),
+            "configuração do motor atualizada (vale no próximo spawn)"
+        );
         *self.cfg.write() = cfg.clone();
         for h in self.runners.read().values() {
             let _ = h.command(RunnerCommand::Reconfigure(Box::new(cfg.clone())).soft());
@@ -135,6 +169,12 @@ impl EnginePool {
             }
             let _ = h.command(RunnerCommand::Reconfigure(Box::new(cfg.clone())));
         }
+        tracing::info!(
+            token_id = cfg.token_id.as_deref().unwrap_or(""),
+            restarted = n,
+            runners = self.runners.read().len(),
+            "motor reconfigurado; processos vivos derrubados (voltam com --resume)"
+        );
         n
     }
 
@@ -181,12 +221,22 @@ impl EnginePool {
         let mut idle: Vec<&RunnerHandle> = alive.into_iter().filter(|h| h.pending() == 0).collect();
         idle.sort_by_key(|h| std::cmp::Reverse(h.idle_for().unwrap_or(Duration::ZERO)));
         if let Some(victim) = idle.first() {
-            tracing::info!(victim = %victim.thread, "teto de processos: recolhendo ociosa");
+            tracing::info!(
+                thread_id = %victim.thread,
+                for_thread = %thread,
+                max_live = max,
+                idle_secs = victim.idle_for().map(|d| d.as_secs()).unwrap_or(0),
+                "teto de processos: recolhendo ociosa"
+            );
             let _ = victim.command(RunnerCommand::Restart {
                 reason: "teto de processos".into(),
             });
         } else {
-            tracing::warn!("teto de processos atingido e todas ocupadas; spawnando mesmo assim");
+            tracing::warn!(
+                for_thread = %thread,
+                max_live = max,
+                "teto de processos atingido e todas ocupadas; spawnando mesmo assim"
+            );
         }
     }
 
@@ -196,7 +246,7 @@ impl EnginePool {
             if h.alive() && h.pending() == 0 {
                 if let Some(d) = h.idle_for() {
                     if d > idle_timeout {
-                        tracing::info!(thread = %h.thread, idle_secs = d.as_secs(), "ociosa: recolhendo");
+                        tracing::info!(thread_id = %h.thread, idle_secs = d.as_secs(), "ociosa: recolhendo");
                         let _ = h.command(RunnerCommand::Restart {
                             reason: "ociosidade".into(),
                         });
@@ -208,10 +258,20 @@ impl EnginePool {
 
     pub async fn shutdown(&self) {
         let handles: Vec<RunnerHandle> = self.runners.write().drain().map(|(_, h)| h).collect();
+        tracing::info!(
+            runners = handles.len(),
+            alive = handles.iter().filter(|h| h.alive()).count(),
+            "encerrando o motor (todos os runners)"
+        );
         for h in handles {
             let (tx, rx) = tokio::sync::oneshot::channel();
             let _ = h.command(RunnerCommand::Shutdown(tx));
-            let _ = tokio::time::timeout(Duration::from_secs(5), rx).await;
+            if tokio::time::timeout(Duration::from_secs(5), rx)
+                .await
+                .is_err()
+            {
+                tracing::warn!(thread_id = %h.thread, "runner não confirmou o encerramento em 5 s");
+            }
         }
     }
 }

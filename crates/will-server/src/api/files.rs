@@ -59,9 +59,11 @@ pub async fn upload(
         n += 1;
         dest = dir.join(format!("{stamp}-{n}-{safe}"));
     }
-    tokio::fs::write(&dest, &body)
-        .await
-        .map_err(|e| super::internal(format!("gravar anexo: {e}")))?;
+    tokio::fs::write(&dest, &body).await.map_err(|e| {
+        tracing::error!(error = %e, bytes = body.len(), "upload: falha ao gravar anexo");
+        super::internal(format!("gravar anexo: {e}"))
+    })?;
+    tracing::debug!(bytes = body.len(), "upload gravado no inbox da KB");
     let mime = mime_guess::from_path(&dest)
         .first_or_octet_stream()
         .to_string();
@@ -92,6 +94,7 @@ async fn inside_kb(state: &App, path: &str) -> Result<PathBuf, ApiError> {
         .await
         .map_err(|_| ApiError(StatusCode::NOT_FOUND, "arquivo não encontrado".into()))?;
     if !p.starts_with(&kb_c) {
+        tracing::warn!("leitura de arquivo fora da KB recusada");
         return Err(ApiError(
             StatusCode::FORBIDDEN,
             "fora da base de conhecimento".into(),

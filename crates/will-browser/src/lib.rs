@@ -46,6 +46,7 @@ use tokio::sync::Mutex as AsyncMutex;
 use tokio_tungstenite::tungstenite::Message as TgMsg;
 use tokio_tungstenite::{MaybeTlsStream, WebSocketStream};
 use tokio_util::sync::CancellationToken;
+use tracing::Instrument;
 use traffic::Traffic;
 use will_core::settings::BrowserSettings;
 use will_core::{Event, EventBus, Module, ModuleStatus};
@@ -54,6 +55,31 @@ pub use install::{InstallStatus, Installer, Job};
 pub use traffic::{Counters, TrafficEntry};
 
 pub const FAMILY: &str = "browser";
+
+/// Span `browser` padronizado: `op`, `cdp_port` (porta do upstream), `ok`, `duration_ms`.
+fn browser_span(op: &'static str, cdp_port: u16) -> tracing::Span {
+    tracing::info_span!(
+        "browser",
+        op,
+        cdp_port,
+        ok = tracing::field::Empty,
+        duration_ms = tracing::field::Empty
+    )
+}
+
+/// Fecha o span `browser` corrente com o desfecho (`info!`/`debug!` no sucesso,
+/// `warn!` na falha).
+fn note_browser<T>(res: &Result<T, String>, started: Instant, quiet: bool) {
+    let duration_ms = started.elapsed().as_millis() as u64;
+    let span = tracing::Span::current();
+    span.record("duration_ms", duration_ms);
+    span.record("ok", res.is_ok());
+    match res {
+        Ok(_) if quiet => tracing::debug!(ok = true, duration_ms, "browser: ok"),
+        Ok(_) => tracing::info!(ok = true, duration_ms, "browser: ok"),
+        Err(e) => tracing::warn!(ok = false, duration_ms, error = %e, "browser: falhou"),
+    }
+}
 
 #[derive(Debug, Clone, serde::Serialize)]
 pub struct LaunchedBrowser {
@@ -253,6 +279,7 @@ impl BrowserModule {
             Ok(l) => l,
             Err(e) => {
                 let msg = format!("não consegui escutar em {addr}: {e}");
+                tracing::error!(listen_port = port, error = %e, "proxy CDP não conseguiu escutar");
                 self.set_error(Some(msg.clone()));
                 self.log("error", msg.clone());
                 self.set_status(ModuleStatus::Error(msg));
@@ -272,11 +299,16 @@ impl BrowserModule {
                 .with_graceful_shutdown(async move { shutdown.cancelled().await })
                 .await;
             *me.listening.write() = false;
-            if let Err(e) = r {
-                me.log("error", format!("proxy CDP encerrou com erro: {e}"));
+            match r {
+                Ok(()) => tracing::info!(listen_port = port, "proxy CDP encerrado"),
+                Err(e) => {
+                    tracing::error!(listen_port = port, error = %e, "proxy CDP encerrou com erro");
+                    me.log("error", format!("proxy CDP encerrou com erro: {e}"));
+                }
             }
         });
         self.set_error(None);
+        tracing::info!(listen_port = port, upstream = %self.upstream_authority(), cdp_port = self.cfg.read().upstream_port, "proxy CDP escutando");
         self.log(
             "info",
             format!(
@@ -335,19 +367,33 @@ impl BrowserModule {
             return;
         }
         match self.installer.install_skill(&kb).await {
-            Ok(p) => self.log(
-                "info",
-                format!("skill agent-browser instalada automaticamente em {p}"),
-            ),
-            Err(e) => self.log(
-                "warn",
-                format!("não consegui instalar a skill agent-browser na KB: {e}"),
-            ),
+            Ok(p) => {
+                tracing::info!(
+                    op = "install_skill",
+                    ok = true,
+                    "skill agent-browser instalada na KB"
+                );
+                self.log(
+                    "info",
+                    format!("skill agent-browser instalada automaticamente em {p}"),
+                )
+            }
+            Err(e) => {
+                tracing::warn!(op = "install_skill", ok = false, error = %e, "não consegui instalar a skill agent-browser na KB");
+                self.log(
+                    "warn",
+                    format!("não consegui instalar a skill agent-browser na KB: {e}"),
+                )
+            }
         }
     }
 
     pub async fn stop(&self) {
         if let Some(t) = self.server.write().take() {
+            tracing::info!(
+                listen_port = self.cfg.read().listen_port,
+                "proxy CDP parando"
+            );
             t.cancel();
         }
         *self.listening.write() = false;
@@ -398,6 +444,19 @@ impl BrowserModule {
     /// Sondagem completa do upstream (ver cabeçalho do módulo). Guarda o resultado
     /// em `upstream` para o repasse/síntese e o `Browser` para o status.
     pub async fn probe_upstream(&self, timeout: Duration) -> Result<Upstream, String> {
+        let port = self.cfg.read().upstream_port;
+        let span = browser_span("probe", port);
+        async {
+            let started = Instant::now();
+            let res = self.probe_upstream_in(timeout).await;
+            note_browser(&res, started, true);
+            res
+        }
+        .instrument(span)
+        .await
+    }
+
+    async fn probe_upstream_in(&self, timeout: Duration) -> Result<Upstream, String> {
         let (host_cfg, port, attach_existing) = {
             let c = self.cfg.read();
             (c.upstream_host.clone(), c.upstream_port, c.attach_existing)
@@ -426,6 +485,7 @@ impl BrowserModule {
                         http_discovery: true,
                         source: "http".into(),
                     };
+                    tracing::debug!(authority = %up.authority, browser = ?up.browser, source = "http", "upstream reconhecido");
                     self.set_upstream(up.clone());
                     return Ok(up);
                 }
@@ -467,6 +527,7 @@ impl BrowserModule {
                         http_discovery: false,
                         source: "websocket sem token (/devtools/browser)".into(),
                     };
+                    tracing::info!(authority = %up.authority, browser = ?up.browser, source = "ws_no_token", "upstream reconhecido pelo WebSocket sem token; /json/* sintetizado");
                     self.log(
                         "info",
                         format!(
@@ -538,6 +599,7 @@ impl BrowserModule {
                                 prof.dir.display()
                             ),
                         };
+                        tracing::info!(authority = %up.authority, browser = ?up.browser, source = "devtools_active_port", profile = %prof.name, "upstream reconhecido por DevToolsActivePort; /json/* sintetizado");
                         self.log(
                             "info",
                             format!(
@@ -647,6 +709,7 @@ impl BrowserModule {
             match r {
                 Ok(v) => return Ok(v),
                 Err(e) => {
+                    tracing::debug!(method, attempt, error = %e, "cdp_call falhou; conexão de controle descartada");
                     *guard = None;
                     last = e;
                     if attempt == 1 {
@@ -655,6 +718,7 @@ impl BrowserModule {
                 }
             }
         }
+        tracing::warn!(method, error = %last, "cdp_call esgotou as tentativas");
         Err(last)
     }
 
@@ -663,6 +727,10 @@ impl BrowserModule {
         let probe_err = match self.probe_upstream(Duration::from_millis(800)).await {
             Ok(_) => {
                 if self.last_error.read().is_some() {
+                    tracing::info!(
+                        op = "ensure_upstream",
+                        "upstream voltou a responder; erro anterior limpo"
+                    );
                     self.set_error(None);
                     self.set_status(ModuleStatus::Running);
                 }
@@ -670,6 +738,21 @@ impl BrowserModule {
             }
             Err(e) => e,
         };
+        let port = self.cfg.read().upstream_port;
+        let span = browser_span("ensure_upstream", port);
+        async {
+            let started = Instant::now();
+            let res = self.ensure_upstream_launch(probe_err).await;
+            note_browser(&res, started, false);
+            res
+        }
+        .instrument(span)
+        .await
+    }
+
+    /// Caminho lento do `ensure_upstream`: sem navegador reconhecido, decide
+    /// entre erro acionável e lançamento automático.
+    async fn ensure_upstream_launch(&self, probe_err: String) -> Result<(), String> {
         let (auto, wait, port) = {
             let c = self.cfg.read();
             (c.auto_launch, c.launch_wait_secs.max(3), c.upstream_port)
@@ -714,7 +797,8 @@ impl BrowserModule {
             self.fail(e.clone());
             return Err(e);
         }
-        let deadline = Instant::now() + Duration::from_secs(wait as u64);
+        let launch_started = Instant::now();
+        let deadline = launch_started + Duration::from_secs(wait as u64);
         while Instant::now() < deadline {
             tokio::time::sleep(Duration::from_millis(300)).await;
             if self
@@ -725,6 +809,7 @@ impl BrowserModule {
                 self.set_error(None);
                 self.set_status(ModuleStatus::Running);
                 let browser = self.upstream_browser.read().clone();
+                tracing::info!(browser = ?browser, wait_ms = launch_started.elapsed().as_millis() as u64, "navegador lançado respondeu no CDP");
                 self.emit("browser_up", browser);
                 return Ok(());
             }
@@ -745,6 +830,7 @@ impl BrowserModule {
 
     /// Registra a falha, loga e põe o módulo em `Degraded` com o motivo (regra 7).
     fn fail(&self, msg: String) {
+        tracing::warn!(error = %msg, "browser: módulo degradado");
         self.set_error(Some(msg.clone()));
         self.log("warn", msg.clone());
         if *self.listening.read() {
@@ -769,6 +855,19 @@ impl BrowserModule {
 
     /// Sobe o navegador com CDP no `upstream_port` e perfil dedicado.
     pub async fn launch_browser(&self) -> Result<LaunchedBrowser, String> {
+        let port = self.cfg.read().upstream_port;
+        let span = browser_span("launch", port);
+        async {
+            let started = Instant::now();
+            let res = self.launch_browser_in().await;
+            note_browser(&res, started, false);
+            res
+        }
+        .instrument(span)
+        .await
+    }
+
+    async fn launch_browser_in(&self) -> Result<LaunchedBrowser, String> {
         let path = self
             .resolve_browser()
             .await
@@ -808,6 +907,7 @@ impl BrowserModule {
         }
         let child = cmd.spawn().map_err(|e| {
             *self.launching.write() = false;
+            tracing::error!(browser = %path, error = %e, "spawn do navegador falhou");
             format!("não consegui executar {path}: {e}")
         })?;
         will_platform::process::attach_to_job(&child);
@@ -820,6 +920,7 @@ impl BrowserModule {
         *self.child.lock().await = Some(child);
         *self.launched.write() = Some(info.clone());
         *self.launching.write() = false;
+        tracing::info!(pid = ?info.pid, browser = %path, headless, cdp_port = port, "navegador lançado");
         self.log(
             "info",
             format!(
@@ -834,8 +935,21 @@ impl BrowserModule {
 
     /// Fecha o navegador que nós lançamos (não mexe em navegadores de terceiros).
     pub async fn close_browser(&self) {
+        let port = self.cfg.read().upstream_port;
+        let span = browser_span("close", port);
+        async {
+            let started = Instant::now();
+            self.close_browser_in().await;
+            note_browser(&Ok::<(), String>(()), started, false);
+        }
+        .instrument(span)
+        .await
+    }
+
+    async fn close_browser_in(&self) {
         let mut g = self.child.lock().await;
         if let Some(mut c) = g.take() {
+            tracing::info!(pid = ?c.id(), "fechando navegador lançado por nós");
             #[cfg(unix)]
             if let Some(pid) = c.id() {
                 let _ = std::process::Command::new("kill")
@@ -851,14 +965,17 @@ impl BrowserModule {
         // Chrome real pode ter ficado (wrapper saiu): tenta Browser.close pelo CDP.
         if self.launched.read().is_some() {
             if let Ok(up) = self.probe_upstream(Duration::from_millis(500)).await {
-                let _ = self
+                if let Err(e) = self
                     .cdp_call(
                         &up.browser_ws,
                         "Browser.close",
                         serde_json::json!({}),
                         Duration::from_secs(2),
                     )
-                    .await;
+                    .await
+                {
+                    tracing::debug!(error = %e, "Browser.close pelo CDP falhou (navegador já pode ter saído)");
+                }
             }
         }
         *self.control.lock().await = None;
@@ -1097,6 +1214,7 @@ impl BrowserModule {
         match out {
             Ok(r) => r,
             Err(e) => {
+                tracing::warn!(path = %path, authority = %up.authority, error = %e, "síntese de /json/* por CDP falhou");
                 self.set_error(Some(format!("CDP {}: {e}", up.authority)));
                 json_error(
                     StatusCode::BAD_GATEWAY,
@@ -1152,6 +1270,7 @@ fn is_websocket(req: &Request<Body>) -> bool {
 
 async fn proxy_handler(State(m): State<Arc<BrowserModule>>, req: Request<Body>) -> Response<Body> {
     if let Err(e) = m.ensure_upstream().await {
+        tracing::warn!(path = %req.uri().path(), websocket = is_websocket(&req), error = %e, "pedido ao proxy CDP recusado: sem navegador");
         let upstream = Some(m.upstream_authority());
         if is_websocket(&req) {
             return (
@@ -1222,6 +1341,7 @@ impl BrowserModule {
             Ok(r) => r,
             Err(e) => {
                 let msg = format!("upstream {}: {e}", up.authority);
+                tracing::warn!(path = %path_q, authority = %up.authority, error = %e, "repasse HTTP ao navegador falhou");
                 self.set_error(Some(msg.clone()));
                 return json_error(
                     StatusCode::BAD_GATEWAY,
@@ -1245,7 +1365,7 @@ impl BrowserModule {
         } else {
             text
         };
-        tracing::debug!(path = %path_q, status = %status, "cdp http repassado");
+        tracing::debug!(op = "http", path = %path_q, http_status = status.as_u16(), ok = status.is_success(), "cdp http repassado");
         Response::builder()
             .status(status)
             .header("content-type", ct)
@@ -1253,8 +1373,22 @@ impl BrowserModule {
             .unwrap_or_else(|_| StatusCode::INTERNAL_SERVER_ERROR.into_response())
     }
 
-    async fn pump(&self, mut client: WebSocket, path_q: String) {
+    async fn pump(&self, client: WebSocket, path_q: String) {
         let conn = self.conn_seq.fetch_add(1, Ordering::Relaxed) + 1;
+        let port = self.cfg.read().upstream_port;
+        let span = tracing::info_span!(
+            "browser",
+            op = "ws",
+            cdp_port = port,
+            conn,
+            ok = tracing::field::Empty,
+            duration_ms = tracing::field::Empty
+        );
+        self.pump_in(client, path_q, conn).instrument(span).await
+    }
+
+    async fn pump_in(&self, mut client: WebSocket, path_q: String, conn: u32) {
+        let started = Instant::now();
         let authority = self
             .upstream()
             .map(|u| u.authority)
@@ -1264,6 +1398,7 @@ impl BrowserModule {
             Ok(x) => x,
             Err(e) => {
                 let msg = format!("WebSocket upstream {url}: {e}");
+                note_browser(&Err::<(), _>(msg.clone()), started, false);
                 self.set_error(Some(msg.clone()));
                 self.log("warn", msg);
                 let _ = client.send(AxMsg::Close(None)).await;
@@ -1272,7 +1407,7 @@ impl BrowserModule {
         };
         self.active.fetch_add(1, Ordering::Relaxed);
         self.emit("ws_open", Some(format!("conexão {conn}: {path_q}")));
-        tracing::info!(conn, path = %path_q, "cdp websocket aberto");
+        tracing::info!(conn, path = %path_q, authority = %authority, "cdp websocket aberto");
         let (mut up_tx, mut up_rx) = upstream.split();
         let (mut cl_tx, mut cl_rx) = client.split();
         let traffic = &self.traffic;
@@ -1318,6 +1453,11 @@ impl BrowserModule {
         self.active.fetch_sub(1, Ordering::Relaxed);
         self.traffic.forget_conn(conn);
         self.emit("ws_closed", Some(format!("conexão {conn}")));
-        tracing::info!(conn, "cdp websocket fechado");
+        note_browser(&Ok::<(), String>(()), started, false);
+        tracing::info!(
+            conn,
+            duration_ms = started.elapsed().as_millis() as u64,
+            "cdp websocket fechado"
+        );
     }
 }

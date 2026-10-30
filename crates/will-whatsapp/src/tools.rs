@@ -14,6 +14,8 @@ use chrono::{Duration, Utc};
 use serde_json::{json, Value};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Weak};
+use std::time::Instant;
+use tracing::Instrument;
 use will_core::tools::{arg_opt_bool, arg_opt_i64, arg_opt_str, arg_str, truncate};
 use will_core::{
     Module, ToolContext, ToolError, ToolOutput, ToolPolicy, ToolProvider, ToolSpec, WillTool,
@@ -47,6 +49,20 @@ pub enum ToolKind {
 }
 
 impl ToolKind {
+    /// Tipo do envio para o span `outbound` (`None` = leitura/índice → span `wa_op`).
+    fn outbound_kind(self) -> Option<&'static str> {
+        match self {
+            ToolKind::SendMessage => Some("text"),
+            ToolKind::SendMedia => Some("media"),
+            ToolKind::React => Some("reaction"),
+            ToolKind::EditMessage => Some("edit"),
+            ToolKind::DeleteMessage => Some("delete"),
+            ToolKind::SendContact => Some("contact"),
+            ToolKind::SendVoice => Some("voice"),
+            _ => None,
+        }
+    }
+
     pub const ALL: [ToolKind; 16] = [
         ToolKind::ListChats,
         ToolKind::GetMessages,
@@ -419,11 +435,54 @@ impl WillTool for WaTool {
         }
     }
 
-    async fn call(&self, _ctx: ToolContext, args: Value) -> Result<ToolOutput, ToolError> {
+    async fn call(&self, ctx: ToolContext, args: Value) -> Result<ToolOutput, ToolError> {
+        let span = match self.kind.outbound_kind() {
+            Some(kind) => tracing::info_span!(
+                "outbound",
+                channel = "whatsapp",
+                chat_id = tracing::field::Empty,
+                thread_id = tracing::field::Empty,
+                account_id = tracing::field::Empty,
+                kind,
+                ok = tracing::field::Empty,
+                duration_ms = tracing::field::Empty,
+            ),
+            None => tracing::info_span!(
+                "wa_op",
+                op = self.kind.name(),
+                account_id = tracing::field::Empty,
+                thread_id = tracing::field::Empty,
+                ok = tracing::field::Empty,
+                duration_ms = tracing::field::Empty,
+            ),
+        };
+        if let Some(t) = ctx.thread_id {
+            span.record("thread_id", tracing::field::display(t));
+        }
+        let started = Instant::now();
+        let res = self.call_in(&args).instrument(span.clone()).await;
+        let duration_ms = started.elapsed().as_millis() as u64;
+        span.record("duration_ms", duration_ms);
+        span.record("ok", res.is_ok());
+        span.in_scope(|| match &res {
+            Ok(_) if self.kind.outbound_kind().is_some() => {
+                tracing::info!(ok = true, duration_ms, "outbound: enviado")
+            }
+            Ok(_) => tracing::debug!(ok = true, duration_ms, op = self.kind.name(), "wa_op: ok"),
+            Err(e) => tracing::warn!(ok = false, duration_ms, op = self.kind.name(), error = %e, "ferramenta WhatsApp falhou"),
+        });
+        res
+    }
+}
+
+impl WaTool {
+    async fn call_in(&self, args: &Value) -> Result<ToolOutput, ToolError> {
+        let args = args.clone();
         let m = self.module()?;
         let target = self.target(&m, &args)?;
         match target {
             Target::One(acc) => {
+                tracing::Span::current().record("account_id", tracing::field::display(&acc.id));
                 let mut out = match self.kind {
                     ToolKind::ListChats => list_chats(&m, &acc, &args).await?,
                     ToolKind::GetMessages => get_messages(&m, &acc, &args).await?,
@@ -442,11 +501,15 @@ impl WillTool for WaTool {
                     ToolKind::SendVoice => send_voice(&m, &acc, &args).await?,
                     ToolKind::ContactInfo => contact_info(&m, &acc, &args).await?,
                 };
+                if let Some(chat) = out.get("chat_id").and_then(|c| c.as_str()) {
+                    tracing::Span::current().record("chat_id", chat);
+                }
                 out["account"] = json!(acc.id);
                 out["account_label"] = json!(acc.label());
                 Ok(ToolOutput::json(&out))
             }
             Target::All(accounts) => {
+                tracing::Span::current().record("account_id", "all");
                 let mut out = match self.kind {
                     ToolKind::ListChats => list_chats_all(&m, &accounts, &args).await?,
                     ToolKind::SearchMessages => search_messages_all(&m, &accounts, &args).await?,
@@ -889,11 +952,16 @@ async fn download_media(
         None => {
             std::fs::create_dir_all(&dest_dir)
                 .map_err(|e| ToolError::Failed(format!("criar {}: {e}", dest_dir.display())))?;
+            let started = Instant::now();
             let p = acc
                 .backend
                 .download_media(id, msg.media_ref.as_deref(), &dest_dir)
                 .await
-                .map_err(ToolError::Failed)?;
+                .map_err(|e| {
+                    tracing::warn!(account_id = %acc.id, msg_id = %id, kind = %msg.kind, error = %e, "download de mídia falhou");
+                    ToolError::Failed(e)
+                })?;
+            tracing::info!(account_id = %acc.id, msg_id = %id, kind = %msg.kind, duration_ms = started.elapsed().as_millis() as u64, "mídia baixada");
             m.storage()
                 .wa_set_media_path(&acc.id, id, &p.to_string_lossy())
                 .await
@@ -927,7 +995,9 @@ async fn mark_read(m: &WhatsAppModule, acc: &WaAccount, args: &Value) -> Result<
     if m.settings().send_read_receipts {
         match acc.backend.mark_read(&jid).await {
             Ok(()) => receipt_sent = true,
-            Err(e) => tracing::warn!("mark_read remoto {jid}: {e}"),
+            Err(e) => {
+                tracing::warn!(account_id = %acc.id, chat_id = %jid, error = %e, "mark_read remoto falhou")
+            }
         }
     }
     Ok(json!({"ok": true, "chat_id": jid, "receipt_sent": receipt_sent}))
@@ -971,7 +1041,7 @@ async fn resolve_send_target(
                 )))
             }
             Err(e) => {
-                tracing::warn!("resolve_phone {digits}: {e}; usando formato padrão");
+                tracing::warn!(account_id = %acc.id, error = %e, "resolve_phone falhou; usando formato padrão");
                 jid_from_phone(&digits)
             }
         };
@@ -1012,6 +1082,7 @@ async fn check_rate_limit(m: &WhatsAppModule, acc: &WaAccount) -> Result<(), Too
         .await
         .map_err(db_err)?;
     if sent >= s.send_rate_limit_count as i64 {
+        tracing::warn!(account_id = %acc.id, sent, limit = s.send_rate_limit_count, window_min = s.send_rate_limit_minutes, "limite de envio do WhatsApp atingido");
         return Err(ToolError::Failed(format!(
             "limite de envio da conta {} atingido ({} mensagens em {} min); aguarde antes de enviar mais, para reduzir o risco de bloqueio do número",
             acc.label(),
@@ -1071,12 +1142,15 @@ async fn send_message(
     let reply_to = arg_opt_str(args, "reply_to");
     let (jid, name) = resolve_send_target(m, acc, args).await?;
     check_rate_limit(m, acc).await?;
+    tracing::debug!(account_id = %acc.id, chat_id = %jid, text_len = text.chars().count(), reply = reply_to.is_some(), "whatsapp_send_message");
     match acc.backend.send_text(&jid, text, reply_to).await {
         Ok(id) => {
+            tracing::info!(account_id = %acc.id, chat_id = %jid, msg_id = %id, "mensagem enviada");
             record_sent(m, acc, &id, &jid, "text", Some(text.to_string()), None).await;
             Ok(json!({"ok": true, "message_id": id, "chat_id": jid, "chat_name": name}))
         }
         Err(e) => {
+            tracing::warn!(account_id = %acc.id, chat_id = %jid, error = %e, "envio de texto falhou");
             let id = format!("err-{}", uuid::Uuid::new_v4());
             let _ = m
                 .storage()
@@ -1123,8 +1197,10 @@ async fn send_media(m: &WhatsAppModule, acc: &WaAccount, args: &Value) -> Result
     check_rate_limit(m, acc).await?;
     let mime = mime_for_path(&path);
     let kind = crate::backend::media_class(mime);
+    tracing::debug!(account_id = %acc.id, chat_id = %jid, mime, kind, "whatsapp_send_media");
     match acc.backend.send_media(&jid, &path, caption).await {
         Ok(id) => {
+            tracing::info!(account_id = %acc.id, chat_id = %jid, msg_id = %id, kind, "mídia enviada");
             let text = caption
                 .map(str::to_string)
                 .or_else(|| path.file_name().map(|f| f.to_string_lossy().to_string()));
@@ -1134,6 +1210,7 @@ async fn send_media(m: &WhatsAppModule, acc: &WaAccount, args: &Value) -> Result
             )
         }
         Err(e) => {
+            tracing::warn!(account_id = %acc.id, chat_id = %jid, kind, error = %e, "envio de mídia falhou");
             let id = format!("err-{}", uuid::Uuid::new_v4());
             let _ = m
                 .storage()
@@ -1471,7 +1548,7 @@ async fn contact_info(
                 }))
             }
             Err(e) => {
-                tracing::debug!("resolve_phone {digits}: {e}");
+                tracing::debug!(account_id = %acc.id, error = %e, "resolve_phone falhou; caindo para chat_id");
                 resolve_chat_id(m, acc, raw).await?
             }
         }

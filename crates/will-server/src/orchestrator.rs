@@ -5,11 +5,35 @@ use async_trait::async_trait;
 use secrecy::SecretString;
 use std::sync::Arc;
 use tokio::sync::broadcast;
+use tracing::Instrument;
 use will_core::{
     ApprovalDecision, ApprovalId, BrainHost, BrainTask, ClaudeTokenInfo, EngineDelta, Event,
     Origin, ThreadHost, ThreadId, ThreadStatus, ThreadSummary, TurnId, TurnResult,
 };
 use will_engine::{EngineEvent, SendRequest};
+
+/// Origem de um turno para os logs (`turn.source`), inferida sem mudar nada no
+/// que é persistido: `author` vem da API/voz; sem autor, o texto do scheduler
+/// tem cabeçalho fixo, o Telegram tem origem própria e o resto são ferramentas
+/// (`create_thread`/`send_to_thread`) chamadas pelo MCP.
+pub fn turn_source(author: Option<&str>, origin: &Origin, text: &str) -> &'static str {
+    match author {
+        Some(a) if a.starts_with("voz:") => "voice",
+        Some(_) => "api",
+        None if text.starts_with("[Agendamento ") => "schedule",
+        None if matches!(origin, Origin::Telegram { .. }) => "telegram",
+        None => "mcp",
+    }
+}
+
+/// Decisão de aprovação no vocabulário dos logs (`approval.decision`).
+fn decision_label(d: ApprovalDecision) -> &'static str {
+    match d {
+        ApprovalDecision::Approved => "approved",
+        ApprovalDecision::Denied => "denied",
+        ApprovalDecision::Timeout => "expired",
+    }
+}
 
 pub struct Host {
     state: Arc<AppState>,
@@ -176,7 +200,11 @@ impl Host {
             .storage
             .create_thread(&Origin::Realtime, Some(&title))
             .await
-            .map_err(|e| e.to_string())?;
+            .map_err(|e| {
+                tracing::error!(user, error = %e, "falha ao criar thread de voz");
+                e.to_string()
+            })?;
+        tracing::info!(thread_id = %t.id, user, "thread de voz criada");
         self.state
             .bus
             .emit(Event::ThreadCreated { thread: t.clone() });
@@ -211,7 +239,11 @@ impl ThreadHost for Host {
             .storage
             .create_thread(origin, title)
             .await
-            .map_err(|e| e.to_string())?;
+            .map_err(|e| {
+                tracing::error!(channel = origin.kind().as_str(), error = %e, "falha ao criar thread");
+                e.to_string()
+            })?;
+        tracing::info!(thread_id = %t.id, channel = origin.kind().as_str(), titled = title.is_some(), "thread criada");
         self.state
             .bus
             .emit(Event::ThreadCreated { thread: t.clone() });
@@ -256,19 +288,31 @@ impl ThreadHost for Host {
         attachments: &[will_core::Attachment],
         author: Option<&str>,
     ) -> Result<TurnId, String> {
-        let t = self
-            .state
-            .storage
-            .get_thread(thread)
-            .await
-            .map_err(|_| "thread não encontrada".to_string())?;
+        let t = match self.state.storage.get_thread(thread).await {
+            Ok(t) => t,
+            Err(e) => {
+                tracing::warn!(thread_id = %thread, error = %e, "mensagem para thread inexistente");
+                return Err("thread não encontrada".to_string());
+            }
+        };
+        let source = turn_source(author, &t.origin, text);
+        let span = tracing::info_span!(
+            "turn",
+            thread_id = %thread,
+            turn_id = tracing::field::Empty,
+            source,
+            channel = t.origin.kind().as_str()
+        );
+        async {
         if self.state.kb_path().map(|p| !p.is_dir()).unwrap_or(true) {
+            tracing::warn!("mensagem recusada: base de conhecimento não configurada");
             return Err(
                 "Configure a pasta da base de conhecimento antes de conversar com o cérebro."
                     .into(),
             );
         }
         if self.active_token().await.is_none() {
+            tracing::warn!("mensagem recusada: nenhum token do Claude ativo");
             return Err("Nenhum token do Claude ativo. Cadastre e ative um token em Configurações → Motor Claude.".into());
         }
         // Primeira mensagem de uma thread sem assunto: o título vira o pedido.
@@ -284,19 +328,29 @@ impl ThreadHost for Host {
             .storage
             .start_turn_by(thread, text, attachments, author)
             .await
-            .map_err(|e| e.to_string())?;
+            .map_err(|e| {
+                tracing::error!(error = %e, "falha ao registrar o turno no banco");
+                e.to_string()
+            })?;
+        tracing::Span::current().record("turn_id", tracing::field::display(turn_id));
+        tracing::info!(
+            author = author.unwrap_or(""),
+            chars = text.chars().count(),
+            attachments = attachments.len(),
+            first_message,
+            resume = t.claude_session_id.is_some(),
+            "turno aberto: mensagem aceita para a thread"
+        );
         if first_message && will_core::is_placeholder_title(t.title.as_deref()) {
             // título a partir do que o usuário escreveu, sem a nota de anexo
             let (clean, _) = will_core::split_attachment_notes(text);
             let title = will_core::derive_title(if clean.is_empty() { text } else { &clean });
-            if self
-                .state
-                .storage
-                .rename_thread(thread, &title)
-                .await
-                .is_ok()
-            {
-                emit_thread_updated(&self.state, thread).await;
+            match self.state.storage.rename_thread(thread, &title).await {
+                Ok(()) => {
+                    tracing::debug!("thread intitulada pelo primeiro pedido");
+                    emit_thread_updated(&self.state, thread).await;
+                }
+                Err(e) => tracing::warn!(error = %e, "não renomeou a thread pelo primeiro pedido"),
             }
         }
         let env = self.thread_env_for(&t).await;
@@ -309,11 +363,20 @@ impl ThreadHost for Host {
                 SendRequest {
                     turn_id,
                     text: text.to_string(),
+                    source: source.to_string(),
                 },
             )
-            .map_err(|e| e.to_string())?;
-        let _ = self.state.storage.touch_thread(thread).await;
+            .map_err(|e| {
+                tracing::error!(error = %e, "motor recusou a mensagem");
+                e.to_string()
+            })?;
+        if let Err(e) = self.state.storage.touch_thread(thread).await {
+            tracing::debug!(error = %e, "touch_thread falhou");
+        }
         Ok(turn_id)
+        }
+        .instrument(span)
+        .await
     }
 
     async fn revive_thread(
@@ -327,13 +390,19 @@ impl ThreadHost for Host {
             .storage
             .create_thread(origin, title)
             .await
-            .map_err(|e| e.to_string())?;
+            .map_err(|e| {
+                tracing::error!(channel = origin.kind().as_str(), error = %e, "falha ao recriar thread");
+                e.to_string()
+            })?;
         if let Some(sid) = claude_session_id {
             self.state
                 .storage
                 .set_thread_session(t.id, Some(sid))
                 .await
-                .map_err(|e| e.to_string())?;
+                .map_err(|e| {
+                    tracing::error!(thread_id = %t.id, error = %e, "falha ao gravar a sessão na thread recriada");
+                    e.to_string()
+                })?;
         }
         let t = self
             .state
@@ -342,6 +411,12 @@ impl ThreadHost for Host {
             .await
             .map_err(|e| e.to_string())?;
         let t = self.enrich(t);
+        tracing::info!(
+            thread_id = %t.id,
+            channel = origin.kind().as_str(),
+            with_session = claude_session_id.is_some(),
+            "thread recriada (revive)"
+        );
         self.state
             .bus
             .emit(Event::ThreadCreated { thread: t.clone() });
@@ -349,17 +424,22 @@ impl ThreadHost for Host {
     }
 
     async fn restart_thread(&self, thread: ThreadId) -> Result<(), String> {
+        tracing::info!(thread_id = %thread, "restart da thread pedido pelo usuário");
         self.state.engine.restart(thread, "pedido do usuário");
         Ok(())
     }
 
     async fn reset_thread(&self, thread: ThreadId) -> Result<(), String> {
+        tracing::info!(thread_id = %thread, "reset da thread: sessão do claude esquecida");
         self.state.engine.reset(thread);
         self.state
             .storage
             .set_thread_session(thread, None)
             .await
-            .map_err(|e| e.to_string())?;
+            .map_err(|e| {
+                tracing::error!(thread_id = %thread, error = %e, "reset: falha ao limpar a sessão no banco");
+                e.to_string()
+            })?;
         if let Ok(t) = self.state.storage.get_thread(thread).await {
             self.state.bus.emit(Event::ThreadUpdated {
                 thread: self.enrich(t),
@@ -369,19 +449,23 @@ impl ThreadHost for Host {
     }
 
     async fn interrupt_thread(&self, thread: ThreadId) -> Result<(), String> {
+        tracing::info!(thread_id = %thread, pending = self.state.engine.pending(thread), "interrupção pedida");
         self.state.engine.interrupt(thread);
         Ok(())
     }
 
     async fn delete_thread(&self, thread: ThreadId, purge_transcript: bool) -> Result<(), String> {
         let t = self.state.storage.get_thread(thread).await.ok();
+        tracing::info!(thread_id = %thread, purge_transcript, alive = self.state.engine.is_alive(thread), "apagando thread");
         self.state.engine.forget(thread).await;
         self.state.tokens.revoke_thread(thread);
         if purge_transcript {
             if let (Some(t), Some(kb)) = (&t, self.state.kb_path()) {
                 if let Some(sid) = &t.claude_session_id {
                     if let Some(p) = will_core::paths::claude_transcript_path(&kb, sid) {
-                        let _ = std::fs::remove_file(p);
+                        if let Err(e) = std::fs::remove_file(&p) {
+                            tracing::debug!(thread_id = %thread, error = %e, "transcrição não removida");
+                        }
                     }
                 }
             }
@@ -390,7 +474,10 @@ impl ThreadHost for Host {
             .storage
             .delete_thread(thread)
             .await
-            .map_err(|e| e.to_string())?;
+            .map_err(|e| {
+                tracing::error!(thread_id = %thread, error = %e, "falha ao apagar a thread no banco");
+                e.to_string()
+            })?;
         self.state
             .bus
             .emit(Event::ThreadDeleted { thread_id: thread });
@@ -423,16 +510,40 @@ impl ThreadHost for Host {
     }
 
     fn decide_approval(&self, id: ApprovalId, decision: ApprovalDecision, via: &str) -> bool {
+        let pending = self
+            .state
+            .approvals
+            .pending()
+            .into_iter()
+            .find(|r| r.id == id);
+        let span = tracing::info_span!(
+            "approval",
+            approval_id = %id,
+            tool = pending.as_ref().map(|r| r.tool.as_str()).unwrap_or(""),
+            thread_id = pending
+                .as_ref()
+                .and_then(|r| r.thread_id)
+                .map(|t| t.to_string())
+                .unwrap_or_default(),
+            decision = decision_label(decision)
+        );
+        let _entered = span.entered();
         let ok = self.state.approvals.decide(id, decision, via);
         if ok {
+            tracing::info!(via, "aprovação decidida");
             let st = self.state.clone();
             let via = via.to_string();
             tokio::spawn(async move {
-                let _ = st
+                if let Err(e) = st
                     .storage
                     .record_approval_decision(id, decision, &via)
-                    .await;
+                    .await
+                {
+                    tracing::warn!(approval_id = %id, error = %e, "decisão de aprovação não gravada");
+                }
             });
+        } else {
+            tracing::warn!(via, "decisão ignorada: pedido não está mais pendente");
         }
         ok
     }
@@ -475,6 +586,7 @@ impl BrainHost for UserBrain {
             }
         };
         let author = format!("voz:{}", self.user);
+        tracing::debug!(thread_id = %t.id, user = %self.user, new_thread, "voz: pergunta encaminhada ao cérebro");
         let turn_id = self
             .host
             .send_message_from(t.id, prompt, &[], Some(&author))
@@ -677,13 +789,17 @@ pub fn spawn_engine_loop(state: Arc<AppState>) {
             let ev = match rx.recv().await {
                 Ok(e) => e,
                 Err(broadcast::error::RecvError::Lagged(n)) => {
-                    tracing::warn!(n, "engine events: atrasado");
+                    tracing::warn!(
+                        skipped = n,
+                        "eventos do motor perdidos (consumidor atrasado)"
+                    );
                     continue;
                 }
                 Err(_) => break,
             };
             handle_engine_event(&state, ev).await;
         }
+        tracing::info!("laço de eventos do motor encerrado");
     });
 }
 
@@ -698,9 +814,15 @@ async fn handle_engine_event(state: &Arc<AppState>, ev: EngineEvent) {
     let storage = &state.storage;
     match ev {
         EngineEvent::Session {
-            thread, session_id, ..
+            thread,
+            session_id,
+            resumed,
         } => {
-            let _ = storage.set_thread_session(thread, Some(&session_id)).await;
+            if let Err(e) = storage.set_thread_session(thread, Some(&session_id)).await {
+                tracing::warn!(thread_id = %thread, error = %e, "sessão do claude não gravada");
+            } else {
+                tracing::debug!(thread_id = %thread, %session_id, resumed, "sessão do claude gravada");
+            }
             emit_thread_updated(state, thread).await;
         }
         EngineEvent::Sent {
@@ -757,7 +879,11 @@ async fn handle_engine_event(state: &Arc<AppState>, ev: EngineEvent) {
             merged,
             result,
         } => {
-            let _ = storage.finish_turn(turn_id, &result, None).await;
+            let span = tracing::info_span!("turn", thread_id = %thread, turn_id = %turn_id);
+            async {
+            if let Err(e) = storage.finish_turn(turn_id, &result, None).await {
+                tracing::error!(error = %e, "turno concluído mas não gravado no banco");
+            }
             for m in &merged {
                 // Turno mesclado: o texto guarda só o id do turno que o
                 // absorveu (a UI agrupa os balões; `error_kind = "merged"`).
@@ -770,10 +896,14 @@ async fn handle_engine_event(state: &Arc<AppState>, ev: EngineEvent) {
                     session_id: None,
                     usage: None,
                 };
-                let _ = storage.finish_turn(*m, &merged_res, Some("merged")).await;
+                if let Err(e) = storage.finish_turn(*m, &merged_res, Some("merged")).await {
+                    tracing::warn!(merged_turn_id = %m, error = %e, "turno mesclado não gravado");
+                }
             }
             if let Some(c) = result.cost_usd {
-                let _ = storage.add_thread_cost(thread, c).await;
+                if let Err(e) = storage.add_thread_cost(thread, c).await {
+                    tracing::warn!(error = %e, "custo da thread não acumulado");
+                }
                 let rec = will_storage::costs::NewAiCost {
                     source: "claude".into(),
                     r#ref: Some(format!("{thread}/{turn_id}")),
@@ -784,18 +914,34 @@ async fn handle_engine_event(state: &Arc<AppState>, ev: EngineEvent) {
                     duration_secs: result.duration_ms.map(|d| (d / 1000) as i64),
                     note: None,
                 };
-                let _ = storage.add_ai_cost(&rec).await;
+                if let Err(e) = storage.add_ai_cost(&rec).await {
+                    tracing::warn!(error = %e, "custo do turno não registrado em ai_costs");
+                }
+                tracing::debug!(
+                    cost_usd = c,
+                    model = result.model.as_deref().unwrap_or(""),
+                    duration_ms = result.duration_ms.unwrap_or(0),
+                    is_error = result.is_error,
+                    merged = merged.len(),
+                    "custo do turno registrado"
+                );
                 state.bus.emit(Event::CostRecorded {
                     source: "claude".into(),
                     usd: c,
                     estimated: false,
                     summary: format!("Turno do Claude: US$ {c:.4}"),
                 });
+            } else {
+                tracing::debug!(is_error = result.is_error, merged = merged.len(), "turno concluído sem custo informado");
             }
             if let Some(sid) = &result.session_id {
-                let _ = storage.set_thread_session(thread, Some(sid)).await;
+                if let Err(e) = storage.set_thread_session(thread, Some(sid)).await {
+                    tracing::warn!(error = %e, "sessão do result não gravada");
+                }
             }
-            let _ = storage.set_thread_status(thread, ThreadStatus::Live).await;
+            if let Err(e) = storage.set_thread_status(thread, ThreadStatus::Live).await {
+                tracing::debug!(error = %e, "status da thread não atualizado");
+            }
             state.bus.emit(Event::TurnFinished {
                 thread_id: thread,
                 turn_id,
@@ -803,12 +949,18 @@ async fn handle_engine_event(state: &Arc<AppState>, ev: EngineEvent) {
             });
             emit_thread_updated(state, thread).await;
             maybe_summarize_thread(state.clone(), thread);
+            }
+            .instrument(span)
+            .await;
         }
         EngineEvent::Dropped {
             thread,
             turn_id,
             reason,
         } => {
+            let span = tracing::info_span!("turn", thread_id = %thread, turn_id = %turn_id);
+            async {
+            tracing::warn!(%reason, "turno falhou (dropped): o usuário precisa reenviar");
             let res = TurnResult {
                 text: reason.clone(),
                 is_error: true,
@@ -818,18 +970,27 @@ async fn handle_engine_event(state: &Arc<AppState>, ev: EngineEvent) {
                 session_id: None,
                 usage: None,
             };
-            let _ = storage.finish_turn(turn_id, &res, Some("dropped")).await;
+            if let Err(e) = storage.finish_turn(turn_id, &res, Some("dropped")).await {
+                tracing::error!(error = %e, "turno descartado não gravado no banco");
+            }
             let _ = storage.set_thread_status(thread, ThreadStatus::Idle).await;
             state.bus.emit(Event::TurnFailed { thread_id: thread, turn_id: Some(turn_id), error: format!("A instância do Claude reiniciou no meio do processamento ({reason}). Manda de novo."), kind: "dropped".into() });
             emit_thread_updated(state, thread).await;
+            }
+            .instrument(span)
+            .await;
         }
         EngineEvent::StaleSession { thread } => {
-            let _ = storage.set_thread_session(thread, None).await;
+            tracing::warn!(thread_id = %thread, "sessão do claude expirada: thread recomeça do zero");
+            if let Err(e) = storage.set_thread_session(thread, None).await {
+                tracing::warn!(thread_id = %thread, error = %e, "sessão expirada não limpa no banco");
+            }
             state.bus.emit(Event::StaleSession { thread_id: thread });
         }
-        EngineEvent::ProcessStarted { thread, .. } => {
+        EngineEvent::ProcessStarted { thread, pid } => {
             // Processo subiu: motor está pronto (limpa Degraded transitório de
             // auth/rate limit). A contagem de vivos vem de `engine.stats()`.
+            tracing::debug!(thread_id = %thread, pid = ?pid, "processo do claude no ar");
             crate::modules::recompute_engine_status(state);
             emit_thread_updated(state, thread).await;
         }
@@ -839,22 +1000,24 @@ async fn handle_engine_event(state: &Arc<AppState>, ev: EngineEvent) {
             stderr_tail,
         } => {
             if code.is_some_and(|c| c != 0) && !stderr_tail.trim().is_empty() {
-                state.bus.log(
-                    "warn",
-                    "engine",
-                    format!(
-                        "claude saiu com código {code:?}: {}",
-                        will_core::tools::truncate(&crate::logging::redact(&stderr_tail), 300)
-                    ),
+                // `target: will_engine` mantém o módulo "engine" na aba Logs (via BusLayer).
+                tracing::warn!(
+                    target: "will_engine",
+                    thread_id = %thread,
+                    exit_code = ?code,
+                    "claude saiu com código {code:?}: {}",
+                    will_core::tools::truncate(&crate::logging::redact(&stderr_tail), 300)
                 );
             }
             let _ = storage.set_thread_status(thread, ThreadStatus::Idle).await;
             emit_thread_updated(state, thread).await;
         }
-        EngineEvent::AuthFailed { detail, .. } => {
+        EngineEvent::AuthFailed { thread, detail } => {
+            tracing::error!(thread_id = %thread, "motor degradado: autenticação do token falhou");
             state.set_module_status(will_core::Module::Engine, will_core::ModuleStatus::Degraded(format!("Autenticação falhou: {}. Gere um novo token com `claude setup-token` ou ative outro.", crate::logging::redact(&detail))));
         }
-        EngineEvent::RateLimited { detail, .. } => {
+        EngineEvent::RateLimited { thread, detail } => {
+            tracing::warn!(thread_id = %thread, "motor degradado: rate limit");
             state.set_module_status(
                 will_core::Module::Engine,
                 will_core::ModuleStatus::Degraded(format!(
@@ -864,9 +1027,10 @@ async fn handle_engine_event(state: &Arc<AppState>, ev: EngineEvent) {
             );
         }
         EngineEvent::PermissionDenied { thread, tool } => {
-            state.bus.log("warn", "engine", format!("thread {thread}: ação bloqueada por permissão ({tool}). Ajuste a allowlist em Motor Claude."));
+            tracing::warn!(target: "will_engine", thread_id = %thread, %tool, "thread {thread}: ação bloqueada por permissão ({tool}). Ajuste a allowlist em Motor Claude.");
         }
-        EngineEvent::Retired { thread, .. } => {
+        EngineEvent::Retired { thread, reason } => {
+            tracing::debug!(thread_id = %thread, %reason, "thread recolhida (idle)");
             let _ = storage.set_thread_status(thread, ThreadStatus::Idle).await;
             emit_thread_updated(state, thread).await;
         }
@@ -885,10 +1049,32 @@ pub fn spawn_bus_persistence(state: Arc<AppState>) {
             };
             match ev {
                 Event::ApprovalRequested { approval } => {
-                    let _ = state.storage.record_approval_request(&approval).await;
-                    if state.settings.read().general.notifications && will_platform::has_desktop() {
-                        will_platform::notify("will-ia: aprovação necessária", &approval.summary);
+                    let span = tracing::info_span!(
+                        "approval",
+                        approval_id = %approval.id,
+                        tool = %approval.tool,
+                        thread_id = approval.thread_id.map(|t| t.to_string()).unwrap_or_default(),
+                        decision = "pending"
+                    );
+                    async {
+                        tracing::info!(
+                            timeout_secs = approval.timeout_secs,
+                            "aprovação pedida ao usuário"
+                        );
+                        if let Err(e) = state.storage.record_approval_request(&approval).await {
+                            tracing::warn!(error = %e, "pedido de aprovação não gravado");
+                        }
+                        if state.settings.read().general.notifications
+                            && will_platform::has_desktop()
+                        {
+                            will_platform::notify(
+                                "will-ia: aprovação necessária",
+                                &approval.summary,
+                            );
+                        }
                     }
+                    .instrument(span)
+                    .await;
                 }
                 Event::ApprovalDecided {
                     approval_id,
@@ -896,10 +1082,18 @@ pub fn spawn_bus_persistence(state: Arc<AppState>) {
                 } => {
                     // decisão por timeout não passa pelo decide(): registra aqui
                     if decision == ApprovalDecision::Timeout {
-                        let _ = state
+                        tracing::warn!(
+                            approval_id = %approval_id,
+                            decision = "expired",
+                            "aprovação expirou sem resposta (negada)"
+                        );
+                        if let Err(e) = state
                             .storage
                             .record_approval_decision(approval_id, decision, "timeout")
-                            .await;
+                            .await
+                        {
+                            tracing::warn!(approval_id = %approval_id, error = %e, "expiração da aprovação não gravada");
+                        }
                     }
                 }
                 Event::Notification { title, body } => {
@@ -920,10 +1114,13 @@ pub fn spawn_bus_persistence(state: Arc<AppState>) {
                     }
                 }
                 Event::ModuleStatus { module, status } => {
-                    let _ = state
+                    if let Err(e) = state
                         .storage
                         .log_event("info", module.as_str(), &format!("status: {status:?}"))
-                        .await;
+                        .await
+                    {
+                        tracing::debug!(module = module.as_str(), error = %e, "status do módulo não gravado");
+                    }
                 }
                 _ => {}
             }

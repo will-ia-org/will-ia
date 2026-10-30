@@ -29,6 +29,7 @@ pub struct Settings {
     pub scheduler: SchedulerSettings,
     pub browser: BrowserSettings,
     pub network: NetworkSettings,
+    pub telemetry: TelemetrySettings,
     pub external_mcps: Vec<ExternalMcpServer>,
 }
 
@@ -715,6 +716,50 @@ impl Default for NetworkSettings {
             key_path: None,
             allow_remote_without_tls: false,
             tls_extra_names: vec![],
+        }
+    }
+}
+
+/// Telemetria: envio de logs do servidor (e, opcionalmente, do app) a um
+/// provedor externo — só Axiom por enquanto. Desligada por padrão (opt-in).
+/// O token do Axiom é segredo (`axiom_token` no cofre), nunca fica aqui.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default)]
+pub struct TelemetrySettings {
+    pub enabled: bool,
+    /// `"axiom"` (preset: `X-Axiom-Dataset` + Bearer) ou `"otlp"` (qualquer
+    /// endpoint OTLP/HTTP: Collector, Grafana Cloud, New Relic, OpenObserve…).
+    pub provider: String,
+    /// Base do endpoint OTLP/HTTP; o serviço acrescenta `/v1/logs` e `/v1/traces`.
+    pub endpoint: String,
+    /// Dataset de destino (só Axiom).
+    pub dataset: String,
+    /// Cabeçalhos extras, um por linha, `Nome: valor` (provedor `otlp`).
+    pub headers: Vec<String>,
+    /// Envia os spans (`turn`, `tool_call`, `inbound`…) como traces OTLP.
+    pub send_traces: bool,
+    /// Nível mínimo enviado: `error` | `warn` | `info` | `debug`.
+    pub level: String,
+    /// Rótulo livre desta instância (ex.: `mac-do-will`); vai em cada evento.
+    pub label: String,
+    /// O app também envia os próprios logs.
+    pub ship_app_logs: bool,
+    /// Envia `will-ia-fatal.log` / `service.err.log` / log do setup no start.
+    pub ship_crash_reports: bool,
+}
+impl Default for TelemetrySettings {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            provider: "axiom".into(),
+            endpoint: "https://api.axiom.co".into(),
+            dataset: "will-ia".into(),
+            headers: vec![],
+            send_traces: true,
+            level: "info".into(),
+            label: String::new(),
+            ship_app_logs: true,
+            ship_crash_reports: true,
         }
     }
 }

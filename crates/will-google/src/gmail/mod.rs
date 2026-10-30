@@ -431,15 +431,31 @@ impl WillTool for GmailTool {
         }
     }
 
-    async fn call(&self, _ctx: ToolContext, args: Value) -> Result<ToolOutput, ToolError> {
+    async fn call(&self, ctx: ToolContext, args: Value) -> Result<ToolOutput, ToolError> {
         let m = &self.module;
-        if !m.config().gmail.enabled {
-            return Err(ToolError::Unavailable("módulo Gmail desligado".into()));
-        }
-        let acc = m
-            .resolve_gmail_account(arg_opt_str(&args, "account"))
-            .await?;
-        m.gmail_state.remember([acc.email.clone()]);
+        crate::traced_op("gmail", self.kind.name(), &ctx, async {
+            if !m.config().gmail.enabled {
+                return Err(ToolError::Unavailable("módulo Gmail desligado".into()));
+            }
+            let acc = m
+                .resolve_gmail_account(arg_opt_str(&args, "account"))
+                .await?;
+            m.gmail_state.remember([acc.email.clone()]);
+            self.dispatch(m, &acc, &args).await
+        })
+        .await
+    }
+}
+
+impl GmailTool {
+    async fn dispatch(
+        &self,
+        m: &GoogleModule,
+        acc: &GoogleAccount,
+        args: &Value,
+    ) -> Result<ToolOutput, ToolError> {
+        let acc = acc.clone();
+        let args = args.clone();
         match self.kind {
             Kind::ListLabels => list_labels(m, &acc, &args).await,
             Kind::Search => search(m, &acc, &args).await,

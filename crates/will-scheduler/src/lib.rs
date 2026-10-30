@@ -19,10 +19,11 @@ use std::sync::Arc;
 use std::time::Duration;
 use tokio::sync::Notify;
 use tokio_util::sync::CancellationToken;
+use tracing::Instrument;
 use will_core::settings::SchedulerSettings;
 use will_core::{
     Event, EventBus, Module, ModuleStatus, Origin, OriginKind, Schedule, ScheduleId,
-    ScheduleTrigger, SharedThreadHost, ThreadId,
+    ScheduleTrigger, SharedThreadHost, ThreadId, TurnId,
 };
 use will_storage::schedules::NewSchedule;
 use will_storage::Storage;
@@ -96,6 +97,12 @@ impl SchedulerModule {
 
     /// Aplica configuração nova; liga/desliga o laço conforme `enabled`.
     pub fn update_config(self: &Arc<Self>, cfg: SchedulerSettings) {
+        tracing::debug!(
+            enabled = cfg.enabled,
+            max_schedules = cfg.max_schedules,
+            min_interval_minutes = cfg.min_interval_minutes,
+            "configuração do scheduler aplicada"
+        );
         *self.cfg.write() = cfg;
         self.start();
         self.wake.notify_one();
@@ -115,14 +122,30 @@ impl SchedulerModule {
         *self.cancel.write() = Some(token.clone());
         let me = self.clone();
         tokio::spawn(async move {
+            tracing::info!(
+                module = FAMILY,
+                status = "starting",
+                "scheduler subindo: reconciliando agendamentos"
+            );
             me.reconcile_on_start().await;
             me.set_status(ModuleStatus::Running);
+            tracing::info!(
+                module = FAMILY,
+                status = "running",
+                "laço do scheduler no ar"
+            );
             me.run_loop(token).await;
+            tracing::info!(
+                module = FAMILY,
+                status = "stopped",
+                "laço do scheduler encerrado"
+            );
         });
     }
 
     pub fn stop(&self) {
         if let Some(t) = self.cancel.write().take() {
+            tracing::info!(module = FAMILY, status = "stopped", "scheduler parado");
             t.cancel();
         }
     }
@@ -132,10 +155,6 @@ impl SchedulerModule {
             module: Module::Scheduler,
             status,
         });
-    }
-
-    fn log(&self, level: &str, msg: impl Into<String>) {
-        self.deps.bus.log(level, FAMILY, msg);
     }
 
     fn zone_for(&self, tz: Option<&str>) -> Result<Zone, String> {
@@ -162,41 +181,50 @@ impl SchedulerModule {
     /// único no passado → pausa com motivo.
     async fn reconcile_on_start(&self) {
         let now = Utc::now();
-        let Ok(list) = self.deps.storage.list_schedules().await else {
-            return;
+        let list = match self.deps.storage.list_schedules().await {
+            Ok(l) => l,
+            Err(e) => {
+                tracing::error!(error = %e, "reconciliação: falha ao ler agendamentos");
+                return;
+            }
         };
+        let total = list.len();
+        let mut missed_n = 0usize;
         for s in list.into_iter().filter(|s| s.enabled) {
             match &s.trigger {
                 ScheduleTrigger::Cron { .. } => {
                     let next = self.compute_next(&s, now).ok().flatten();
                     let missed = s.next_run_at.map(|n| n < now).unwrap_or(false);
                     if missed {
-                        self.log(
-                            "warn",
-                            format!(
-                                "\"{}\": disparo de {} perdido com o app fechado; próximo {}",
-                                s.name,
-                                s.next_run_at.map(|d| d.to_rfc3339()).unwrap_or_default(),
-                                next.map(|d| d.to_rfc3339())
-                                    .unwrap_or_else(|| "nenhum".into())
-                            ),
+                        missed_n += 1;
+                        tracing::warn!(
+                            schedule_id = %s.id,
+                            thread_id = %s.thread_id,
+                            "\"{}\": disparo de {} perdido com o app fechado; próximo {}",
+                            s.name,
+                            s.next_run_at.map(|d| d.to_rfc3339()).unwrap_or_default(),
+                            next.map(|d| d.to_rfc3339())
+                                .unwrap_or_else(|| "nenhum".into())
                         );
                     }
                     if next != s.next_run_at {
-                        let _ = self.deps.storage.set_schedule_next(s.id, next, None).await;
+                        if let Err(e) = self.deps.storage.set_schedule_next(s.id, next, None).await
+                        {
+                            tracing::warn!(schedule_id = %s.id, error = %e, "próxima ocorrência não gravada");
+                        }
                     }
                 }
                 ScheduleTrigger::Once { at } => {
                     if *at <= now {
-                        self.log(
-                            "warn",
-                            format!(
-                                "\"{}\": horário único {} passou com o app fechado; pausado",
-                                s.name,
-                                at.to_rfc3339()
-                            ),
+                        missed_n += 1;
+                        tracing::warn!(
+                            schedule_id = %s.id,
+                            thread_id = %s.thread_id,
+                            "\"{}\": horário único {} passou com o app fechado; pausado",
+                            s.name,
+                            at.to_rfc3339()
                         );
-                        let _ = self
+                        if let Err(e) = self
                             .deps
                             .storage
                             .set_schedule_next(
@@ -204,23 +232,38 @@ impl SchedulerModule {
                                 None,
                                 Some("perdido: o app estava fechado no horário"),
                             )
-                            .await;
+                            .await
+                        {
+                            tracing::warn!(schedule_id = %s.id, error = %e, "pausa do agendamento perdido não gravada");
+                        }
                     } else if s.next_run_at != Some(*at) {
-                        let _ = self
+                        if let Err(e) = self
                             .deps
                             .storage
                             .set_schedule_next(s.id, Some(*at), None)
-                            .await;
+                            .await
+                        {
+                            tracing::warn!(schedule_id = %s.id, error = %e, "próxima ocorrência não gravada");
+                        }
                     }
                 }
             }
         }
+        tracing::debug!(
+            total,
+            missed = missed_n,
+            "reconciliação dos agendamentos concluída"
+        );
         self.deps.bus.emit(Event::SchedulesChanged);
     }
 
     async fn run_loop(self: Arc<Self>, token: CancellationToken) {
         loop {
             let sleep_for = self.fire_due().await;
+            tracing::trace!(
+                sleep_ms = sleep_for.as_millis() as u64,
+                "scheduler dormindo"
+            );
             tokio::select! {
                 _ = token.cancelled() => break,
                 _ = self.wake.notified() => {}
@@ -235,7 +278,7 @@ impl SchedulerModule {
         let list = match self.deps.storage.list_schedules().await {
             Ok(l) => l,
             Err(e) => {
-                self.log("error", format!("falha ao ler agendamentos: {e}"));
+                tracing::error!(error = %e, "falha ao ler agendamentos: {e}");
                 return MAX_SLEEP;
             }
         };
@@ -259,8 +302,25 @@ impl SchedulerModule {
 
     /// Entrega a mensagem na thread dona (recriando-a se sumiu) e agenda a próxima.
     async fn fire(&self, s: Schedule) {
+        let run_id = uuid::Uuid::now_v7();
+        let span = tracing::info_span!(
+            "schedule_run",
+            schedule_id = %s.id,
+            run_id = %run_id,
+            thread_id = %s.thread_id,
+            trigger = %s.trigger.short()
+        );
+        self.fire_inner(s).instrument(span).await
+    }
+
+    async fn fire_inner(&self, s: Schedule) {
         let now = Utc::now();
         let zone = self.zone_for(s.timezone.as_deref()).unwrap_or(Zone::Local);
+        let late_secs = s
+            .next_run_at
+            .map(|n| (now - n).num_seconds().max(0))
+            .unwrap_or(0);
+        tracing::info!(late_secs, run_count = s.run_count, "agendamento disparado");
         let text = will_core::schedule::fired_message(&s, &zone.format(now));
         let outcome = self.deliver(&s, &text).await;
         let next = match &s.trigger {
@@ -268,7 +328,7 @@ impl SchedulerModule {
             ScheduleTrigger::Once { .. } => None,
         };
         let (thread_id, ok, detail) = match &outcome {
-            Ok(t) => (Some(*t), true, None),
+            Ok((t, _)) => (Some(*t), true, None),
             Err(e) => (None, false, Some(e.as_str())),
         };
         // Único: concluído se entregue; se falhou, pausa com o motivo (o usuário
@@ -289,23 +349,26 @@ impl SchedulerModule {
             .record_schedule_run(s.id, thread_id, ok, detail, next, paused)
             .await
         {
-            self.log(
-                "error",
-                format!("falha ao registrar disparo de \"{}\": {e}", s.name),
-            );
+            tracing::error!(error = %e, "falha ao registrar disparo de \"{}\": {e}", s.name);
         }
         match &outcome {
-            Ok(t) => self.log(
-                "info",
-                format!(
-                    "\"{}\" disparou na thread {} (próximo: {})",
-                    s.name,
-                    t,
-                    next.map(|d| d.to_rfc3339())
-                        .unwrap_or_else(|| "nenhum".into())
-                ),
+            Ok((t, turn_id)) => tracing::info!(
+                thread_id = %t,
+                turn_id = %turn_id,
+                next = next.map(|d| d.to_rfc3339()).unwrap_or_default(),
+                paused = paused.unwrap_or(""),
+                "\"{}\" disparou na thread {} (próximo: {})",
+                s.name,
+                t,
+                next.map(|d| d.to_rfc3339())
+                    .unwrap_or_else(|| "nenhum".into())
             ),
-            Err(e) => self.log("error", format!("\"{}\" falhou ao disparar: {e}", s.name)),
+            Err(e) => tracing::error!(
+                error = %e,
+                paused = paused.unwrap_or(""),
+                "\"{}\" falhou ao disparar: {e}",
+                s.name
+            ),
         }
         self.deps.bus.emit(Event::ScheduleFired {
             schedule_id: s.id,
@@ -331,26 +394,36 @@ impl SchedulerModule {
         }
     }
 
-    async fn deliver(&self, s: &Schedule, text: &str) -> Result<ThreadId, String> {
+    /// Entrega e devolve `(thread, turno)` para correlacionar o disparo ao turno.
+    async fn deliver(&self, s: &Schedule, text: &str) -> Result<(ThreadId, TurnId), String> {
         let host = &self.deps.host;
         let thread = match host.get_thread(s.thread_id).await {
             Ok(t) => t.id,
             Err(_) => {
-                self.log(
-                    "warn",
-                    format!(
-                        "thread {} de \"{}\" não existe mais; recriando com a sessão salva",
-                        s.thread_id, s.name
-                    ),
+                tracing::warn!(
+                    schedule_id = %s.id,
+                    thread_id = %s.thread_id,
+                    "thread {} de \"{}\" não existe mais; recriando com a sessão salva",
+                    s.thread_id,
+                    s.name
                 );
                 let t = host
                     .revive_thread(&s.origin, Some(&s.name), s.claude_session_id.as_deref())
-                    .await?;
+                    .await
+                    .map_err(|e| {
+                        tracing::error!(schedule_id = %s.id, error = %e, "não recriou a thread dona");
+                        e
+                    })?;
+                tracing::info!(schedule_id = %s.id, thread_id = %t.id, "thread dona recriada");
                 t.id
             }
         };
-        host.send_message(thread, text).await?;
-        Ok(thread)
+        let turn_id = host.send_message(thread, text).await.map_err(|e| {
+            tracing::error!(schedule_id = %s.id, thread_id = %thread, error = %e, "mensagem do agendamento não entregue");
+            e
+        })?;
+        tracing::debug!(schedule_id = %s.id, thread_id = %thread, turn_id = %turn_id, chars = text.chars().count(), "mensagem do agendamento entregue à thread");
+        Ok((thread, turn_id))
     }
 
     // ----- operações (ferramentas, API, UI) -----
@@ -436,11 +509,15 @@ impl SchedulerModule {
             .await
             .map_err(|e| e.to_string())?;
         if count >= max {
+            tracing::warn!(thread_id = %thread, created_by, max, "criação recusada: limite de agendamentos ativos");
             return Err(format!(
                 "limite de {max} agendamentos ativos atingido; apague ou pause algum"
             ));
         }
-        let t = self.deps.host.get_thread(thread).await?;
+        let t = self.deps.host.get_thread(thread).await.map_err(|e| {
+            tracing::warn!(thread_id = %thread, created_by, error = %e, "criação recusada: thread dona não encontrada");
+            e
+        })?;
         let tmp = Schedule {
             id: ScheduleId::new(),
             name: name.trim().to_string(),
@@ -481,14 +558,19 @@ impl SchedulerModule {
                 next_run_at: next,
             })
             .await
-            .map_err(|e| e.to_string())?;
-        self.log(
-            "info",
-            format!(
-                "\"{}\" criado por {created_by} ({})",
-                created.name,
-                created.trigger.short()
-            ),
+            .map_err(|e| {
+                tracing::error!(thread_id = %t.id, created_by, error = %e, "agendamento não gravado");
+                e.to_string()
+            })?;
+        tracing::info!(
+            schedule_id = %created.id,
+            thread_id = %created.thread_id,
+            created_by,
+            trigger = %created.trigger.short(),
+            next = created.next_run_at.map(|d| d.to_rfc3339()).unwrap_or_default(),
+            "\"{}\" criado por {created_by} ({})",
+            created.name,
+            created.trigger.short()
         );
         self.changed();
         self.view(created).await
@@ -547,22 +629,29 @@ impl SchedulerModule {
             }
             _ => None,
         };
-        let saved = self
-            .deps
-            .storage
-            .update_schedule(&s)
-            .await
-            .map_err(|e| e.to_string())?;
+        let saved = self.deps.storage.update_schedule(&s).await.map_err(|e| {
+            tracing::error!(schedule_id = %id, error = %e, "agendamento não atualizado");
+            e.to_string()
+        })?;
+        tracing::info!(
+            schedule_id = %saved.id,
+            thread_id = %saved.thread_id,
+            enabled = saved.enabled,
+            trigger = %saved.trigger.short(),
+            paused_reason = saved.paused_reason.as_deref().unwrap_or(""),
+            next = saved.next_run_at.map(|d| d.to_rfc3339()).unwrap_or_default(),
+            "agendamento atualizado"
+        );
         self.changed();
         self.view(saved).await
     }
 
     pub async fn delete(&self, id: ScheduleId) -> Result<(), String> {
-        self.deps
-            .storage
-            .delete_schedule(id)
-            .await
-            .map_err(|e| e.to_string())?;
+        self.deps.storage.delete_schedule(id).await.map_err(|e| {
+            tracing::warn!(schedule_id = %id, error = %e, "agendamento não removido");
+            e.to_string()
+        })?;
+        tracing::info!(schedule_id = %id, "agendamento removido");
         self.changed();
         Ok(())
     }
@@ -575,23 +664,40 @@ impl SchedulerModule {
             .get_schedule(id)
             .await
             .map_err(|e| e.to_string())?;
-        let now = Utc::now();
-        let zone = self.zone_for(s.timezone.as_deref())?;
-        let text =
-            will_core::schedule::fired_message(&s, &format!("{} (manual)", zone.format(now)));
-        let thread = self.deliver(&s, &text).await?;
-        let next = if s.enabled { s.next_run_at } else { None };
-        self.deps
-            .storage
-            .record_schedule_run(s.id, Some(thread), true, Some("manual"), next, None)
-            .await
-            .map_err(|e| e.to_string())?;
-        self.log(
-            "info",
-            format!("\"{}\" disparado manualmente na thread {thread}", s.name),
+        let run_id = uuid::Uuid::now_v7();
+        let span = tracing::info_span!(
+            "schedule_run",
+            schedule_id = %s.id,
+            run_id = %run_id,
+            thread_id = %s.thread_id,
+            manual = true
         );
-        self.changed();
-        Ok(())
+        async {
+            let now = Utc::now();
+            let zone = self.zone_for(s.timezone.as_deref())?;
+            let text =
+                will_core::schedule::fired_message(&s, &format!("{} (manual)", zone.format(now)));
+            let (thread, turn_id) = self.deliver(&s, &text).await?;
+            let next = if s.enabled { s.next_run_at } else { None };
+            self.deps
+                .storage
+                .record_schedule_run(s.id, Some(thread), true, Some("manual"), next, None)
+                .await
+                .map_err(|e| {
+                    tracing::error!(error = %e, "disparo manual não registrado");
+                    e.to_string()
+                })?;
+            tracing::info!(
+                thread_id = %thread,
+                turn_id = %turn_id,
+                "\"{}\" disparado manualmente na thread {thread}",
+                s.name
+            );
+            self.changed();
+            Ok::<(), String>(())
+        }
+        .instrument(span)
+        .await
     }
 
     pub async fn get(&self, id: ScheduleId) -> Result<ScheduleView, String> {

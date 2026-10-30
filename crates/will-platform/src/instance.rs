@@ -29,6 +29,22 @@ pub const LOCK_FILE: &str = "instance.lock";
 
 /// Tenta tomar o trinco sem bloquear.
 pub fn try_lock(data_dir: &Path) -> Result<InstanceLock, InstanceLockError> {
+    let res = try_lock_in(data_dir);
+    match &res {
+        Ok(_) => {
+            tracing::info!(name: "platform", op = "instance_lock", ok = true, pid = std::process::id(), data_dir = %data_dir.display(), "trinco de instância única tomado")
+        }
+        Err(InstanceLockError::Busy) => {
+            tracing::warn!(name: "platform", op = "instance_lock", ok = false, data_dir = %data_dir.display(), "já existe uma instância em execução")
+        }
+        Err(e) => {
+            tracing::error!(name: "platform", op = "instance_lock", ok = false, data_dir = %data_dir.display(), error = %e, "não foi possível criar o trinco")
+        }
+    }
+    res
+}
+
+fn try_lock_in(data_dir: &Path) -> Result<InstanceLock, InstanceLockError> {
     std::fs::create_dir_all(data_dir)?;
     let path = data_dir.join(LOCK_FILE);
     #[cfg(unix)]

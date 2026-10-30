@@ -24,6 +24,7 @@ pub const ATTACH: MaterialIcon = m::ICON_ATTACH_FILE;
 pub const ARROW_UPWARD: MaterialIcon = m::ICON_ARROW_UPWARD;
 pub const VISIBILITY: MaterialIcon = m::ICON_VISIBILITY;
 pub const VISIBILITY_OFF: MaterialIcon = m::ICON_VISIBILITY_OFF;
+pub const CONTENT_COPY: MaterialIcon = m::ICON_CONTENT_COPY;
 
 /// Todos os ícones nomeados (o teste garante que a fonte tem cada glifo).
 #[cfg(test)]
@@ -43,6 +44,7 @@ pub const ALL: &[(&str, MaterialIcon)] = &[
     ("ARROW_UPWARD", ARROW_UPWARD),
     ("VISIBILITY", VISIBILITY),
     ("VISIBILITY_OFF", VISIBILITY_OFF),
+    ("CONTENT_COPY", CONTENT_COPY),
 ];
 
 #[cfg(test)]

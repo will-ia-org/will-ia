@@ -414,6 +414,32 @@ pub const BROWSER: Help = Help {
 
 // ---------- Usuários ----------
 
+// ---------- Telemetria ----------
+
+pub const TELEMETRY: Help = Help {
+    title: "Telemetria (OTLP / Axiom)",
+    intro: "Opcional e desligada por padrão. Ligada, o servidor (e, se você quiser, este app) envia os próprios logs e spans pelo protocolo padrão OTLP/HTTP (OpenTelemetry) — para o Axiom, um serviço de logs na nuvem com preset pronto, ou para qualquer outro backend OTLP (provedor \"OTLP genérico\": Collector, Grafana Cloud, New Relic, OpenObserve…). Serve para investigar erros de uma instância que roda longe de você (servidor Linux, máquina de outra pessoa) sem precisar entrar nela. O envio é em lotes, em segundo plano; se o Axiom estiver fora, os eventos ficam numa fila local e seguem depois.",
+    steps: &[
+        ("Criar a conta e o dataset", "Em app.axiom.co crie uma conta (o plano grátis dá 500 GB por mês com 30 dias de retenção). Em Datasets, crie um dataset — o padrão aqui é will-ia; se usar outro nome, troque o campo Dataset."),
+        ("Gerar o token", "Em Settings › API tokens, crie um token com permissão de Ingest no dataset (só isso; nada de permissões de leitura ou de organização). Copie o valor: ele aparece uma vez só."),
+        ("Cadastrar aqui", "Cole o token no campo Token e salve: ele vai para o cofre de segredos (telemetry_token) e nunca é mostrado de novo. Preencha o Rótulo da instância (ex.: mac-do-will) para distinguir máquinas no Axiom."),
+        ("Ligar e testar", "Ative o interruptor, salve a seção e clique em Enviar evento de teste. Com HTTP 200 o evento aparece no dataset em segundos; em Status você acompanha enviados, falhas e fila."),
+    ],
+    notes: &[
+        ("Privacidade", "Cada evento leva: instante, nível, módulo (alvo do log), mensagem, ids (thread, turno, instance_id), rótulo e versão. Nunca vão tokens, senhas ou segredos (o logger já os mascara) e nunca vão textos de conversas, e-mails, mensagens do WhatsApp ou conteúdo de arquivos."),
+        ("Nível", "error e warn são leves e bastam para alertas; info é o padrão do dia a dia; debug é verboso e consome a cota rápido — use só enquanto investiga algo."),
+        ("Logs do app", "Com \"Enviar logs deste app\" ligado, o aplicativo também manda os próprios logs (conexão, UI) com o mesmo token e dataset, marcados como source=app."),
+        ("Relatórios de falha", "Com \"Enviar relatórios de falha\" ligado, ao subir o servidor envia o will-ia-fatal.log, o service.err.log e o log do instalador se existirem — é como se descobre por que a instância caiu."),
+        ("Fila (spool)", "Sem rede ou com o Axiom fora, os eventos vão para uma fila local limitada e são reenviados quando o serviço volta; na fila mostra o que está esperando. Falhas conta lotes rejeitados (token inválido, dataset inexistente, cota)."),
+        ("Endpoint", "Só mude em Avançado se usar uma região/instalação própria do Axiom (ex.: https://api.eu.axiom.co)."),
+    ],
+    code: "",
+    links: &[
+        ("Axiom: criar conta e tokens", "https://app.axiom.co"),
+        ("Axiom: documentação da API de ingest", "https://axiom.co/docs/send-data/ingest-api"),
+    ],
+};
+
 pub const USERS: Help = Help {
     title: "Usuários",
     intro: "Contas de acesso a este servidor will-ia. Cada pessoa entra com usuário e senha no app; o login identifica quem escreveu cada mensagem, quem aprovou o quê e quem gastou quanto, e permite revogar o acesso de alguém sem mexer nos demais. As threads são compartilhadas: todo mundo vê as mesmas conversas.",

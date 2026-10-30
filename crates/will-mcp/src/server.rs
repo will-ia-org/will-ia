@@ -22,6 +22,7 @@ use std::net::SocketAddr;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 use tokio_util::sync::CancellationToken;
+use tracing::Instrument;
 use will_core::{
     ApprovalDecision, ApprovalManager, Event, EventBus, ThreadId, ToolContext, ToolError,
     ToolPolicy,
@@ -91,19 +92,58 @@ impl WillMcpServer {
         args: serde_json::Value,
         caller: Option<Caller>,
     ) -> CallToolResult {
+        let call_id = uuid::Uuid::now_v7();
+        let thread_id = caller.as_ref().and_then(|c| c.thread_id);
+        let span = tracing::info_span!(
+            "tool_call",
+            tool = %name,
+            call_id = %call_id,
+            thread_id = thread_id.map(|t| t.to_string()).unwrap_or_default(),
+            policy = tracing::field::Empty,
+            ok = tracing::field::Empty,
+            duration_ms = tracing::field::Empty,
+            generic = caller.as_ref().map(|c| c.generic).unwrap_or(false)
+        );
+        self.run_call_inner(name, args, caller)
+            .instrument(span)
+            .await
+    }
+
+    async fn run_call_inner(
+        &self,
+        name: &str,
+        args: serde_json::Value,
+        caller: Option<Caller>,
+    ) -> CallToolResult {
         let start = Instant::now();
         let deps = &self.inner;
         let thread_id = caller.as_ref().and_then(|c| c.thread_id);
         let origin = caller.as_ref().and_then(|c| c.origin.clone());
         let Some((spec, tool, available)) = deps.registry.find(name) else {
+            tracing::warn!("ferramenta desconhecida chamada pelo agente");
             return CallToolResult::error(vec![ContentBlock::text(format!(
                 "ferramenta desconhecida: {name}"
             ))]);
         };
-        let (policy, _) = deps.registry.policy_for(&spec);
+        let (policy, overridden) = deps.registry.policy_for(&spec);
+        let span = tracing::Span::current();
+        span.record("policy", policy.as_str());
+        tracing::debug!(policy = policy.as_str(), overridden, family = %spec.family, "ferramenta chamada");
         let redacted = redact_args(&args);
         let finish = |ok: bool, err: Option<String>, out: CallToolResult| {
             let dur = start.elapsed().as_millis() as u64;
+            let span = tracing::Span::current();
+            span.record("ok", ok);
+            span.record("duration_ms", dur);
+            match &err {
+                None => tracing::info!(ok, duration_ms = dur, "ferramenta executada"),
+                Some(e) => tracing::warn!(
+                    ok,
+                    duration_ms = dur,
+                    error = %will_core::tools::truncate(e, 200),
+                    "ferramenta falhou ou foi recusada"
+                ),
+            }
             (deps.on_call)(CallRecord {
                 thread_id,
                 tool: name.to_string(),
@@ -135,7 +175,11 @@ impl WillMcpServer {
             }
             ToolPolicy::Confirm => {
                 let summary = tool.approval_summary(&args);
-                let (_req, decision, via) = deps
+                tracing::info!(
+                    timeout_secs = deps.approval_timeout.as_secs(),
+                    "política confirmar: aguardando aprovação do usuário"
+                );
+                let (req, decision, via) = deps
                     .approvals
                     .request(
                         thread_id,
@@ -145,6 +189,25 @@ impl WillMcpServer {
                         deps.approval_timeout,
                     )
                     .await;
+                let decision_label = match decision {
+                    ApprovalDecision::Approved => "approved",
+                    ApprovalDecision::Denied => "denied",
+                    ApprovalDecision::Timeout => "expired",
+                };
+                let approval_span = tracing::info_span!(
+                    "approval",
+                    approval_id = %req.id,
+                    tool = %name,
+                    thread_id = thread_id.map(|t| t.to_string()).unwrap_or_default(),
+                    decision = decision_label
+                );
+                approval_span.in_scope(|| {
+                    tracing::debug!(
+                        %via,
+                        wait_ms = start.elapsed().as_millis() as u64,
+                        "aprovação resolvida para a chamada"
+                    )
+                });
                 if decision != ApprovalDecision::Approved {
                     let msg = match decision {
                         ApprovalDecision::Timeout => "Ação não aprovada pelo usuário (tempo esgotado). Não insista; informe o usuário.",
@@ -205,7 +268,7 @@ Nunca envie mensagens, e-mails ou altere a agenda sem pedido explícito do usuá
     async fn list_tools(
         &self,
         _request: Option<PaginatedRequestParams>,
-        _ctx: RequestContext<RoleServer>,
+        ctx: RequestContext<RoleServer>,
     ) -> Result<ListToolsResult, ErrorData> {
         let tools: Vec<Tool> = self
             .inner
@@ -214,6 +277,16 @@ Nunca envie mensagens, e-mails ou altere a agenda sem pedido explícito do usuá
             .iter()
             .map(|(spec, _)| Self::to_rmcp_tool(spec))
             .collect();
+        let caller = Self::caller(&ctx);
+        tracing::debug!(
+            thread_id = caller
+                .as_ref()
+                .and_then(|c| c.thread_id)
+                .map(|t| t.to_string())
+                .unwrap_or_default(),
+            tools = tools.len(),
+            "tools/list atendido"
+        );
         Ok(ListToolsResult::with_all_items(tools))
     }
 
@@ -248,6 +321,7 @@ async fn auth_middleware(State(st): State<AuthState>, mut req: Request, next: Ne
         })
         .map(|s| s.trim().to_string());
     let Some(token) = token else {
+        tracing::warn!(path = %req.uri().path(), "requisição MCP sem bearer");
         return (StatusCode::UNAUTHORIZED, "missing bearer").into_response();
     };
     match st.tokens.lookup(&token) {
@@ -255,7 +329,10 @@ async fn auth_middleware(State(st): State<AuthState>, mut req: Request, next: Ne
             req.extensions_mut().insert(caller);
             next.run(req).await
         }
-        None => (StatusCode::UNAUTHORIZED, "invalid bearer").into_response(),
+        None => {
+            tracing::warn!(path = %req.uri().path(), token_len = token.len(), "requisição MCP com bearer inválido/revogado");
+            (StatusCode::UNAUTHORIZED, "invalid bearer").into_response()
+        }
     }
 }
 
@@ -285,15 +362,23 @@ impl McpServer {
         );
         let listener = tokio::net::TcpListener::bind(("127.0.0.1", port))
             .await
-            .map_err(|e| format!("bind MCP: {e}"))?;
+            .map_err(|e| {
+                tracing::error!(port, error = %e, "bind do servidor MCP falhou");
+                format!("bind MCP: {e}")
+            })?;
         let addr = listener.local_addr().map_err(|e| e.to_string())?;
         let c2 = cancel.clone();
         tokio::spawn(async move {
-            let _ = axum::serve(listener, app)
+            if let Err(e) = axum::serve(listener, app)
                 .with_graceful_shutdown(async move { c2.cancelled().await })
-                .await;
+                .await
+            {
+                tracing::error!(error = %e, "servidor MCP encerrou com erro");
+            } else {
+                tracing::info!("servidor MCP encerrado");
+            }
         });
-        tracing::info!(%addr, "servidor MCP will_ia no ar");
+        tracing::info!(%addr, module = "mcp", status = "running", "servidor MCP will_ia no ar");
         Ok(Self { addr, cancel })
     }
 
@@ -302,6 +387,7 @@ impl McpServer {
     }
 
     pub fn stop(&self) {
+        tracing::info!(addr = %self.addr, module = "mcp", status = "stopped", "parando servidor MCP");
         self.cancel.cancel();
     }
 }

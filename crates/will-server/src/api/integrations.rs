@@ -32,10 +32,19 @@ pub async fn telegram_test(
                 .ok_or_else(|| bad("token do bot não configurado"))?,
         };
         match will_telegram::test_bot_token(token.trim()).await {
-            Ok(v) => Ok(Json(
-                json!({ "ok": true, "username": v.get("username"), "id": v.get("id"), "first_name": v.get("first_name") }),
-            )),
-            Err(e) => Ok(Json(json!({ "ok": false, "error": e }))),
+            Ok(v) => {
+                tracing::info!(
+                    bot = v.get("username").and_then(|u| u.as_str()).unwrap_or(""),
+                    "teste do bot do Telegram: ok"
+                );
+                Ok(Json(
+                    json!({ "ok": true, "username": v.get("username"), "id": v.get("id"), "first_name": v.get("first_name") }),
+                ))
+            }
+            Err(e) => {
+                tracing::warn!(error = %crate::logging::redact(&e), "teste do bot do Telegram: falhou");
+                Ok(Json(json!({ "ok": false, "error": e })))
+            }
         }
     }
     #[cfg(not(feature = "telegram"))]
@@ -96,7 +105,11 @@ pub async fn voice_start(
 ) -> ApiResult<Value> {
     check_capacity(&state, &me)?;
     let r = rt(&state, &me);
-    r.start().await.map_err(bad)?;
+    r.start().await.map_err(|e| {
+        tracing::warn!(user = %me.username, error = %e, "sessão de voz não iniciou");
+        bad(e)
+    })?;
+    tracing::info!(user = %me.username, "sessão de voz iniciada");
     crate::modules::recompute_realtime_status(&state);
     Ok(Json(
         json!({ "ok": true, "active": true, "user": me.username }),
@@ -109,6 +122,7 @@ pub async fn voice_stop(
 ) -> ApiResult<Value> {
     let r = rt(&state, &me);
     r.stop().await;
+    tracing::info!(user = %me.username, "sessão de voz encerrada");
     crate::modules::recompute_realtime_status(&state);
     Ok(Json(
         json!({ "ok": true, "active": false, "user": me.username }),
@@ -123,7 +137,11 @@ pub async fn voice_toggle(
     if !r.is_active() {
         check_capacity(&state, &me)?;
     }
-    let active = r.toggle().await.map_err(bad)?;
+    let active = r.toggle().await.map_err(|e| {
+        tracing::warn!(user = %me.username, error = %e, "alternar sessão de voz falhou");
+        bad(e)
+    })?;
+    tracing::info!(user = %me.username, active, "sessão de voz alternada");
     crate::modules::recompute_realtime_status(&state);
     Ok(Json(
         json!({ "ok": true, "active": active, "user": me.username }),
@@ -456,7 +474,12 @@ pub async fn wa_pair(State(state): State<App>, body: Option<Json<PairBody>>) -> 
             .phone
             .filter(|p| !p.trim().is_empty())
             .map(|p| p.chars().filter(|c| c.is_ascii_digit()).collect::<String>());
-        let account_id = m.pair(b.account_id, phone, b.label).await.map_err(bad)?;
+        let by_code = phone.is_some();
+        let account_id = m.pair(b.account_id, phone, b.label).await.map_err(|e| {
+            tracing::warn!(error = %e, "pareamento do WhatsApp não iniciou");
+            bad(e)
+        })?;
+        tracing::info!(account_id = %account_id, by_code, "pareamento do WhatsApp iniciado");
         crate::modules::sync_whatsapp_accounts(&state, &m).await;
         state.set_module_status(will_core::Module::WhatsApp, m.module_status());
         Ok(Json(json!({ "ok": true, "account_id": account_id })))
@@ -487,7 +510,16 @@ pub async fn wa_unlink(State(state): State<App>, Json(body): Json<UnlinkBody>) -
             body.remove.unwrap_or(false),
         )
         .await
-        .map_err(bad)?;
+        .map_err(|e| {
+            tracing::warn!(account_id = %body.account_id, error = %e, "desvincular WhatsApp falhou");
+            bad(e)
+        })?;
+        tracing::info!(
+            account_id = %body.account_id,
+            clear_index = body.clear_index.unwrap_or(false),
+            remove = body.remove.unwrap_or(false),
+            "conta do WhatsApp desvinculada"
+        );
         crate::modules::sync_whatsapp_accounts(&state, &m).await;
         state.set_module_status(will_core::Module::WhatsApp, m.module_status());
         Ok(Json(json!({ "ok": true })))
@@ -511,7 +543,11 @@ pub async fn wa_reconnect(
     #[cfg(feature = "whatsapp")]
     {
         let m = wa(&state).await?;
-        m.reconnect(&body.account_id).await.map_err(bad)?;
+        m.reconnect(&body.account_id).await.map_err(|e| {
+            tracing::warn!(account_id = %body.account_id, error = %e, "reconexão do WhatsApp falhou");
+            bad(e)
+        })?;
+        tracing::info!(account_id = %body.account_id, "reconexão do WhatsApp pedida");
         Ok(Json(json!({ "ok": true })))
     }
     #[cfg(not(feature = "whatsapp"))]
@@ -614,9 +650,17 @@ pub async fn google_connect(
             .unwrap_or_else(|| vec!["calendar".into(), "gmail".into()]);
         let open = b.open_browser.unwrap_or(b.callback_port.is_none());
         let start = g
-            .start_connect(scopes, open, b.callback_port)
+            .start_connect(scopes.clone(), open, b.callback_port)
             .await
-            .map_err(bad)?;
+            .map_err(|e| {
+                tracing::warn!(error = %e, "fluxo OAuth do Google não iniciou");
+                bad(e)
+            })?;
+        tracing::info!(
+            ?scopes,
+            open_browser = open,
+            "fluxo OAuth do Google iniciado"
+        );
         Ok(Json(
             json!({ "auth_url": start.auth_url, "state": start.state }),
         ))
@@ -641,7 +685,11 @@ pub async fn google_reauthorize(
         let start = g
             .reauthorize(&id, b.scopes.unwrap_or_default(), open, b.callback_port)
             .await
-            .map_err(bad)?;
+            .map_err(|e| {
+                tracing::warn!(account = %id, error = %e, "reautorização do Google não iniciou");
+                bad(e)
+            })?;
+        tracing::info!(account = %id, open_browser = open, "reautorização do Google iniciada");
         Ok(Json(
             json!({ "auth_url": start.auth_url, "state": start.state }),
         ))
@@ -662,7 +710,11 @@ pub async fn google_callback(
     #[cfg(feature = "google")]
     {
         let g = google(&state)?;
-        let email = g.complete_flow(&b.state, &b.code).await.map_err(bad)?;
+        let email = g.complete_flow(&b.state, &b.code).await.map_err(|e| {
+            tracing::warn!(error = %e, "fluxo OAuth do Google não concluiu");
+            bad(e)
+        })?;
+        tracing::info!("conta Google conectada pelo callback remoto");
         Ok(Json(json!({ "email": email })))
     }
     #[cfg(not(feature = "google"))]
@@ -679,7 +731,11 @@ pub async fn google_disconnect(
     #[cfg(feature = "google")]
     {
         let g = google(&state)?;
-        g.disconnect(&id).await.map_err(bad)?;
+        g.disconnect(&id).await.map_err(|e| {
+            tracing::warn!(account = %id, error = %e, "desconectar conta Google falhou");
+            bad(e)
+        })?;
+        tracing::info!(account = %id, "conta Google desconectada");
         crate::modules::apply_section(&state, "google").await;
         Ok(Json(json!({ "ok": true })))
     }

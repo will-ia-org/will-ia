@@ -29,6 +29,29 @@ impl Default for Options {
 /// Relato de progresso: fração 0..1 + linha de log.
 pub type Progress = Arc<dyn Fn(f32, &str) + Send + Sync>;
 
+/// Acrescenta uma linha a `<data_dir>/logs/setup.log` (o servidor envia esse
+/// arquivo pela telemetria no próximo start, se ela estiver ligada).
+pub fn append_setup_log(data_dir: &std::path::Path, msg: &str) {
+    let dir = data_dir.join("logs");
+    if std::fs::create_dir_all(&dir).is_err() {
+        return;
+    }
+    use std::io::Write;
+    if let Ok(mut f) = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(dir.join("setup.log"))
+    {
+        let _ = writeln!(
+            f,
+            "{} setup {} {}: {msg}",
+            chrono::Local::now().format("%Y-%m-%dT%H:%M:%S%z"),
+            env!("CARGO_PKG_VERSION"),
+            std::env::consts::OS
+        );
+    }
+}
+
 pub struct Outcome {
     pub ok: bool,
     pub summary: String,

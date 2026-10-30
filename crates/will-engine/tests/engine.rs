@@ -53,6 +53,7 @@ fn cfg(dir: &std::path::Path, extra_env: &[(&str, &str)]) -> EngineConfig {
         idle_timeout: Duration::from_secs(600),
         kill_grace: Duration::from_millis(500),
         raw_log_dir: None,
+        token_id: None,
     }
 }
 
@@ -88,6 +89,7 @@ async fn basic_turn_and_session() {
         SendRequest {
             turn_id: turn,
             text: "olá".into(),
+            source: "test".into(),
         },
     )
     .unwrap();
@@ -132,6 +134,7 @@ async fn basic_turn_and_session() {
         SendRequest {
             turn_id: turn2,
             text: "de novo".into(),
+            source: "test".into(),
         },
     )
     .unwrap();
@@ -163,6 +166,7 @@ async fn mid_turn_message_is_merged_into_running_turn() {
         SendRequest {
             turn_id: t1,
             text: "sleep 2".into(),
+            source: "test".into(),
         },
     )
     .unwrap();
@@ -180,6 +184,7 @@ async fn mid_turn_message_is_merged_into_running_turn() {
         SendRequest {
             turn_id: t2,
             text: "complemento".into(),
+            source: "test".into(),
         },
     )
     .unwrap();
@@ -242,6 +247,7 @@ async fn crash_drops_pending_and_restart_resumes() {
         SendRequest {
             turn_id: t1,
             text: "crash".into(),
+            source: "test".into(),
         },
     )
     .unwrap();
@@ -260,6 +266,7 @@ async fn crash_drops_pending_and_restart_resumes() {
         SendRequest {
             turn_id: t2,
             text: "oi".into(),
+            source: "test".into(),
         },
     )
     .unwrap();
@@ -291,6 +298,7 @@ async fn stale_session_restarts_and_resends() {
         SendRequest {
             turn_id: t1,
             text: "oi".into(),
+            source: "test".into(),
         },
     )
     .unwrap();
@@ -334,6 +342,7 @@ async fn max_live_retires_idle_thread() {
             SendRequest {
                 turn_id: id,
                 text: "x".into(),
+                source: "test".into(),
             },
         )
         .unwrap();
@@ -353,6 +362,7 @@ async fn max_live_retires_idle_thread() {
         SendRequest {
             turn_id: id,
             text: "x".into(),
+            source: "test".into(),
         },
     )
     .unwrap();
@@ -382,6 +392,7 @@ async fn reconfigure_restarts_live_processes() {
         SendRequest {
             turn_id: id,
             text: "x".into(),
+            source: "test".into(),
         },
     )
     .unwrap();

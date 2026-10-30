@@ -166,10 +166,12 @@ impl WillTool for ScheduleTool {
     async fn call(&self, ctx: ToolContext, args: Value) -> Result<ToolOutput, ToolError> {
         let m = &self.module;
         if !m.enabled() {
+            tracing::warn!(tool = self.kind.name(), thread_id = ?ctx.thread_id, "ferramenta chamada com o scheduler desligado");
             return Err(ToolError::Unavailable(
                 "scheduler desligado nas configurações".into(),
             ));
         }
+        tracing::debug!(tool = self.kind.name(), thread_id = ?ctx.thread_id, "ferramenta de agendamento chamada");
         let input = || -> ScheduleInput {
             ScheduleInput {
                 name: arg_opt_str(&args, "name").map(str::to_string),
@@ -184,12 +186,13 @@ impl WillTool for ScheduleTool {
         match self.kind {
             Kind::Create => {
                 let thread = ctx.thread_id.ok_or_else(|| {
+                    tracing::warn!("schedule_create chamado sem thread (token genérico)");
                     ToolError::Forbidden("schedule_create só funciona a partir de uma thread (o disparo volta para ela)".into())
                 })?;
-                let v = m
-                    .create(input(), thread, "agent")
-                    .await
-                    .map_err(ToolError::InvalidArgs)?;
+                let v = m.create(input(), thread, "agent").await.map_err(|e| {
+                    tracing::debug!(thread_id = %thread, error = %e, "schedule_create recusado");
+                    ToolError::InvalidArgs(e)
+                })?;
                 Ok(ToolOutput::json(&json!({
                     "ok": true,
                     "schedule": v,

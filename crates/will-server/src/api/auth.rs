@@ -24,6 +24,7 @@ pub async fn login(
     Json(b): Json<LoginBody>,
 ) -> ApiResult<Value> {
     if !state.login_limiter.allow(addr.ip()) {
+        tracing::warn!(ip = %addr.ip(), "login bloqueado por excesso de tentativas");
         return Err(ApiError(
             StatusCode::TOO_MANY_REQUESTS,
             "muitas tentativas; aguarde alguns minutos".into(),
@@ -36,6 +37,7 @@ pub async fn login(
         .await?
         .filter(|u| u.active && auth::verify_password(&b.password, &u.password_hash))
         .ok_or_else(|| {
+            tracing::warn!(ip = %addr.ip(), login, "login recusado: usuário ou senha inválidos");
             ApiError(
                 StatusCode::UNAUTHORIZED,
                 "usuário ou senha inválidos".into(),
@@ -53,10 +55,14 @@ pub async fn login(
         )
         .await?;
     let _ = state.storage.touch_login(&user.id).await;
-    state.bus.log(
-        "info",
-        "auth",
-        format!("login de {} ({})", user.username, addr.ip()),
+    tracing::info!(
+        target: "will_auth",
+        user = %user.username,
+        ip = %addr.ip(),
+        client = b.client.as_deref().unwrap_or(""),
+        "login de {} ({})",
+        user.username,
+        addr.ip()
     );
     Ok(Json(json!({
         "token": token,
@@ -74,6 +80,7 @@ pub async fn logout(
         .storage
         .delete_session(&auth::token_hash(&token.0))
         .await?;
+    tracing::info!("logout: sessão encerrada");
     Ok(Json(json!({ "ok": true })))
 }
 
@@ -102,6 +109,7 @@ pub async fn change_password(
         .ok_or_else(|| bad("o token local não tem senha"))?;
     let user = state.storage.get_user(&id).await?;
     if !user.must_change_password && !auth::verify_password(&b.current, &user.password_hash) {
+        tracing::warn!(user = %p.username, "troca de senha recusada: senha atual incorreta");
         return Err(ApiError(
             StatusCode::UNAUTHORIZED,
             "senha atual incorreta".into(),
@@ -111,5 +119,6 @@ pub async fn change_password(
     let hash = auth::hash_password(&b.new).map_err(super::internal)?;
     state.storage.set_password(&id, &hash, false).await?;
     let _ = std::fs::remove_file(state.paths.data_dir.join(auth::INITIAL_PASSWORD_FILE));
+    tracing::info!(user = %p.username, first_login = user.must_change_password, "senha alterada");
     Ok(Json(json!({ "ok": true })))
 }

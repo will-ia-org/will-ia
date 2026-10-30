@@ -27,7 +27,7 @@
 5. **Telegram**: `callback_query` passa pela allowlist; anexos têm nome sanitizado (`[^\w.-]` → `_`) e tamanho máximo (configurável, 20 MB — limite do `getFile`).
 6. **Arquivos temporários**: nenhum para MCP config (inline). Logs com permissão 0600 em Unix.
 7. **Atualizações**: binários assinados quando houver certificado; checksums SHA-256 sempre publicados; sem auto-update silencioso no MVP.
-8. **Rede**: destinos fixos (api.telegram.org, api.openai.com, e os do próprio Claude Code). Sem telemetria.
+8. **Rede**: destinos fixos (api.telegram.org, api.openai.com, e os do próprio Claude Code). Telemetria só **opt-in** (desligada por padrão) e só para o endpoint OTLP configurado, com segredos redigidos antes de sair do processo (`docs/29`).
 9. **Dependências**: `cargo audit` e `cargo deny` no CI (um só toolchain: não há frontend Node).
 10. **Aprovações**: o resumo mostrado ao usuário é gerado pelo serviço a partir dos argumentos (destinatário, assunto/primeiras linhas, agenda/data), nunca texto livre do agente, para que uma injeção não "disfarce" a ação.
 11. **OAuth**: `state` aleatório verificado no callback; listener de loopback aceita uma única requisição e fecha; PKCE S256.

@@ -2,6 +2,7 @@
 //! inline (troca de chave `k:<id>` e aprovações `ap:<id>:y|n`).
 
 use crate::handler::Incoming;
+use crate::sender::{note_outbound, outbound_span};
 use crate::text::{command_arg, escape_html, thread_key};
 use crate::TelegramModule;
 use std::path::Path;
@@ -9,9 +10,10 @@ use std::sync::Arc;
 use teloxide::payloads::setters::*;
 use teloxide::prelude::Requester;
 use teloxide::types::{
-    CallbackQuery, ChatId, InlineKeyboardButton, InlineKeyboardMarkup, MessageId, ParseMode,
-    ThreadId,
+    CallbackQuery, ChatId, InlineKeyboardButton, InlineKeyboardMarkup, MaybeInaccessibleMessage,
+    MessageId, ParseMode, ThreadId,
 };
+use tracing::Instrument;
 use will_core::{ApprovalDecision, ApprovalId, ClaudeTokenInfo, Origin, ThreadSummary};
 
 pub(crate) const BUILTIN_COMMANDS: &[(&str, &str)] = &[
@@ -326,13 +328,14 @@ impl TelegramModule {
                 );
                 if let Err(e) = self
                     .sender
-                    .send_text(inc.chat_id, Some(new_topic), &greet, false, None)
+                    .send_text(inc.chat_id, Some(new_topic), None, &greet, false, None)
                     .await
                 {
-                    tracing::warn!("saudar tópico novo: {e}");
+                    tracing::warn!(chat_id = inc.chat_id, topic_id = new_topic, error = %e, "saudar tópico novo falhou");
                 }
             }
             Err(e) => {
+                tracing::warn!(chat_id = inc.chat_id, error = %e, "createForumTopic falhou");
                 self.reply(
                     inc,
                     &format!(
@@ -358,7 +361,7 @@ impl TelegramModule {
         };
         if let Some(tid) = self.thread_of(&inc.key) {
             if let Err(e) = self.host.delete_thread(tid, false).await {
-                tracing::warn!(key = %inc.key, "delete_thread: {e}");
+                tracing::warn!(key = %inc.key, thread_id = %tid, error = %e, "delete_thread falhou");
             }
         }
         self.forget_key(&inc.key).await;
@@ -368,10 +371,13 @@ impl TelegramModule {
             .delete_forum_topic(ChatId(inc.chat_id), ThreadId(MessageId(topic_id as i32)))
             .await
         {
-            Ok(_) => self
-                .bus
-                .log("info", "telegram", format!("[{}] tópico apagado", inc.key)),
+            Ok(_) => {
+                tracing::info!(key = %inc.key, chat_id = inc.chat_id, topic_id, "tópico apagado");
+                self.bus
+                    .log("info", "telegram", format!("[{}] tópico apagado", inc.key))
+            }
             Err(e) => {
+                tracing::warn!(key = %inc.key, chat_id = inc.chat_id, topic_id, error = %e, "deleteForumTopic falhou");
                 self.reply(
                     inc,
                     &format!(
@@ -418,7 +424,7 @@ impl TelegramModule {
         let mut removidas = Vec::new();
         for (k, t) in alvos {
             if let Err(e) = self.host.delete_thread(t.id, false).await {
-                tracing::warn!(key = %k, "delete_thread: {e}");
+                tracing::warn!(key = %k, thread_id = %t.id, error = %e, "delete_thread falhou");
                 continue;
             }
             self.forget_key(k).await;
@@ -446,20 +452,24 @@ impl TelegramModule {
             self.reply(inc, "⚠️ Nenhuma chave cadastrada. Adicione os tokens do Claude na interface do Will IA.", false).await;
             return;
         }
-        if let Err(e) = self
-            .sender
-            .send_one(
-                inc.chat_id,
-                inc.topic_id,
-                &token_text(&tokens),
-                true,
-                None,
-                Some(token_keyboard(&tokens)),
-            )
-            .await
-        {
-            tracing::warn!("/chave: {e}");
+        let span = outbound_span(inc.chat_id, inc.topic_id, self.thread_of(&inc.key), "keys");
+        async {
+            let started = std::time::Instant::now();
+            let res = self
+                .sender
+                .send_one(
+                    inc.chat_id,
+                    inc.topic_id,
+                    &token_text(&tokens),
+                    true,
+                    None,
+                    Some(token_keyboard(&tokens)),
+                )
+                .await;
+            note_outbound(&res, started, false);
         }
+        .instrument(span)
+        .await;
     }
 
     async fn cmd_help(&self, inc: &Incoming) {
@@ -494,7 +504,7 @@ impl TelegramModule {
                     .show_alert(alert)
                     .await
                 {
-                    tracing::debug!("answerCallbackQuery: {e}");
+                    tracing::debug!(error = %e, "answerCallbackQuery falhou");
                 }
             }
         };
@@ -504,12 +514,38 @@ impl TelegramModule {
         };
         let chat_id = message.chat().id.0;
         let user_id = cq.from.id.0 as i64;
+        let message_id = message.id().0;
+        let span = tracing::info_span!(
+            "inbound",
+            channel = "telegram",
+            chat_id,
+            msg_id = message_id,
+            thread_id = tracing::field::Empty,
+            kind = "callback",
+        );
+        self.handle_callback_in(&cq, message, chat_id, user_id, message_id, &ack)
+            .instrument(span)
+            .await
+    }
+
+    async fn handle_callback_in<F, Fut>(
+        self: &Arc<Self>,
+        cq: &CallbackQuery,
+        message: &MaybeInaccessibleMessage,
+        chat_id: i64,
+        user_id: i64,
+        message_id: i32,
+        ack: &F,
+    ) where
+        F: Fn(&str, bool) -> Fut,
+        Fut: std::future::Future<Output = ()>,
+    {
         if !self.sender.allowed_chat(chat_id) || !self.sender.allowed_user(user_id) {
+            tracing::warn!(chat_id, user_id, "callback ignorado (fora da allowlist)");
             ack("⛔ sem permissão", true).await;
             return;
         }
         let data = cq.data.clone().unwrap_or_default();
-        let message_id = message.id().0;
         let topic_id = message.regular_message().and_then(|m| {
             if m.is_topic_message {
                 m.thread_id.map(|t| i64::from(t.0 .0))
@@ -534,10 +570,12 @@ impl TelegramModule {
                 _ => None,
             };
             let (Some(id), Some(decision)) = (id, decision) else {
+                tracing::warn!(chat_id, user_id, "callback de aprovação inválido");
                 ack("⚠️ botão inválido", true).await;
                 return;
             };
             if self.host.decide_approval(id, decision, "telegram") {
+                tracing::info!(approval_id = %id, decision = ?decision, chat_id, user_id, "aprovação decidida pelo Telegram");
                 ack(
                     if decision == ApprovalDecision::Approved {
                         "✅ aprovado"
@@ -548,6 +586,7 @@ impl TelegramModule {
                 )
                 .await;
             } else {
+                tracing::info!(approval_id = %id, chat_id, "aprovação já encerrada ao decidir pelo Telegram");
                 ack(
                     "⚠️ pedido não encontrado (expirou ou já foi decidido)",
                     true,
@@ -570,6 +609,7 @@ impl TelegramModule {
                 .send_text(
                     chat_id,
                     topic_id,
+                    None,
                     "⚠️ chave não encontrada — mande /chave de novo",
                     false,
                     None,
@@ -583,6 +623,7 @@ impl TelegramModule {
                 .send_text(
                     chat_id,
                     topic_id,
+                    None,
                     &format!("✅ {} já é a chave ativa.", alvo.label),
                     false,
                     None,
@@ -595,6 +636,7 @@ impl TelegramModule {
             .send_text(
                 chat_id,
                 topic_id,
+                None,
                 &format!("⏳ testando {}…", alvo.label),
                 false,
                 None,
@@ -615,10 +657,11 @@ impl TelegramModule {
             .reply_markup(token_keyboard(&tokens))
             .await;
         if let Err(e) = edit {
-            tracing::debug!("editar /chave: {e}");
+            tracing::debug!(chat_id, message_id, error = %e, "editar /chave falhou");
         }
         let text = match result {
             Ok(n) => {
+                tracing::info!(token_id = %id, dropped_threads = n, "chave do Claude trocada pelo Telegram");
                 self.bus.log(
                     "info",
                     "telegram",
@@ -639,6 +682,7 @@ impl TelegramModule {
                 )
             }
             Err(e) => {
+                tracing::warn!(token_id = %id, error = %e, "chave do Claude reprovou no teste");
                 self.bus.log(
                     "warn",
                     "telegram",
@@ -653,7 +697,7 @@ impl TelegramModule {
         };
         let _ = self
             .sender
-            .send_text(chat_id, topic_id, &text, true, None)
+            .send_text(chat_id, topic_id, None, &text, true, None)
             .await;
     }
 
@@ -676,7 +720,7 @@ impl TelegramModule {
             .await;
         if let Err(e) = res {
             if !crate::sender::is_not_modified(&e) {
-                tracing::debug!("editar aprovação: {e}");
+                tracing::debug!(chat_id, message_id, error = %e, "editar mensagem de aprovação falhou");
             }
         }
     }

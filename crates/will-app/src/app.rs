@@ -144,6 +144,8 @@ pub struct WillApp {
     settings_task: Option<crate::service::Task<Value>>,
     /// Recarga de status/aprovações depois de reconectar.
     resync_task: Option<crate::service::Task<(Value, Value)>>,
+    /// `GET telemetry/client-config` depois de conectar / mudar a seção `telemetry`.
+    telemetry_task: Option<crate::service::Task<Value>>,
     /// `GET /api/auth/me` depois de conectar (e depois de trocar a senha).
     me_task: Option<crate::service::Task<Value>>,
     /// Acabou de conectar: quando as settings chegarem, escolhe Início ou o
@@ -203,6 +205,7 @@ impl WillApp {
             hotkey_applied: None,
             pending_screenshot: None,
             settings_task: None,
+            telemetry_task: None,
             resync_task: None,
             me_task: None,
             pick_nav_on_settings: false,
@@ -304,6 +307,24 @@ impl WillApp {
         ctx.request_repaint();
     }
 
+    /// Pede ao servidor o destino OTLP para os logs do app (só funciona para
+    /// admin; para os demais a chamada falha em silêncio e o app não envia nada).
+    /// Também sobe o remetente na primeira vez (precisa do runtime do `Service`).
+    fn refresh_telemetry(&mut self) {
+        if let Some(h) = crate::logging::telemetry() {
+            let h = h.clone();
+            let dir = crate::logging::logs_dir();
+            let _t: crate::service::Task<()> = self.svc.call(move |_| async move {
+                h.start(dir);
+                Ok(())
+            });
+        }
+        self.telemetry_task = Some(
+            self.svc
+                .call(|c| async move { c.telemetry_client_config().await }),
+        );
+    }
+
     fn handle_event(&mut self, ev: Event) {
         match &ev {
             Event::ModuleStatus { module, status } => {
@@ -322,9 +343,12 @@ impl WillApp {
             Event::ApprovalDecided { approval_id, .. } => {
                 self.snap.pending_approvals.retain(|a| a.id != *approval_id);
             }
-            Event::SettingsChanged { .. } => {
+            Event::SettingsChanged { section } => {
                 self.settings_task = Some(self.svc.call(|c| async move { c.settings().await }));
                 self.pages.settings.state.load(&self.svc);
+                if section == "telemetry" {
+                    self.refresh_telemetry();
+                }
             }
             Event::Voice {
                 state,
@@ -525,6 +549,7 @@ impl WillApp {
                     self.pages.connect.refresh();
                     if !was {
                         self.pick_nav_on_settings = true;
+                        self.refresh_telemetry();
                         // Ressincroniza o que pode ter mudado enquanto estávamos fora.
                         self.resync_task = Some(self.svc.call(|c| async move {
                             let st = c.status().await?;
@@ -546,6 +571,17 @@ impl WillApp {
                     }
                     self.snap.connected = false;
                     self.pages.connect.last_error = Some(why);
+                }
+            }
+        }
+        if let Some(t) = &self.telemetry_task {
+            if let Some(r) = t.take() {
+                self.telemetry_task = None;
+                match r {
+                    Ok(v) => crate::logging::apply_client_config(&v),
+                    Err(e) => {
+                        tracing::debug!(error = %e, "telemetria: config do servidor indisponível")
+                    }
                 }
             }
         }

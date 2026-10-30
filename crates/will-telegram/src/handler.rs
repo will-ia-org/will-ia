@@ -11,6 +11,7 @@ use teloxide::prelude::Requester;
 use teloxide::types::{
     ChatAction, ChatId, FileId, Message, MessageId, MessageKind, ReactionType, Update, UpdateKind,
 };
+use tracing::Instrument;
 use will_core::ThreadStatus;
 
 /// Mensagem já decodificada e autorizada.
@@ -157,6 +158,12 @@ impl TelegramModule {
         if is_forum_service(&msg) {
             if let (Some(created), Some(tid)) = (msg.forum_topic_created(), msg.thread_id) {
                 let k = thread_key(chat_id, Some(i64::from(tid.0 .0)));
+                tracing::info!(
+                    channel = "telegram",
+                    chat_id,
+                    topic_id = i64::from(tid.0 .0),
+                    "tópico criado no fórum"
+                );
                 self.topic_names.lock().insert(k, created.name.clone());
             }
             return;
@@ -169,20 +176,47 @@ impl TelegramModule {
             .to_string();
         let file = extract_file(&msg);
         if text.trim().is_empty() && file.is_none() {
+            tracing::debug!(
+                channel = "telegram",
+                chat_id,
+                msg_id = msg.id.0,
+                "update sem texto nem anexo; ignorado"
+            );
             return;
         }
 
+        let kind = match &file {
+            Some(f) if f.is_voice => "voice",
+            Some(_) => "media",
+            None if text.starts_with('/') => "command",
+            None => "text",
+        };
+        let span = tracing::info_span!(
+            "inbound",
+            channel = "telegram",
+            chat_id,
+            msg_id = msg.id.0,
+            thread_id = tracing::field::Empty,
+            kind,
+        );
+        if let Some(t) = topic_id {
+            span.record("topic_id", t);
+        }
+        self.handle_message_in(msg, key, chat_id, topic_id, text, file)
+            .instrument(span)
+            .await
+    }
+
+    async fn handle_message_in(
+        self: &Arc<Self>,
+        msg: Message,
+        key: String,
+        chat_id: i64,
+        topic_id: Option<i64>,
+        text: String,
+        file: Option<FileInfo>,
+    ) {
         let user_id = msg.from.as_ref().map(|u| u.id.0 as i64);
-        let user_label = msg
-            .from
-            .as_ref()
-            .map(|u| {
-                u.username
-                    .clone()
-                    .map(|n| format!("@{n}"))
-                    .unwrap_or_else(|| u.first_name.clone())
-            })
-            .unwrap_or_else(|| "?".into());
         let topic_name = msg
             .reply_to_message()
             .and_then(|r| r.forum_topic_created())
@@ -208,17 +242,11 @@ impl TelegramModule {
                 .map(|u| self.sender.allowed_user(u))
                 .unwrap_or(false);
         if !allowed {
-            tracing::info!(
-                chat_id,
-                ?user_id,
-                "ignorado (fora da allowlist): {user_label}"
-            );
+            tracing::warn!(chat_id, ?user_id, "ignorado (fora da allowlist)");
             self.bus.log(
                 "warn",
                 "telegram",
-                format!(
-                    "ignorado (fora da allowlist): chat {chat_id}, user {user_id:?} ({user_label})"
-                ),
+                format!("ignorado (fora da allowlist): chat {chat_id}, user {user_id:?}"),
             );
             if command_name(&text) == "start" {
                 self.cmd_start(&inc, false).await;
@@ -230,7 +258,10 @@ impl TelegramModule {
 
         if let Some(file) = file {
             let me = self.clone();
-            tokio::spawn(async move { me.handle_attachment(inc, file).await });
+            tokio::spawn(
+                async move { me.handle_attachment(inc, file).await }
+                    .instrument(tracing::Span::current()),
+            );
             return;
         }
 
@@ -252,7 +283,12 @@ impl TelegramModule {
             }
         }
 
-        tracing::info!(key = %key, "[{user_label}] {}", crate::text::clip(&text, 120));
+        tracing::info!(
+            key = %key,
+            ?user_id,
+            text_len = text.chars().count(),
+            "mensagem recebida"
+        );
         self.dispatch(&inc, &text).await;
     }
 
@@ -282,10 +318,17 @@ impl TelegramModule {
     pub(crate) async fn reply(&self, inc: &Incoming, text: &str, html: bool) {
         if let Err(e) = self
             .sender
-            .send_text(inc.chat_id, inc.topic_id, text, html, None)
+            .send_text(
+                inc.chat_id,
+                inc.topic_id,
+                self.thread_of(&inc.key),
+                text,
+                html,
+                None,
+            )
             .await
         {
-            tracing::warn!(key = %inc.key, "responder: {e}");
+            tracing::warn!(key = %inc.key, error = %e, "responder falhou");
         }
     }
 
@@ -315,12 +358,13 @@ impl TelegramModule {
         {
             Ok(t) => t,
             Err(e) => {
-                tracing::error!(key = %inc.key, "ensure_thread: {e}");
+                tracing::error!(key = %inc.key, error = %e, "ensure_thread falhou");
                 conv.finalize(&format!("não consegui abrir a thread: {e}"), true, false)
                     .await;
                 return;
             }
         };
+        tracing::Span::current().record("thread_id", tracing::field::display(tid));
         if !busy {
             if let Ok(t) = self.host.get_thread(tid).await {
                 busy = t.pending > 0 || t.status == ThreadStatus::Running;
@@ -328,18 +372,20 @@ impl TelegramModule {
         }
 
         let mut result = self.host.send_message_with(tid, text, attachments).await;
-        if result.is_err() {
+        if let Err(e) = &result {
             // a thread pode ter sido apagada pela UI: refaz o vínculo uma vez
+            tracing::warn!(key = %inc.key, thread_id = %tid, error = %e, "send_message falhou; refazendo vínculo da thread");
             self.unbind_key(&inc.key);
             if let Ok(t2) = self
                 .thread_for(&inc.key, inc.chat_id, inc.topic_id, Some(&title))
                 .await
             {
+                tracing::Span::current().record("thread_id", tracing::field::display(t2));
                 result = self.host.send_message_with(t2, text, attachments).await;
             }
         }
         if let Err(e) = result {
-            tracing::error!(key = %inc.key, "send_message: {e}");
+            tracing::error!(key = %inc.key, error = %e, "send_message ao cérebro falhou");
             self.bus.log(
                 "error",
                 "telegram",
@@ -363,9 +409,10 @@ impl TelegramModule {
                 }])
                 .await;
             if let Err(e) = res {
-                tracing::debug!(key = %inc.key, "reação 👀: {e}");
+                tracing::debug!(key = %inc.key, error = %e, "reação 👀 falhou");
             }
         }
+        tracing::info!(key = %inc.key, thread_id = %tid, busy, attachments = attachments.len(), text_len = text.chars().count(), "mensagem entregue ao cérebro");
     }
 
     // ---------- anexos ----------
@@ -384,6 +431,7 @@ impl TelegramModule {
             safe = format!("arq-{}", inc.message_id);
         }
         let dest = dir.join(format!("{}-{}-{}", inc.chat_id, inc.message_id, safe));
+        let started = Instant::now();
         let f = self
             .bot
             .get_file(file.file_id.clone())
@@ -396,12 +444,12 @@ impl TelegramModule {
             .download_file(&f.path, &mut out)
             .await
             .map_err(|e| e.to_string())?;
+        tracing::debug!(key = %inc.key, size = file.size, duration_ms = started.elapsed().as_millis() as u64, "anexo baixado");
         Ok(dest)
     }
 
     async fn handle_attachment(self: Arc<Self>, inc: Incoming, file: FileInfo) {
-        let kind = if file.is_voice { "voice note" } else { "anexo" };
-        tracing::info!(key = %inc.key, "{kind} {} ({}, {}B)", file.name, file.mime, file.size);
+        tracing::info!(key = %inc.key, voice = file.is_voice, mime = %file.mime, size = file.size, "anexo recebido");
         self.sender
             .chat_action(inc.chat_id, inc.topic_id, ChatAction::Typing)
             .await;
@@ -409,6 +457,7 @@ impl TelegramModule {
         let dest = match self.download(&file, &inc).await {
             Ok(d) => d,
             Err(e) => {
+                tracing::warn!(key = %inc.key, size = file.size, error = %e, "download do anexo falhou");
                 self.reply(
                     &inc,
                     &format!("⚠️ não consegui baixar o arquivo: {e}"),
@@ -426,11 +475,13 @@ impl TelegramModule {
                     let bytes = match tokio::fs::read(&dest).await {
                         Ok(b) => b,
                         Err(e) => {
+                            tracing::warn!(key = %inc.key, error = %e, "ler áudio baixado falhou");
                             self.reply(&inc, &format!("⚠️ não consegui ler o áudio: {e}"), false)
                                 .await;
                             return;
                         }
                     };
+                    let started = Instant::now();
                     let name = dest
                         .file_name()
                         .and_then(|n| n.to_str())
@@ -438,10 +489,12 @@ impl TelegramModule {
                         .to_string();
                     match openai.transcribe(bytes, &name, &file.mime).await {
                         Ok(t) if t.is_empty() => {
+                            tracing::info!(key = %inc.key, duration_ms = started.elapsed().as_millis() as u64, "transcrição vazia");
                             self.reply(&inc, "⚠️ não entendi nada no áudio. Tenta de novo?", false)
                                 .await;
                         }
                         Ok(t) => {
+                            tracing::info!(key = %inc.key, chars = t.chars().count(), duration_ms = started.elapsed().as_millis() as u64, "voice note transcrita");
                             self.reply(&inc, &format!("🎙️ <i>{}</i>", escape_html(&t)), true)
                                 .await;
                             let text = if caption.is_empty() {
@@ -452,7 +505,7 @@ impl TelegramModule {
                             self.dispatch(&inc, &text).await;
                         }
                         Err(e) => {
-                            tracing::warn!(key = %inc.key, "transcrição: {e}");
+                            tracing::warn!(key = %inc.key, error = %e, duration_ms = started.elapsed().as_millis() as u64, "transcrição falhou");
                             self.reply(
                                 &inc,
                                 &format!("⚠️ não consegui transcrever o áudio: {e}"),

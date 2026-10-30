@@ -707,6 +707,19 @@ impl Client {
     pub async fn telegram_status(&self) -> ApiResult {
         self.get("telegram/status").await
     }
+    /// `GET /api/telemetry/status`: contadores, fila, último envio/erro e
+    /// `instance_id` da telemetria (Axiom).
+    pub async fn telemetry_status(&self) -> ApiResult {
+        self.get("telemetry/status").await
+    }
+    /// `POST /api/telemetry/test`: manda um evento de teste com o token/dataset salvos.
+    pub async fn telemetry_test(&self) -> ApiResult {
+        self.post("telemetry/test", None).await
+    }
+    /// `GET /api/telemetry/client-config`: destino OTLP para o app enviar os próprios logs (admin).
+    pub async fn telemetry_client_config(&self) -> ApiResult {
+        self.get("telemetry/client-config").await
+    }
     pub async fn voice_start(&self) -> ApiResult {
         self.post("voice/start", None).await
     }

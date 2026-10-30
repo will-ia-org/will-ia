@@ -93,6 +93,7 @@ pub async fn add_token(
     if let Some((existing_id, existing_label)) = find_duplicate(&state, &fp).await? {
         // 409: mesmo token já cadastrado — nada é gravado. O `error` traz o rótulo
         // porque os clientes mostram só essa string.
+        tracing::warn!(token_id = %existing_id, "cadastro de token recusado: já existe");
         return Ok((
             StatusCode::CONFLICT,
             Json(json!({
@@ -128,6 +129,7 @@ pub async fn add_token(
         first
     };
     state.save_settings().await.map_err(internal)?;
+    tracing::info!(token_id = %id, first, "token do Claude cadastrado");
     let mut result = json!({ "id": id, "activated": false });
     if first || b.activate.unwrap_or(false) {
         match crate::modules::activate_token(&state, &id).await {
@@ -136,6 +138,7 @@ pub async fn add_token(
                 result["restarted_threads"] = json!(n);
             }
             Err(e) => {
+                tracing::warn!(token_id = %id, error = %crate::logging::redact(&e), "token cadastrado mas não ativado");
                 result["activation_error"] = json!(e);
             }
         }
@@ -158,6 +161,11 @@ pub async fn test_token(State(state): State<App>, Path(id): Path<String>) -> Api
         .map_err(internal)?
         .ok_or_else(|| bad("segredo ausente no keyring"))?;
     let r = crate::modules::test_token(&state, &secret).await;
+    if r.ok {
+        tracing::info!(token_id = %id, "teste de token: ok");
+    } else {
+        tracing::warn!(token_id = %id, error = %crate::logging::redact(r.error.as_deref().unwrap_or("")), "teste de token: reprovado");
+    }
     {
         let mut s = state.settings.write();
         if let Some(t) = s.engine.tokens.iter_mut().find(|t| t.id == id) {
@@ -190,9 +198,13 @@ pub async fn delete_token(State(state): State<App>, Path(id): Path<String>) -> A
     let Some(entry) = entry else {
         return Err(bad("token não encontrado"));
     };
-    let _ = state.secrets.delete(&entry.secret_ref).await;
+    if let Err(e) = state.secrets.delete(&entry.secret_ref).await {
+        tracing::warn!(token_id = %id, error = %e, "segredo do token não removido do cofre");
+    }
     state.save_settings().await.map_err(internal)?;
+    tracing::info!(token_id = %id, was_active = entry.active, "token do Claude removido");
     if entry.active {
+        tracing::warn!(token_id = %id, "token ativo removido: motor fica sem token até ativar outro");
         crate::modules::refresh_engine(&state, true).await;
         state.set_module_status(
             will_core::Module::Engine,

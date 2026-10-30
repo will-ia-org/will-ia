@@ -14,12 +14,16 @@ use std::time::{Duration, Instant};
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::process::{Child, ChildStdin, Command};
 use tokio::sync::{broadcast, mpsc, oneshot};
+use tracing::Instrument;
 use will_core::{EngineDelta, ThreadId, TurnId};
 
 #[derive(Debug, Clone)]
 pub struct SendRequest {
     pub turn_id: TurnId,
     pub text: String,
+    /// Quem originou o turno (`telegram`, `voice`, `api`, `schedule`, `mcp`…).
+    /// Só para rastreio nos logs (`turn.source`); não muda o comportamento.
+    pub source: String,
 }
 
 /// Variáveis específicas da thread (bearer MCP, WILL_IA_THREAD_ID…), mescladas ao env base no spawn.
@@ -97,10 +101,12 @@ impl RunnerHandle {
 struct Pending {
     turn_id: TurnId,
     text: String,
+    source: String,
     retried: bool,
     /// Ecoada pelo processo (entrou na conversa).
     accepted: bool,
     started_emitted: bool,
+    started_at: Instant,
 }
 
 struct Proc {
@@ -110,6 +116,9 @@ struct Proc {
     stderr_tail: Arc<Mutex<VecDeque<String>>>,
     stale_flag: Arc<AtomicBool>,
     pid: Option<u32>,
+    /// Span `engine_proc` que acompanha o processo do spawn ao exit.
+    span: tracing::Span,
+    started_at: Instant,
 }
 
 pub struct Runner {
@@ -163,6 +172,41 @@ impl Runner {
         let _ = self.events.send(e);
     }
 
+    /// Canal da thread (`ui`/`telegram`/`realtime`), vindo do env por thread.
+    fn channel(&self) -> &str {
+        self.thread_env
+            .get("WILL_IA_ORIGIN")
+            .map(String::as_str)
+            .unwrap_or("")
+    }
+
+    /// Span `turn`: um por mensagem enviada; eventos do turno saem dentro dele.
+    fn turn_span(&self, turn_id: TurnId, source: &str) -> tracing::Span {
+        tracing::info_span!(
+            "turn",
+            thread_id = %self.thread,
+            turn_id = %turn_id,
+            source,
+            channel = self.channel()
+        )
+    }
+
+    /// Span `engine_proc` do processo vivo (ou nenhum).
+    fn proc_span(&self) -> tracing::Span {
+        self.proc_
+            .as_ref()
+            .map(|p| p.span.clone())
+            .unwrap_or_else(tracing::Span::none)
+    }
+
+    /// Span `turn` da cabeça da fila (turno corrente), se houver.
+    fn current_turn_span(&self) -> tracing::Span {
+        match self.pending.front() {
+            Some(p) => self.turn_span(p.turn_id, &p.source),
+            None => tracing::Span::none(),
+        }
+    }
+
     fn sync_shared(&self) {
         self.shared
             .alive
@@ -210,9 +254,16 @@ impl Runner {
     async fn handle_cmd(&mut self, cmd: RunnerCommand) {
         match cmd {
             RunnerCommand::Send(req) => {
+                let span = self.turn_span(req.turn_id, &req.source);
                 if self.proc_.is_none() {
-                    if let Err(e) = self.spawn_process().await {
-                        tracing::error!(thread = %self.thread, error = %e, "spawn falhou");
+                    if let Err(e) = self
+                        .spawn_process(Some(req.turn_id))
+                        .instrument(span.clone())
+                        .await
+                    {
+                        span.in_scope(|| {
+                            tracing::error!(error = %e, "spawn do claude falhou; turno descartado")
+                        });
                         self.emit(EngineEvent::Dropped {
                             thread: self.thread,
                             turn_id: req.turn_id,
@@ -229,13 +280,17 @@ impl Runner {
                 self.pending.push_back(Pending {
                     turn_id: req.turn_id,
                     text: req.text,
+                    source: req.source,
                     retried: false,
                     accepted: false,
                     started_emitted: false,
+                    started_at: Instant::now(),
                 });
                 *self.shared.last_used.lock() = Some(Instant::now());
                 if let Err(e) = self.write_stdin(&line).await {
-                    tracing::warn!(thread = %self.thread, error = %e, "stdin falhou; aguardando saída do processo");
+                    span.in_scope(
+                        || tracing::warn!(error = %e, "stdin falhou; aguardando saída do processo"),
+                    );
                     let exited = self
                         .proc_
                         .as_mut()
@@ -248,6 +303,14 @@ impl Runner {
                     }
                     return;
                 }
+                span.in_scope(|| {
+                    tracing::debug!(
+                        mid_turn,
+                        bytes = line.len(),
+                        pending = self.pending.len(),
+                        "mensagem escrita no stdin do claude"
+                    )
+                });
                 self.emit(EngineEvent::Sent {
                     thread: self.thread,
                     turn_id: req.turn_id,
@@ -255,6 +318,7 @@ impl Runner {
                 });
             }
             RunnerCommand::Restart { reason } => {
+                tracing::info!(thread_id = %self.thread, %reason, alive = self.proc_.is_some(), "retire da thread (sessão mantida)");
                 self.kill_process(&reason).await;
                 self.emit(EngineEvent::Retired {
                     thread: self.thread,
@@ -262,6 +326,7 @@ impl Runner {
                 });
             }
             RunnerCommand::Reset => {
+                tracing::info!(thread_id = %self.thread, alive = self.proc_.is_some(), "reset da thread (sessão esquecida)");
                 self.kill_process("reset").await;
                 self.session_id = None;
                 self.emit(EngineEvent::Retired {
@@ -271,11 +336,27 @@ impl Runner {
             }
             RunnerCommand::Interrupt => {
                 if self.proc_.is_some() {
-                    let _ = self.write_stdin(&interrupt_line()).await;
+                    let span = self.current_turn_span();
+                    match self.write_stdin(&interrupt_line()).await {
+                        Ok(()) => span.in_scope(|| {
+                            tracing::info!(thread_id = %self.thread, "interrupção enviada ao claude")
+                        }),
+                        Err(e) => span.in_scope(|| {
+                            tracing::warn!(thread_id = %self.thread, error = %e, "falha ao enviar interrupção")
+                        }),
+                    }
+                } else {
+                    tracing::debug!(thread_id = %self.thread, "interrupção ignorada: sem processo vivo");
                 }
             }
             RunnerCommand::Reconfigure(cfg) => {
                 self.cfg = *cfg;
+                tracing::info!(
+                    thread_id = %self.thread,
+                    token_id = self.cfg.token_id.as_deref().unwrap_or(""),
+                    alive = self.proc_.is_some(),
+                    "reconfigure: nova configuração; processo vivo será derrubado"
+                );
                 if self.proc_.is_some() {
                     self.kill_process("reconfigure").await;
                     self.emit(EngineEvent::Retired {
@@ -286,6 +367,11 @@ impl Runner {
             }
             RunnerCommand::ReconfigureSoft(cfg) => {
                 self.cfg = *cfg;
+                tracing::debug!(
+                    thread_id = %self.thread,
+                    token_id = self.cfg.token_id.as_deref().unwrap_or(""),
+                    "reconfigure suave: vale no próximo spawn"
+                );
             }
             RunnerCommand::SetThreadEnv(env) => {
                 self.thread_env = env;
@@ -311,10 +397,23 @@ impl Runner {
         Ok(())
     }
 
-    async fn spawn_process(&mut self) -> Result<(), EngineError> {
+    /// Sobe o `claude -p`. `turn_id`: turno que motivou o spawn (só para o span).
+    async fn spawn_process(&mut self, turn_id: Option<TurnId>) -> Result<(), EngineError> {
         let new_id = uuid::Uuid::new_v4().to_string();
         let args = self.cfg.args(self.session_id.as_deref(), &new_id);
         self.resumed = self.session_id.is_some();
+        let span = tracing::info_span!(
+            "engine_proc",
+            thread_id = %self.thread,
+            turn_id = tracing::field::Empty,
+            pid = tracing::field::Empty,
+            exit_code = tracing::field::Empty,
+            token_id = self.cfg.token_id.as_deref().unwrap_or("")
+        );
+        if let Some(t) = turn_id {
+            span.record("turn_id", tracing::field::display(t));
+        }
+        let _entered = span.clone().entered();
         let mut cmd = Command::new(&self.cfg.claude_bin);
         cmd.args(&args)
             .current_dir(&self.cfg.cwd)
@@ -332,11 +431,18 @@ impl Runner {
             cmd.process_group(0);
         }
         let mut child = cmd.spawn().map_err(|e| {
-            if e.kind() == std::io::ErrorKind::NotFound {
+            let err = if e.kind() == std::io::ErrorKind::NotFound {
                 EngineError::BinaryNotFound(self.cfg.claude_bin.to_string_lossy().to_string())
             } else {
                 EngineError::Spawn(e.to_string())
-            }
+            };
+            tracing::error!(
+                error = %err,
+                bin = %self.cfg.claude_bin.display(),
+                cwd = %self.cfg.cwd.display(),
+                "não foi possível iniciar o claude"
+            );
+            err
         })?;
         will_platform::process::attach_to_job(&child);
         let stdout = child
@@ -346,6 +452,9 @@ impl Runner {
         let stderr = child.stderr.take();
         let stdin = child.stdin.take();
         let pid = child.id();
+        if let Some(p) = pid {
+            span.record("pid", p);
+        }
         let tail: Arc<Mutex<VecDeque<String>>> = Arc::new(Mutex::new(VecDeque::new()));
         let stale = Arc::new(AtomicBool::new(false));
         if let Some(err) = stderr {
@@ -353,52 +462,65 @@ impl Runner {
             let stale2 = stale.clone();
             let thread = self.thread;
             let events = self.events.clone();
-            tokio::spawn(async move {
-                let mut lines = BufReader::new(err).lines();
-                while let Ok(Some(l)) = lines.next_line().await {
-                    tracing::debug!(thread = %thread, "stderr: {l}");
-                    if l.contains("No conversation found with session ID") {
-                        stale2.store(true, Ordering::Relaxed);
+            let stderr_span = span.clone();
+            tokio::spawn(
+                async move {
+                    let mut lines = BufReader::new(err).lines();
+                    while let Ok(Some(l)) = lines.next_line().await {
+                        tracing::debug!(thread_id = %thread, "stderr: {l}");
+                        if l.contains("No conversation found with session ID") {
+                            tracing::warn!(thread_id = %thread, "stderr: sessão do claude não existe mais (expirada)");
+                            stale2.store(true, Ordering::Relaxed);
+                        }
+                        let lower = l.to_lowercase();
+                        if lower.contains("not logged in")
+                            || lower.contains("authentication") && lower.contains("fail")
+                            || lower.contains("invalid api key")
+                            || lower.contains("oauth token")
+                                && (lower.contains("expired") || lower.contains("invalid"))
+                            || lower.contains("401")
+                        {
+                            tracing::error!(thread_id = %thread, "stderr indica falha de autenticação do token");
+                            let _ = events.send(EngineEvent::AuthFailed {
+                                thread,
+                                detail: will_core::tools::truncate(&l, 200),
+                            });
+                        }
+                        if lower.contains("rate limit")
+                            || lower.contains("limit reached")
+                            || lower.contains("quota")
+                            || lower.contains("429")
+                        {
+                            tracing::warn!(thread_id = %thread, "stderr indica rate limit/quota");
+                            let _ = events.send(EngineEvent::RateLimited {
+                                thread,
+                                detail: will_core::tools::truncate(&l, 200),
+                            });
+                        }
+                        let mut t = tail2.lock();
+                        if t.len() >= 30 {
+                            t.pop_front();
+                        }
+                        t.push_back(l);
                     }
-                    let lower = l.to_lowercase();
-                    if lower.contains("not logged in")
-                        || lower.contains("authentication") && lower.contains("fail")
-                        || lower.contains("invalid api key")
-                        || lower.contains("oauth token")
-                            && (lower.contains("expired") || lower.contains("invalid"))
-                        || lower.contains("401")
-                    {
-                        let _ = events.send(EngineEvent::AuthFailed {
-                            thread,
-                            detail: will_core::tools::truncate(&l, 200),
-                        });
-                    }
-                    if lower.contains("rate limit")
-                        || lower.contains("limit reached")
-                        || lower.contains("quota")
-                        || lower.contains("429")
-                    {
-                        let _ = events.send(EngineEvent::RateLimited {
-                            thread,
-                            detail: will_core::tools::truncate(&l, 200),
-                        });
-                    }
-                    let mut t = tail2.lock();
-                    if t.len() >= 30 {
-                        t.pop_front();
-                    }
-                    t.push_back(l);
                 }
-            });
+                .instrument(stderr_span),
+            );
         }
         if let Some(dir) = &self.cfg.raw_log_dir {
             let _ = std::fs::create_dir_all(dir);
             let name = format!("claude-{}.log", chrono::Utc::now().format("%Y-%m-%d"));
-            self.raw_log = std::fs::OpenOptions::new()
+            self.raw_log = match std::fs::OpenOptions::new()
                 .create(true)
                 .append(true)
-                .open(dir.join(name))
-                .ok();
+                .open(dir.join(&name))
+            {
+                Ok(f) => Some(f),
+                Err(e) => {
+                    tracing::warn!(error = %e, file = %dir.join(&name).display(), "não abriu o log bruto do stream");
+                    None
+                }
+            };
         }
         self.proc_ = Some(Proc {
             child,
@@ -407,12 +529,21 @@ impl Runner {
             stderr_tail: tail,
             stale_flag: stale,
             pid,
+            span: span.clone(),
+            started_at: Instant::now(),
         });
         self.emit(EngineEvent::ProcessStarted {
             thread: self.thread,
             pid,
         });
-        tracing::info!(thread = %self.thread, resumed = self.resumed, pid = ?pid, "claude spawn");
+        tracing::info!(
+            resumed = self.resumed,
+            pid = ?pid,
+            mcp_config = self.cfg.mcp_config_path.is_some(),
+            permission_mode = ?self.cfg.permission_mode,
+            model = self.cfg.model.as_deref().unwrap_or(""),
+            "claude spawn"
+        );
         Ok(())
     }
 
@@ -421,6 +552,8 @@ impl Runner {
             use std::io::Write;
             let _ = writeln!(f, "{line}");
         }
+        let proc_span = self.proc_span();
+        let _proc_guard = proc_span.enter();
         match parse_line(line) {
             StreamLine::Init {
                 session_id,
@@ -430,11 +563,24 @@ impl Runner {
                 if !session_id.is_empty() && self.session_id.as_deref() != Some(&session_id) {
                     self.session_id = Some(session_id.clone());
                 }
+                let will_ia_mcp = mcp_servers
+                    .iter()
+                    .find(|(n, _)| n == "will_ia")
+                    .map(|(_, s)| s.as_str())
+                    .unwrap_or("ausente");
                 for (name, status) in &mcp_servers {
                     if name == "will_ia" && status != "connected" {
-                        tracing::warn!(thread = %self.thread, status, "MCP will_ia não conectado");
+                        tracing::warn!(thread_id = %self.thread, status, "MCP will_ia não conectado");
                     }
                 }
+                tracing::info!(
+                    thread_id = %self.thread,
+                    session_id = self.session_id.as_deref().unwrap_or(""),
+                    resumed = self.resumed,
+                    mcp_servers = mcp_servers.len(),
+                    will_ia_mcp,
+                    "claude pronto (init)"
+                );
                 self.emit(EngineEvent::Session {
                     thread: self.thread,
                     session_id: self.session_id.clone().unwrap_or_default(),
@@ -453,11 +599,17 @@ impl Runner {
                     let p = &mut self.pending[i];
                     p.accepted = true;
                     let tid = p.turn_id;
+                    let source = p.source.clone();
+                    self.turn_span(tid, &source).in_scope(|| {
+                        tracing::debug!(mid_turn, "mensagem ecoada pelo claude (aceita)")
+                    });
                     self.emit(EngineEvent::Accepted {
                         thread: self.thread,
                         turn_id: tid,
                         mid_turn,
                     });
+                } else {
+                    tracing::debug!(thread_id = %self.thread, "replay sem pendência correspondente");
                 }
             }
             StreamLine::Assistant {
@@ -491,9 +643,16 @@ impl Runner {
             } => {
                 let tid = self.current_turn();
                 if let Some(tool) = permission_denied {
+                    self.current_turn_span().in_scope(
+                        || tracing::warn!(%tool, "ferramenta negada por permissão do claude"),
+                    );
                     self.emit(EngineEvent::PermissionDenied {
                         thread: self.thread,
                         tool,
+                    });
+                } else if is_error {
+                    self.current_turn_span().in_scope(|| {
+                        tracing::debug!(bytes = preview.len(), "tool_result com erro")
                     });
                 }
                 self.emit(EngineEvent::Delta {
@@ -513,6 +672,9 @@ impl Runner {
                 }
             }
             StreamLine::RateLimit { detail } => {
+                self.current_turn_span().in_scope(|| {
+                    tracing::warn!(thread_id = %self.thread, "claude reportou rate limit no stream")
+                });
                 self.emit(EngineEvent::RateLimited {
                     thread: self.thread,
                     detail,
@@ -523,6 +685,9 @@ impl Runner {
                 stale_session,
             } => {
                 if stale_session {
+                    self.current_turn_span().in_scope(|| {
+                        tracing::warn!(thread_id = %self.thread, "result indica sessão expirada; aguardando exit para recomeçar")
+                    });
                     if let Some(p) = self.proc_.as_ref() {
                         p.stale_flag.store(true, Ordering::Relaxed);
                     }
@@ -535,7 +700,7 @@ impl Runner {
                 }
                 // Fecha a cabeça + todas já aceitas (consumidas neste turno).
                 let Some(head) = self.pending.pop_front() else {
-                    tracing::debug!(thread = %self.thread, "result sem pendência");
+                    tracing::warn!(thread_id = %self.thread, is_error = result.is_error, "result sem pendência na fila");
                     return;
                 };
                 let mut merged = vec![];
@@ -552,6 +717,29 @@ impl Runner {
                     }
                 }
                 *self.shared.last_used.lock() = Some(Instant::now());
+                let usage_u64 = |k: &str| {
+                    result
+                        .usage
+                        .as_ref()
+                        .and_then(|u| u.get(k))
+                        .and_then(|v| v.as_u64())
+                };
+                self.turn_span(head.turn_id, &head.source).in_scope(|| {
+                    tracing::info!(
+                        is_error = result.is_error,
+                        cost_usd = result.cost_usd.unwrap_or(0.0),
+                        duration_ms = result.duration_ms.unwrap_or(0),
+                        wall_ms = head.started_at.elapsed().as_millis() as u64,
+                        model = result.model.as_deref().unwrap_or(""),
+                        input_tokens = usage_u64("input_tokens").unwrap_or(0),
+                        output_tokens = usage_u64("output_tokens").unwrap_or(0),
+                        cache_read_tokens = usage_u64("cache_read_input_tokens").unwrap_or(0),
+                        merged = merged.len(),
+                        response_chars = result.text.chars().count(),
+                        retried = head.retried,
+                        "turno concluído"
+                    )
+                });
                 self.emit(EngineEvent::TurnFinished {
                     thread: self.thread,
                     turn_id: head.turn_id,
@@ -572,6 +760,10 @@ impl Runner {
                 // Sem replay (versões antigas), considerar aceita ao ver atividade.
                 p.accepted = true;
                 let tid = p.turn_id;
+                let source = p.source.clone();
+                let wait_ms = p.started_at.elapsed().as_millis() as u64;
+                self.turn_span(tid, &source)
+                    .in_scope(|| tracing::debug!(wait_ms, "turno começou (primeira atividade)"));
                 self.emit(EngineEvent::TurnStarted {
                     thread: self.thread,
                     turn_id: tid,
@@ -582,6 +774,23 @@ impl Runner {
 
     fn current_turn(&self) -> Option<TurnId> {
         self.pending.front().map(|p| p.turn_id)
+    }
+
+    /// Descarta um turno pendente com log no span dele.
+    fn drop_pending(&self, q: Pending, reason: &str) {
+        self.turn_span(q.turn_id, &q.source).in_scope(|| {
+            tracing::warn!(
+                reason,
+                accepted = q.accepted,
+                retried = q.retried,
+                "turno descartado"
+            )
+        });
+        self.emit(EngineEvent::Dropped {
+            thread: self.thread,
+            turn_id: q.turn_id,
+            reason: reason.to_string(),
+        });
     }
 
     async fn handle_exit(&mut self) {
@@ -596,7 +805,20 @@ impl Runner {
         let stale = p.stale_flag.load(Ordering::Relaxed);
         let tail: Vec<String> = p.stderr_tail.lock().iter().cloned().collect();
         self.raw_log = None;
-        tracing::warn!(thread = %self.thread, code = ?code, stale, "claude encerrou");
+        if let Some(c) = code {
+            p.span.record("exit_code", c);
+        }
+        p.span.in_scope(|| {
+            tracing::warn!(
+                thread_id = %self.thread,
+                exit_code = ?code,
+                stale,
+                pending = self.pending.len(),
+                uptime_ms = p.started_at.elapsed().as_millis() as u64,
+                stderr_lines = tail.len(),
+                "claude encerrou"
+            )
+        });
         self.emit(EngineEvent::ProcessExited {
             thread: self.thread,
             code,
@@ -605,6 +827,11 @@ impl Runner {
 
         if stale && !self.pending.is_empty() && self.pending.iter().all(|q| !q.retried) {
             // Sessão expirada: esquece, sobe do zero e reenvia (uma vez).
+            tracing::warn!(
+                thread_id = %self.thread,
+                pending = self.pending.len(),
+                "sessão expirada: recomeçando do zero e reenviando as pendências (uma vez)"
+            );
             self.session_id = None;
             self.emit(EngineEvent::StaleSession {
                 thread: self.thread,
@@ -615,29 +842,49 @@ impl Runner {
                 .map(|q| SendRequest {
                     turn_id: q.turn_id,
                     text: q.text,
+                    source: q.source,
                 })
                 .collect();
-            if self.spawn_process().await.is_ok() {
+            let first_turn = msgs.first().map(|m| m.turn_id);
+            if self.spawn_process(first_turn).await.is_ok() {
                 for m in msgs {
                     let line = user_message_line(&m.text);
-                    if self.write_stdin(&line).await.is_ok() {
-                        self.pending.push_back(Pending {
-                            turn_id: m.turn_id,
-                            text: m.text,
-                            retried: true,
-                            accepted: false,
-                            started_emitted: false,
-                        });
-                    } else {
-                        self.emit(EngineEvent::Dropped {
-                            thread: self.thread,
-                            turn_id: m.turn_id,
-                            reason: "reenvio falhou".into(),
-                        });
+                    let span = self.turn_span(m.turn_id, &m.source);
+                    match self.write_stdin(&line).await {
+                        Ok(()) => {
+                            span.in_scope(|| {
+                                tracing::info!(
+                                    bytes = line.len(),
+                                    "mensagem reenviada após sessão expirada"
+                                )
+                            });
+                            self.pending.push_back(Pending {
+                                turn_id: m.turn_id,
+                                text: m.text,
+                                source: m.source,
+                                retried: true,
+                                accepted: false,
+                                started_emitted: false,
+                                started_at: Instant::now(),
+                            });
+                        }
+                        Err(e) => {
+                            span.in_scope(
+                                || tracing::error!(error = %e, "reenvio falhou; turno descartado"),
+                            );
+                            self.emit(EngineEvent::Dropped {
+                                thread: self.thread,
+                                turn_id: m.turn_id,
+                                reason: "reenvio falhou".into(),
+                            });
+                        }
                     }
                 }
             } else {
                 for m in msgs {
+                    self.turn_span(m.turn_id, &m.source).in_scope(|| {
+                        tracing::error!("respawn falhou após sessão expirada; turno descartado")
+                    });
                     self.emit(EngineEvent::Dropped {
                         thread: self.thread,
                         turn_id: m.turn_id,
@@ -653,11 +900,7 @@ impl Runner {
             format!("processo caiu (code {code:?})")
         };
         while let Some(q) = self.pending.pop_front() {
-            self.emit(EngineEvent::Dropped {
-                thread: self.thread,
-                turn_id: q.turn_id,
-                reason: reason.clone(),
-            });
+            self.drop_pending(q, &reason);
         }
     }
 
@@ -665,18 +908,25 @@ impl Runner {
         let Some(mut p) = self.proc_.take() else {
             return;
         };
-        tracing::info!(thread = %self.thread, reason, pid = ?p.pid, "encerrando claude");
+        p.span.in_scope(|| {
+            tracing::info!(
+                thread_id = %self.thread,
+                reason,
+                pid = ?p.pid,
+                pending = self.pending.len(),
+                uptime_ms = p.started_at.elapsed().as_millis() as u64,
+                "encerrando claude"
+            )
+        });
         drop(p.stdin.take());
-        kill_tree(&mut p.child, p.pid, self.cfg.kill_grace).await;
+        kill_tree(&mut p.child, p.pid, self.cfg.kill_grace)
+            .instrument(p.span.clone())
+            .await;
         self.raw_log = None;
         // Pendências morrem com o processo (quem pediu restart sabe disso).
         let reason_s = format!("thread reiniciada: {reason}");
         while let Some(q) = self.pending.pop_front() {
-            self.emit(EngineEvent::Dropped {
-                thread: self.thread,
-                turn_id: q.turn_id,
-                reason: reason_s.clone(),
-            });
+            self.drop_pending(q, &reason_s);
         }
     }
 }
@@ -687,10 +937,17 @@ pub async fn kill_tree(child: &mut Child, pid: Option<u32>, grace: Duration) {
     {
         if let Some(pid) = pid {
             let pg = nix::unistd::Pid::from_raw(pid as i32);
-            let _ = nix::sys::signal::killpg(pg, nix::sys::signal::Signal::SIGTERM);
+            if let Err(e) = nix::sys::signal::killpg(pg, nix::sys::signal::Signal::SIGTERM) {
+                tracing::debug!(pid, error = %e, "SIGTERM no grupo falhou (já encerrado?)");
+            }
             if tokio::time::timeout(grace, child.wait()).await.is_ok() {
                 return;
             }
+            tracing::warn!(
+                pid,
+                grace_ms = grace.as_millis() as u64,
+                "claude não encerrou no prazo; SIGKILL no grupo"
+            );
             let _ = nix::sys::signal::killpg(pg, nix::sys::signal::Signal::SIGKILL);
         }
     }

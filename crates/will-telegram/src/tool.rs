@@ -86,13 +86,28 @@ impl WillTool for SendMessageTool {
         let reply_to = arg_opt_i64(&args, "reply_to_message_id").map(|v| v as i32);
         let (chat_id, topic_id) = self.destination(&ctx, &args)?;
         if !self.sender.allowed_chat(chat_id) {
+            tracing::warn!(
+                channel = "telegram",
+                chat_id,
+                thread_id = ?ctx.thread_id,
+                "telegram_send_message recusado: chat fora da allowlist"
+            );
             return Err(ToolError::Forbidden(format!(
                 "chat {chat_id} não está na allowlist do Telegram"
             )));
         }
+        tracing::debug!(
+            channel = "telegram",
+            chat_id,
+            ?topic_id,
+            thread_id = ?ctx.thread_id,
+            text_len = text.chars().count(),
+            html,
+            "telegram_send_message"
+        );
         let ids = self
             .sender
-            .send_text(chat_id, topic_id, text, html, reply_to)
+            .send_text(chat_id, topic_id, ctx.thread_id, text, html, reply_to)
             .await
             .map_err(ToolError::Failed)?;
         Ok(ToolOutput::json(&serde_json::json!({

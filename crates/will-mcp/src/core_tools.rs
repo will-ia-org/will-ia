@@ -76,6 +76,7 @@ impl WillTool for NotifyUser {
     ) -> Result<ToolOutput, ToolError> {
         let title = arg_str(&args, "title")?.to_string();
         let body = arg_str(&args, "body")?.to_string();
+        tracing::info!(thread_id = ?_ctx.thread_id, title_chars = title.chars().count(), body_chars = body.chars().count(), "notify_user: notificação emitida");
         self.bus.emit(Event::Notification { title, body });
         Ok(ToolOutput::text("ok"))
     }
@@ -171,16 +172,23 @@ impl WillTool for CreateThread {
             .host
             .ensure_thread(&Origin::Ui, Some(title))
             .await
-            .map_err(ToolError::Failed)?;
+            .map_err(|e| {
+                tracing::warn!(from_thread = ?_ctx.thread_id, error = %e, "create_thread falhou");
+                ToolError::Failed(e)
+            })?;
         let mut turn = None;
         if let Some(p) = arg_opt_str(&args, "initial_prompt") {
             turn = Some(
                 self.host
                     .send_message(t.id, p)
                     .await
-                    .map_err(ToolError::Failed)?,
+                    .map_err(|e| {
+                        tracing::warn!(from_thread = ?_ctx.thread_id, thread_id = %t.id, error = %e, "create_thread: prompt inicial não enviado");
+                        ToolError::Failed(e)
+                    })?,
             );
         }
+        tracing::info!(from_thread = ?_ctx.thread_id, thread_id = %t.id, turn_id = ?turn, "create_thread: thread criada pelo agente");
         Ok(ToolOutput::json(
             &serde_json::json!({"thread_id": t.id, "turn_id": turn}),
         ))
@@ -216,7 +224,11 @@ impl WillTool for SendToThread {
             .host
             .send_message(tid, text)
             .await
-            .map_err(ToolError::Failed)?;
+            .map_err(|e| {
+                tracing::warn!(from_thread = ?_ctx.thread_id, thread_id = %tid, error = %e, "send_to_thread falhou");
+                ToolError::Failed(e)
+            })?;
+        tracing::info!(from_thread = ?_ctx.thread_id, thread_id = %tid, turn_id = %turn, chars = text.chars().count(), "send_to_thread: mensagem entregue a outra thread");
         Ok(ToolOutput::json(&serde_json::json!({"turn_id": turn})))
     }
 }

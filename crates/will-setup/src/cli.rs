@@ -94,7 +94,9 @@ pub fn run_install(plan: &Plan, mut opts: Options, yes: bool) -> i32 {
             return 1;
         }
     }
-    let progress: install::Progress = Arc::new(|f, msg| {
+    let data_dir = plan.data_dir.clone();
+    let progress: install::Progress = Arc::new(move |f, msg| {
+        install::append_setup_log(&data_dir, msg);
         if f >= 0.0 {
             println!("[{:>3}%] {msg}", (f * 100.0) as u32);
         } else {
@@ -131,7 +133,9 @@ pub fn run_uninstall(plan: &Plan, purge: bool, yes: bool) -> i32 {
         println!("cancelado");
         return 1;
     }
-    let progress: install::Progress = Arc::new(|f, msg| {
+    let data_dir = plan.data_dir.clone();
+    let progress: install::Progress = Arc::new(move |f, msg| {
+        install::append_setup_log(&data_dir, msg);
         if f >= 0.0 {
             println!("[{:>3}%] {msg}", (f * 100.0) as u32);
         } else {

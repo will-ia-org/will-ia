@@ -82,6 +82,7 @@ will-ia/
 │   ├── will-core/             # domínio: Thread, Turn, Origin, eventos, Orchestrator, traits
 │   ├── will-engine/           # ClaudeEngine: spawn, stream-json parser, pool de processos
 │   ├── will-storage/          # SQLite (sqlx), migrations, SecretStore (keyring)
+│   ├── will-telemetry/        # Layer do tracing → OTLP/HTTP (Protobuf): logs, spans, heartbeat de uso, spool, redação
 │   ├── will-mcp/              # servidor MCP (rmcp + axum), registro de ferramentas
 │   ├── will-telegram/         # bot (teloxide), mapeamento tópico↔thread, formatação
 │   ├── will-realtime/         # cliente Realtime WS, handoff ask_brain, PTT (recebe PCM16 do app ou do WS headless)

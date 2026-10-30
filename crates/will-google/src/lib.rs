@@ -27,12 +27,68 @@ use std::path::PathBuf;
 use std::sync::{Arc, Weak};
 use std::time::{Duration, Instant};
 use tokio_util::sync::CancellationToken;
+use tracing::Instrument;
 use will_core::settings::{CalendarSettings, DriveSettings, GmailSettings, GoogleSettings};
-use will_core::{Event, EventBus, Module, ModuleStatus, ToolProvider};
+use will_core::{
+    Event, EventBus, Module, ModuleStatus, ToolContext, ToolError, ToolOutput, ToolProvider,
+};
 use will_storage::google::{GoogleAccount, GoogleCalendar};
 use will_storage::{SecretStore, Storage};
 
 const MODULE: &str = "google";
+
+/// Domínio de um e-mail (`will@gmail.com` → `gmail.com`), para logs sem PII.
+pub(crate) fn email_domain(email: &str) -> &str {
+    email.rsplit_once('@').map(|(_, d)| d).unwrap_or("?")
+}
+
+/// Span `oauth` padronizado (`account_id` = id interno ou `new`).
+pub(crate) fn oauth_span(account_id: Option<&str>, step: &'static str) -> tracing::Span {
+    tracing::info_span!(
+        "oauth",
+        account_id = account_id.unwrap_or("new"),
+        step,
+        ok = tracing::field::Empty
+    )
+}
+
+/// Executa uma ferramenta Google dentro do span `google_op` (`product`, `op`,
+/// `account_id`, `thread_id`, `ok`, `duration_ms`, `http_status`), emitindo o
+/// evento de desfecho. `account_id` pode ser gravado depois pela própria
+/// ferramenta (`Span::current().record("account_id", …)`).
+pub(crate) async fn traced_op<F>(
+    product: &'static str,
+    op: &'static str,
+    ctx: &ToolContext,
+    fut: F,
+) -> Result<ToolOutput, ToolError>
+where
+    F: std::future::Future<Output = Result<ToolOutput, ToolError>>,
+{
+    let span = tracing::info_span!(
+        "google_op",
+        product,
+        op,
+        account_id = tracing::field::Empty,
+        thread_id = tracing::field::Empty,
+        ok = tracing::field::Empty,
+        duration_ms = tracing::field::Empty,
+        http_status = tracing::field::Empty,
+    );
+    if let Some(t) = ctx.thread_id {
+        span.record("thread_id", tracing::field::display(t));
+    }
+    let started = Instant::now();
+    let res = fut.instrument(span.clone()).await;
+    let duration_ms = started.elapsed().as_millis() as u64;
+    span.record("duration_ms", duration_ms);
+    span.record("ok", res.is_ok());
+    span.in_scope(|| match &res {
+        Ok(_) => tracing::info!(ok = true, duration_ms, "google_op: ok"),
+        Err(e) => tracing::warn!(ok = false, duration_ms, error = %e, "google_op: falhou"),
+    });
+    res
+}
 
 /// Fluxo OAuth aguardando o `code` que o cliente vai repassar.
 struct PendingFlow {
@@ -265,7 +321,9 @@ impl GoogleModule {
         id_or_email: &str,
     ) -> Result<GoogleAccount, GoogleError> {
         let a = self.client.find_account(id_or_email).await?;
+        tracing::Span::current().record("account_id", tracing::field::display(&a.id));
         if a.status == STATUS_REAUTHORIZE {
+            tracing::warn!(account_id = %a.id, "conta Google marcada para reautorizar; operação recusada");
             return Err(GoogleError::Reauthorize(a.email));
         }
         Ok(a)
@@ -308,6 +366,14 @@ impl GoogleModule {
             .find_account(account_id)
             .await
             .map_err(|e| e.to_string())?;
+        tracing::info!(
+            name: "oauth",
+            account_id = %account.id,
+            domain = email_domain(&account.email),
+            step = "reauth",
+            extra_scopes = extra.len(),
+            "reautorização de conta Google iniciada"
+        );
         let mut wanted = Vec::new();
         let cfg = self.config();
         if cfg.calendar.enabled {
@@ -353,20 +419,38 @@ impl GoogleModule {
         open_browser: bool,
         callback_port: Option<u16>,
     ) -> Result<ConnectStart, String> {
-        let client = self
-            .client
-            .oauth_client()
-            .await
-            .map_err(|e| e.to_string())?;
+        let span = oauth_span(existing.as_ref().map(|a| a.id.as_str()), "start");
+        let res = self
+            .begin_flow_in(scopes, existing, open_browser, callback_port)
+            .instrument(span.clone())
+            .await;
+        span.record("ok", res.is_ok());
+        res
+    }
+
+    async fn begin_flow_in(
+        &self,
+        scopes: Vec<String>,
+        existing: Option<GoogleAccount>,
+        open_browser: bool,
+        callback_port: Option<u16>,
+    ) -> Result<ConnectStart, String> {
+        let client = self.client.oauth_client().await.map_err(|e| {
+            tracing::warn!(ok = false, error = %e, "oauth: cliente OAuth indisponível");
+            e.to_string()
+        })?;
         let fixed_port = self.config().google.redirect_port;
         // Cliente remoto: ele mesmo escuta o callback na porta `callback_port` e
         // devolve o `code` em `complete_flow`. Local: abrimos o loopback aqui.
         let server_listener = match callback_port {
             Some(_) => None,
             None => {
-                let (listener, port) = oauth::bind_loopback(fixed_port).await.map_err(|e| match fixed_port {
-                    Some(p) => format!("não consegui abrir a porta fixa {p} do callback ({e}); feche o que a ocupa ou troque a porta em Configurações › Google"),
-                    None => e.to_string(),
+                let (listener, port) = oauth::bind_loopback(fixed_port).await.map_err(|e| {
+                    tracing::warn!(ok = false, port = ?fixed_port, error = %e, "oauth: não abriu o loopback do callback");
+                    match fixed_port {
+                        Some(p) => format!("não consegui abrir a porta fixa {p} do callback ({e}); feche o que a ocupa ou troque a porta em Configurações › Google"),
+                        None => e.to_string(),
+                    }
                 })?;
                 Some((listener, port))
             }
@@ -394,6 +478,14 @@ impl GoogleModule {
         }
         let (url, state) = req.url();
         let url_s = url.to_string();
+        tracing::info!(
+            ok = true,
+            port,
+            scopes = scopes.len(),
+            remote_client = callback_port.is_some(),
+            open_browser,
+            "oauth: fluxo iniciado"
+        );
 
         match server_listener {
             // Modo local: o servidor escuta o loopback e conclui em segundo plano.
@@ -407,24 +499,34 @@ impl GoogleModule {
                     prev.cancel();
                 }
                 let bus = self.client.bus.clone();
-                tokio::spawn(async move {
-                    let result = me
-                        .finish_flow(listener, client, verifier, state, scopes, existing, cancel)
-                        .await;
-                    match result {
-                        Ok(email) => {
-                            bus.log("info", MODULE, format!("conta Google {email} conectada"))
+                let span = oauth_span(existing.as_ref().map(|a| a.id.as_str()), "callback");
+                tokio::spawn(
+                    async move {
+                        let result = me
+                            .finish_flow(listener, client, verifier, state, scopes, existing, cancel)
+                            .await;
+                        tracing::Span::current().record("ok", result.is_ok());
+                        match result {
+                            Ok(email) => {
+                                tracing::info!(ok = true, domain = email_domain(&email), "oauth: conta conectada");
+                                bus.log("info", MODULE, format!("conta Google {email} conectada"))
+                            }
+                            Err(e) => {
+                                tracing::error!(ok = false, error = %e, "oauth: falha ao conectar conta");
+                                bus.log(
+                                    "error",
+                                    MODULE,
+                                    format!("falha ao conectar conta Google: {e}"),
+                                )
+                            }
                         }
-                        Err(e) => bus.log(
-                            "error",
-                            MODULE,
-                            format!("falha ao conectar conta Google: {e}"),
-                        ),
+                        me.emit_status();
                     }
-                    me.emit_status();
-                });
+                    .instrument(span),
+                );
                 if open_browser {
                     if let Err(e) = open::that_detached(&url_s) {
+                        tracing::warn!(error = %e, "oauth: não abriu o navegador");
                         self.client.bus.log(
                             "warn",
                             MODULE,
@@ -471,11 +573,23 @@ impl GoogleModule {
     /// e persiste a conta. Chamado pela rota `POST /api/google/callback`.
     pub async fn complete_flow(&self, state: &str, code: &str) -> Result<String, String> {
         self.prune_pending_flows();
-        let pf = self
-            .pending_flows
-            .lock()
-            .remove(state)
-            .ok_or_else(|| "fluxo de autorização expirado ou desconhecido".to_string())?;
+        let pf = match self.pending_flows.lock().remove(state) {
+            Some(pf) => pf,
+            None => {
+                tracing::warn!(name: "oauth", step = "callback", ok = false, "oauth: fluxo expirado ou desconhecido no callback remoto");
+                return Err("fluxo de autorização expirado ou desconhecido".to_string());
+            }
+        };
+        let span = oauth_span(pf.existing.as_ref().map(|a| a.id.as_str()), "callback");
+        let res = self
+            .complete_flow_in(pf, code)
+            .instrument(span.clone())
+            .await;
+        span.record("ok", res.is_ok());
+        res
+    }
+
+    async fn complete_flow_in(&self, pf: PendingFlow, code: &str) -> Result<String, String> {
         let client = self
             .client
             .oauth_client()
@@ -487,7 +601,10 @@ impl GoogleModule {
             .set_pkce_verifier(pf.verifier)
             .request_async(self.client.oauth_http())
             .await
-            .map_err(|e| format!("troca de código falhou: {e}"))?;
+            .map_err(|e| {
+                tracing::error!(ok = false, error = %e, "oauth: troca de código falhou (remoto)");
+                format!("troca de código falhou: {e}")
+            })?;
         let out = ExchangeOut {
             access: tr.access_token().secret().to_string(),
             refresh: tr.refresh_token().map(|r| r.secret().to_string()),
@@ -499,7 +616,15 @@ impl GoogleModule {
         let email = self
             .persist_exchange(out, pf.requested, pf.existing)
             .await
-            .map_err(|e| e.to_string())?;
+            .map_err(|e| {
+                tracing::error!(ok = false, error = %e, "oauth: persistir conta falhou (remoto)");
+                e.to_string()
+            })?;
+        tracing::info!(
+            ok = true,
+            domain = email_domain(&email),
+            "oauth: conta conectada (remoto)"
+        );
         self.client
             .bus
             .log("info", MODULE, format!("conta Google {email} conectada"));
@@ -520,6 +645,7 @@ impl GoogleModule {
     ) -> Result<String, GoogleError> {
         let cb =
             oauth::wait_callback(listener, state.secret(), oauth::FLOW_TIMEOUT, cancel).await?;
+        tracing::debug!("oauth: callback recebido; trocando código por token");
         let tr = client
             .exchange_code(AuthorizationCode::new(cb.code))
             .set_pkce_verifier(verifier)
@@ -558,6 +684,7 @@ impl GoogleModule {
         )
         .await?;
         let email = info.email.filter(|e| !e.is_empty()).ok_or_else(|| {
+            tracing::warn!("oauth: userinfo sem e-mail");
             GoogleError::OAuth("Google não devolveu o e-mail da conta (escopo email)".into())
         })?;
 
@@ -586,6 +713,7 @@ impl GoogleModule {
                     .map_err(GoogleError::Secret)?
                     .is_some();
                 if !has_old {
+                    tracing::warn!(account_id = %id, "oauth: Google não devolveu refresh token e não há um antigo");
                     return Err(GoogleError::OAuth(
                         "Google não devolveu refresh token; remova o acesso do app em myaccount.google.com/permissions e tente de novo".into(),
                     ));
@@ -609,6 +737,14 @@ impl GoogleModule {
             last_used_at: None,
         };
         self.client.storage.upsert_google_account(&account).await?;
+        tracing::info!(
+            account_id = %id,
+            domain = email_domain(&email),
+            scopes = account.scopes.len(),
+            new_refresh_token = out.refresh.is_some(),
+            existing = prior.is_some(),
+            "oauth: conta Google persistida"
+        );
         let ttl = out.ttl.saturating_sub(Duration::from_secs(60));
         self.client
             .seed_token(&id, &access, ttl.max(Duration::from_secs(30)));
@@ -623,7 +759,15 @@ impl GoogleModule {
             .find_account(account_id)
             .await
             .map_err(|e| e.to_string())?;
+        let span = oauth_span(Some(&account.id), "revoke");
+        let res = self.disconnect_in(account).instrument(span.clone()).await;
+        span.record("ok", res.is_ok());
+        res
+    }
+
+    async fn disconnect_in(&self, account: GoogleAccount) -> Result<(), String> {
         if let Err(e) = self.client.revoke(&account).await {
+            tracing::warn!(account_id = %account.id, domain = email_domain(&account.email), error = %e, "oauth: revogação no Google falhou");
             self.client.bus.log(
                 "warn",
                 MODULE,
@@ -644,6 +788,7 @@ impl GoogleModule {
             .await
             .map_err(|e| e.to_string())?;
         let _ = self.enabled_calendars().await;
+        tracing::info!(account_id = %account.id, domain = email_domain(&account.email), ok = true, "oauth: conta Google desconectada");
         self.client.bus.log(
             "info",
             MODULE,
@@ -704,13 +849,22 @@ impl GoogleModule {
                             default_for_create: false,
                         };
                         if let Err(e) = self.client.storage.upsert_google_calendar(&cal).await {
+                            tracing::warn!(account_id = %acc.id, error = %e, "upsert_google_calendar falhou");
                             errors.push(format!("{}: {e}", acc.email));
                         }
                     }
                 }
-                Err(e) => errors.push(format!("{}: {e}", acc.email)),
+                Err(e) => {
+                    tracing::warn!(account_id = %acc.id, product = "calendar", op = "calendarList", error = %e, "atualização de agendas falhou");
+                    errors.push(format!("{}: {e}", acc.email))
+                }
             }
         }
+        tracing::info!(
+            accounts_ok = ok,
+            errors = errors.len(),
+            "agendas atualizadas"
+        );
         for e in &errors {
             self.client
                 .bus
@@ -808,7 +962,9 @@ impl GoogleModule {
                 }
             },
         };
+        tracing::Span::current().record("account_id", tracing::field::display(&acc.id));
         if acc.status == STATUS_REAUTHORIZE {
+            tracing::warn!(account_id = %acc.id, "conta Google marcada para reautorizar; operação recusada");
             return Err(GoogleError::Reauthorize(acc.email).into());
         }
         Ok(acc)

@@ -54,28 +54,35 @@ pub async fn test_token(
             c
         }
         Err(e) => {
+            tracing::error!(error = %e, bin = %claude_bin.display(), "teste de token: não foi possível executar o claude");
             return TokenTestResult {
                 ok: false,
                 error: Some(format!("não foi possível executar o claude: {e}")),
                 output_tail: String::new(),
-            }
+            };
         }
     };
+    let started = std::time::Instant::now();
     let out = match tokio::time::timeout(timeout, child.wait_with_output()).await {
         Ok(Ok(o)) => o,
         Ok(Err(e)) => {
+            tracing::error!(error = %e, "teste de token: falha ao aguardar o claude");
             return TokenTestResult {
                 ok: false,
                 error: Some(e.to_string()),
                 output_tail: String::new(),
-            }
+            };
         }
         Err(_) => {
+            tracing::warn!(
+                timeout_secs = timeout.as_secs(),
+                "teste de token: tempo esgotado"
+            );
             return TokenTestResult {
                 ok: false,
                 error: Some("tempo esgotado".into()),
                 output_tail: String::new(),
-            }
+            };
         }
     };
     let text = format!(
@@ -99,6 +106,12 @@ pub async fn test_token(
     ];
     let is_bad = bad.iter().any(|b| lower.contains(b));
     let tail = will_core::tools::truncate(text.trim(), 400);
+    tracing::info!(
+        ok = out.status.success() && !is_bad,
+        exit_code = ?out.status.code(),
+        duration_ms = started.elapsed().as_millis() as u64,
+        "teste de token concluído"
+    );
     if out.status.success() && !is_bad {
         TokenTestResult {
             ok: true,

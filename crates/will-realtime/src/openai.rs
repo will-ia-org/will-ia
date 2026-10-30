@@ -5,7 +5,7 @@
 //! Tudo best-effort; nunca loga a chave.
 
 use secrecy::{ExposeSecret, SecretString};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 const OPENAI: &str = "https://api.openai.com/v1";
 pub const STT_MODEL: &str = "gpt-4o-mini-transcribe";
@@ -133,6 +133,7 @@ impl OpenAi {
             .text("model", STT_MODEL)
             .text("language", "pt")
             .text("response_format", "text");
+        let started = Instant::now();
         let res = self
             .http
             .post(format!("{OPENAI}/audio/transcriptions"))
@@ -140,12 +141,30 @@ impl OpenAi {
             .multipart(form)
             .send()
             .await
-            .map_err(|e| format!("transcrição: {e}"))?;
+            .map_err(|e| {
+                tracing::warn!(what = "stt", model = STT_MODEL, error = %e, "OpenAI: erro de rede");
+                format!("transcrição: {e}")
+            })?;
         let status = res.status();
         let body = res.text().await.unwrap_or_default();
         if !status.is_success() {
+            tracing::warn!(
+                what = "stt",
+                model = STT_MODEL,
+                http_status = status.as_u16(),
+                duration_ms = started.elapsed().as_millis() as u64,
+                "OpenAI: transcrição falhou"
+            );
             return Err(format!("transcrição HTTP {status}: {}", snippet(&body)));
         }
+        tracing::debug!(
+            what = "stt",
+            model = STT_MODEL,
+            http_status = status.as_u16(),
+            chars = body.trim().chars().count(),
+            duration_ms = started.elapsed().as_millis() as u64,
+            "OpenAI: transcrição ok"
+        );
         Ok(body.trim().to_string())
     }
 
@@ -300,6 +319,7 @@ impl OpenAi {
         what: &str,
     ) -> Result<Vec<u8>, String> {
         let mut dropped: Vec<String> = Vec::new();
+        let started = Instant::now();
         loop {
             let res = self
                 .http
@@ -308,10 +328,21 @@ impl OpenAi {
                 .json(&body)
                 .send()
                 .await
-                .map_err(|e| format!("{what}: {e}"))?;
+                .map_err(|e| {
+                    tracing::warn!(what, model = body["model"].as_str().unwrap_or(""), error = %e, "OpenAI: erro de rede");
+                    format!("{what}: {e}")
+                })?;
             let status = res.status();
             let bytes = res.bytes().await.map_err(|e| e.to_string())?;
             if status.is_success() {
+                tracing::debug!(
+                    what,
+                    model = body["model"].as_str().unwrap_or(""),
+                    http_status = status.as_u16(),
+                    bytes = bytes.len(),
+                    duration_ms = started.elapsed().as_millis() as u64,
+                    "OpenAI: ok"
+                );
                 if !dropped.is_empty() {
                     tracing::info!(
                         what,
@@ -326,6 +357,7 @@ impl OpenAi {
             if status.as_u16() == 400 && dropped.len() < MAX_PARAM_RETRIES {
                 if let Some(param) = rejected_param(&text) {
                     if body.get(&param).is_some() && param != "model" {
+                        tracing::debug!(what, param = %param, "OpenAI: parâmetro recusado; removendo e repetindo");
                         if let Some(o) = body.as_object_mut() {
                             o.remove(&param);
                         }
@@ -334,6 +366,14 @@ impl OpenAi {
                     }
                 }
             }
+            tracing::warn!(
+                what,
+                model = body["model"].as_str().unwrap_or(""),
+                http_status = status.as_u16(),
+                rate_limit = status.as_u16() == 429,
+                duration_ms = started.elapsed().as_millis() as u64,
+                "OpenAI: requisição falhou"
+            );
             return Err(format!(
                 "{what} HTTP {status}: {}",
                 openai_error_message(&text)

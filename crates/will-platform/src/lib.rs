@@ -20,9 +20,11 @@ pub fn notify(title: &str, body: &str) {
     use std::sync::atomic::Ordering;
     let title = title.to_string();
     let body = body.to_string();
+    let title_len = title.chars().count();
+    let body_len = body.chars().count();
     if NOTIFY_IN_FLIGHT.fetch_add(1, Ordering::SeqCst) >= NOTIFY_MAX_IN_FLIGHT {
         NOTIFY_IN_FLIGHT.fetch_sub(1, Ordering::SeqCst);
-        tracing::info!(%title, %body, "notificação (muitas em voo; só no log)");
+        tracing::warn!(name: "platform", op = "notify", ok = false, title_len, body_len, in_flight = NOTIFY_MAX_IN_FLIGHT, "notificação descartada: muitas em voo");
         return;
     }
     std::thread::spawn(move || {
@@ -42,8 +44,13 @@ pub fn notify(title: &str, body: &str) {
         {
             let mut n = notify_rust::Notification::new();
             n.appname("will-ia").summary(&title).body(&body);
-            if let Err(e) = n.show() {
-                tracing::debug!(error = %e, "notificação nativa falhou");
+            match n.show() {
+                Ok(_) => {
+                    tracing::debug!(name: "platform", op = "notify", ok = true, title_len, body_len, "notificação nativa exibida")
+                }
+                Err(e) => {
+                    tracing::warn!(name: "platform", op = "notify", ok = false, title_len, body_len, error = %e, "notificação nativa falhou")
+                }
             }
         }
         #[cfg(not(any(
@@ -53,7 +60,7 @@ pub fn notify(title: &str, body: &str) {
             target_os = "windows"
         )))]
         {
-            tracing::info!(%title, %body, "notificação");
+            tracing::info!(name: "platform", op = "notify", ok = false, title_len, body_len, "notificação sem backend nativo neste SO (só no log)");
         }
     });
 }
@@ -70,7 +77,7 @@ pub enum DirAccess {
 }
 
 pub fn dir_access(path: &Path) -> DirAccess {
-    match std::fs::read_dir(path) {
+    let access = match std::fs::read_dir(path) {
         Ok(mut it) => match it.next() {
             Some(Err(e)) if e.kind() == std::io::ErrorKind::PermissionDenied => DirAccess::Denied,
             _ => DirAccess::Ok,
@@ -78,7 +85,11 @@ pub fn dir_access(path: &Path) -> DirAccess {
         Err(e) if e.kind() == std::io::ErrorKind::PermissionDenied => DirAccess::Denied,
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => DirAccess::Missing,
         Err(e) => DirAccess::Other(e.to_string()),
+    };
+    if access == DirAccess::Denied {
+        tracing::warn!(name: "platform", permission = "files_and_folders", granted = false, path = %path.display(), "acesso à pasta negado pelo SO");
     }
+    access
 }
 
 /// Há sessão gráfica (bandeja, app, Chrome visível)? Windows/macOS: sempre;
@@ -91,11 +102,17 @@ pub fn has_desktop() -> bool {
 }
 
 pub fn open_path(path: &Path) -> Result<(), String> {
-    open::that_detached(path).map_err(|e| e.to_string())
+    open::that_detached(path).map_err(|e| {
+        tracing::warn!(name: "platform", op = "open_path", ok = false, error = %e, "abrir pasta falhou");
+        e.to_string()
+    })
 }
 
 pub fn open_url(url: &str) -> Result<(), String> {
-    open::that_detached(url).map_err(|e| e.to_string())
+    open::that_detached(url).map_err(|e| {
+        tracing::warn!(name: "platform", op = "open_url", ok = false, error = %e, "abrir URL falhou");
+        e.to_string()
+    })
 }
 
 /// Procura um executável no PATH (com extensões do Windows).

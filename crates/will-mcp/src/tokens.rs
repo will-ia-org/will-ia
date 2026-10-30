@@ -35,6 +35,7 @@ impl TokenRegistry {
         if let Some(t) = self.by_thread.read().get(&thread_id) {
             return t.clone();
         }
+        tracing::debug!(%thread_id, channel = origin.kind().as_str(), "bearer MCP emitido para a thread");
         let t = random_token();
         self.by_token.write().insert(
             t.clone(),
@@ -58,6 +59,7 @@ impl TokenRegistry {
     /// Registra um token geral já existente (ex.: o token fixo para scripts,
     /// guardado no cofre de segredos e reaplicado a cada subida).
     pub fn register_generic(&self, token: &str) {
+        tracing::debug!("bearer MCP genérico (scripts) registrado");
         self.by_token.write().insert(
             token.to_string(),
             Caller {
@@ -70,12 +72,19 @@ impl TokenRegistry {
 
     /// Revoga todos os tokens gerais (rotação do token de scripts).
     pub fn revoke_generic(&self) {
-        self.by_token.write().retain(|_, c| !c.generic);
+        let mut g = self.by_token.write();
+        let before = g.len();
+        g.retain(|_, c| !c.generic);
+        tracing::info!(
+            revoked = before - g.len(),
+            "bearers MCP genéricos revogados (rotação)"
+        );
     }
 
     pub fn revoke_thread(&self, thread_id: ThreadId) {
         if let Some(t) = self.by_thread.write().remove(&thread_id) {
             self.by_token.write().remove(&t);
+            tracing::debug!(%thread_id, "bearer MCP da thread revogado");
         }
     }
 

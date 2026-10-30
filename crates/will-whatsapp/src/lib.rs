@@ -39,7 +39,7 @@ pub fn qr_svg(data: &str) -> String {
             .light_color(svg::Color("#ffffff"))
             .build(),
         Err(e) => {
-            tracing::warn!("qr_svg: {e}");
+            tracing::warn!(error = %e, "qr_svg falhou");
             format!(
                 "<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"256\" height=\"64\"><text x=\"8\" y=\"36\" font-size=\"14\">QR inválido: {}</text></svg>",
                 e.to_string().replace('<', "&lt;")

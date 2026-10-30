@@ -271,21 +271,24 @@ impl WillTool for CalendarTool {
         }
     }
 
-    async fn call(&self, _ctx: ToolContext, args: Value) -> Result<ToolOutput, ToolError> {
+    async fn call(&self, ctx: ToolContext, args: Value) -> Result<ToolOutput, ToolError> {
         let m = &self.module;
-        if !m.config().calendar.enabled {
-            return Err(ToolError::Unavailable("módulo Agenda desligado".into()));
-        }
-        match self.kind {
-            Kind::ListCalendars => list_calendars(m).await,
-            Kind::ListEvents => list_events(m, &args).await,
-            Kind::GetEvent => get_event(m, &args).await,
-            Kind::FreeBusy => free_busy(m, &args).await,
-            Kind::CreateEvent => create_event(m, &args).await,
-            Kind::UpdateEvent => update_event(m, &args).await,
-            Kind::DeleteEvent => delete_event(m, &args).await,
-            Kind::Respond => respond(m, &args).await,
-        }
+        crate::traced_op("calendar", self.kind.name(), &ctx, async {
+            if !m.config().calendar.enabled {
+                return Err(ToolError::Unavailable("módulo Agenda desligado".into()));
+            }
+            match self.kind {
+                Kind::ListCalendars => list_calendars(m).await,
+                Kind::ListEvents => list_events(m, &args).await,
+                Kind::GetEvent => get_event(m, &args).await,
+                Kind::FreeBusy => free_busy(m, &args).await,
+                Kind::CreateEvent => create_event(m, &args).await,
+                Kind::UpdateEvent => update_event(m, &args).await,
+                Kind::DeleteEvent => delete_event(m, &args).await,
+                Kind::Respond => respond(m, &args).await,
+            }
+        })
+        .await
     }
 }
 
@@ -814,7 +817,7 @@ async fn create_event(m: &GoogleModule, args: &Value) -> Result<ToolOutput, Tool
             })
             .collect(),
         Err(e) => {
-            tracing::warn!(module = "google", error = %e, "detecção de conflitos falhou");
+            tracing::warn!(account_id = %acc.id, error = %e, "detecção de conflitos falhou");
             Vec::new()
         }
     };

@@ -422,14 +422,30 @@ impl WillTool for DriveTool {
         }
     }
 
-    async fn call(&self, _ctx: ToolContext, args: Value) -> Result<ToolOutput, ToolError> {
+    async fn call(&self, ctx: ToolContext, args: Value) -> Result<ToolOutput, ToolError> {
         let m = &self.module;
-        if !m.config().drive.enabled {
-            return Err(ToolError::Unavailable("módulo Drive desligado".into()));
-        }
-        let acc = m
-            .resolve_drive_account(arg_opt_str(&args, "account"))
-            .await?;
+        crate::traced_op("drive", self.kind.name(), &ctx, async {
+            if !m.config().drive.enabled {
+                return Err(ToolError::Unavailable("módulo Drive desligado".into()));
+            }
+            let acc = m
+                .resolve_drive_account(arg_opt_str(&args, "account"))
+                .await?;
+            self.dispatch(m, &acc, &args).await
+        })
+        .await
+    }
+}
+
+impl DriveTool {
+    async fn dispatch(
+        &self,
+        m: &GoogleModule,
+        acc: &GoogleAccount,
+        args: &Value,
+    ) -> Result<ToolOutput, ToolError> {
+        let acc = acc.clone();
+        let args = args.clone();
         match self.kind {
             Kind::List => ops::list(m, &acc, &args).await,
             Kind::Search => ops::search(m, &acc, &args).await,
