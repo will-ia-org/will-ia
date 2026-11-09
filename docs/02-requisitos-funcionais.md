@@ -111,6 +111,8 @@ Convenção de identificação: `RF-<módulo>-<nº>`. Prioridade: **M** (Must, M
 | RF-MCP-01 | O serviço deve expor um servidor MCP com transporte Streamable HTTP em `127.0.0.1:<porta>/mcp`. | M |
 | RF-MCP-02 | Toda requisição deve carregar `Authorization: Bearer <token>`, onde o token é emitido por spawn e identifica a thread chamadora. Tokens expiram quando o processo encerra. | M |
 | RF-MCP-03 | Ferramenta `telegram_send_message(text, chat_id?, topic_id?)`: envia mensagem pelo bot. Sem `chat_id`/`topic_id`, usa o tópico de origem da thread (se originada no Telegram) ou o tópico padrão configurado. | M |
+| RF-MCP-03b | Ferramenta `telegram_send_file(path, caption?, kind?, …)`: envia um arquivo da base de conhecimento (foto, vídeo, áudio, animação ou documento) pelo bot, com legenda opcional; `path` fora da KB é recusado; limite de 50 MB. Mesma resolução de destino de RF-MCP-03. | S |
+| RF-MCP-03c | Ferramenta `telegram_send_voice(text? \| path?, …)`: envia mensagem de voz pelo bot, sintetizando `text` com a chave da OpenAI do módulo de voz ou usando um áudio da KB. Mesma resolução de destino de RF-MCP-03. | C |
 | RF-MCP-04 | Ferramenta `notify_user(title, body)`: notificação nativa no desktop. | S |
 | RF-MCP-05 | Ferramentas `list_threads()` e `create_thread(title, initial_prompt)`: permitem a um agente delegar trabalho a outra thread. | C |
 | RF-MCP-06 | Cada ferramenta pode ser habilitada/desabilitada individualmente nas configurações; ferramentas desabilitadas não aparecem na listagem `tools/list`. | M |

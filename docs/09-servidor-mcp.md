@@ -48,7 +48,7 @@ Cada ferramenta tem uma política persistida em `tool_policies`:
 | `confirmar` | cria um `Approval` com resumo legível dos argumentos, notifica o dono (UI + notificação nativa + Telegram com botões ✅/❌ se ativo) e **bloqueia** a chamada até decisão ou timeout (padrão 5 min → `denied: timeout`) |
 | `desligada` | não aparece em `tools/list`; chamada direta retorna erro |
 
-Padrões: leitura → `auto`; efeito externo (`telegram_send_message` para fora do tópico de origem, `whatsapp_send_*`, `gmail_send`, `gmail_modify`, `calendar_create/update/delete_event`, `drive_upload/create_file/update/trash/share/unshare`) → `confirmar`. O usuário pode alterar por ferramenta na seção MCP, com aviso ao baixar para `auto`.
+Padrões: leitura → `auto`; efeito externo (`telegram_send_message`/`telegram_send_file`/`telegram_send_voice`, `whatsapp_send_*`, `gmail_send`, `gmail_modify`, `calendar_create/update/delete_event`, `drive_upload/create_file/update/trash/share/unshare`) → `confirmar`. O usuário pode alterar por ferramenta na seção MCP, com aviso ao baixar para `auto`.
 
 O resultado de uma chamada negada é um `ToolOutput` com `is_error: true` e texto "Ação não aprovada pelo usuário", para que o agente informe e não insista. Decisões ficam em `approvals` e aparecem na aba Logs. Ver [ADR-0013](adr/0013-politicas-de-aprovacao-mcp.md).
 
@@ -75,6 +75,57 @@ Regras:
 - Sem `chat_id`/`topic_id`: se a thread nasceu no Telegram, usa seu tópico; senão usa o "destino padrão" configurado (primeiro chat da allowlist, como na referência).
 - Texto dividido em 4096; retorno `{ "message_ids": [...] }`.
 - Em modo `html`, o texto é validado/escapado; falha de parse do Telegram → tenta de novo como texto puro e avisa no resultado.
+
+### `telegram_send_file`
+
+Envia um arquivo da **base de conhecimento** (foto, vídeo, áudio, GIF/animação ou documento) com legenda opcional. Política padrão **confirmar**.
+
+```json
+{
+  "type": "object",
+  "properties": {
+    "path":       { "type": "string", "description": "Caminho do arquivo dentro da KB (absoluto ou relativo à KB)." },
+    "caption":    { "type": "string", "description": "Legenda (opcional, ≤ 1024 caracteres; HTML básico se parse_mode=html)." },
+    "kind":       { "type": "string", "enum": ["auto", "photo", "video", "audio", "animation", "document"], "default": "auto" },
+    "parse_mode": { "type": "string", "enum": ["text", "html"], "default": "text" },
+    "duration_secs": { "type": "integer", "minimum": 1 },
+    "chat_id":    { "type": "string" },
+    "topic_id":   { "type": "integer" },
+    "reply_to_message_id": { "type": "integer" }
+  },
+  "required": ["path"]
+}
+```
+
+Regras (`crates/will-telegram/src/media.rs`):
+- `path` precisa resolver (canônico) para um arquivo regular **dentro da KB**; fora → `Forbidden`.
+- `kind=auto` pela extensão: imagem → `sendPhoto` (acima de 10 MB vira `sendDocument`), `.gif` → `sendAnimation`, vídeo → `sendVideo`, áudio → `sendAudio`, resto → `sendDocument`. `document` explícito preserva o arquivo sem recompressão.
+- Limite do Bot API por upload: **50 MB**; legenda ≤ 1024 caracteres (texto longo vai em `telegram_send_message`).
+- Chat action coerente com o tipo (`upload_photo`, `upload_video`, `upload_document`…). Legenda em HTML recusada → reenvia como texto puro.
+- Retorno `{ message_id, chat_id, topic_id, kind, mime, size_bytes, file_name }`.
+
+### `telegram_send_voice`
+
+Mensagem de **voz** (balão com onda sonora, `sendVoice`): `text` → fala sintetizada pela OpenAI (mesma chave do módulo de voz; voz e velocidade do "resumo em áudio" do Telegram) **ou** `path` → áudio da KB (ogg/opus de preferência; mp3/m4a também). Política padrão **confirmar**.
+
+```json
+{
+  "type": "object",
+  "properties": {
+    "text":    { "type": "string", "description": "Texto a ser falado (≤ 4000 caracteres); alternativa a path." },
+    "path":    { "type": "string", "description": "Áudio dentro da KB; alternativa a text." },
+    "caption": { "type": "string" },
+    "duration_secs": { "type": "integer", "minimum": 1 },
+    "chat_id": { "type": "string" },
+    "topic_id": { "type": "integer" },
+    "reply_to_message_id": { "type": "integer" }
+  }
+}
+```
+
+- Sem chave da OpenAI, `text` devolve `Unavailable` pedindo `path`.
+- A fala sintetizada é gravada em `<kb>/<attachments_dir>/voz-enviada/voz-<uuid>.ogg` antes do envio (fica como registro).
+- Retorno `{ message_id, chat_id, topic_id, path, synthesized, mime, size_bytes }`.
 
 ### `notify_user` (Should)
 

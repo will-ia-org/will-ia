@@ -483,6 +483,7 @@ fn tool_label(tool: &str) -> String {
     let s = match tool {
         "telegram_send_message" | "telegram_send" => "Telegram · enviar mensagem",
         "telegram_send_file" | "telegram_send_document" => "Telegram · enviar arquivo",
+        "telegram_send_voice" => "Telegram · enviar mensagem de voz",
         "whatsapp_send_message" | "whatsapp_send" => "WhatsApp · enviar mensagem",
         "whatsapp_send_media" => "WhatsApp · enviar mídia",
         "whatsapp_mark_read" => "WhatsApp · marcar como lida",

@@ -1,13 +1,15 @@
 //! Envio de mensagens para o Telegram com split em 4096, fallback HTML→texto e
 //! allowlist de destinos. Usado pelo módulo e pela ferramenta `telegram_send_message`.
 
+use crate::media::FileKind;
 use crate::text::{split_message, TELEGRAM_MAX};
+use std::path::Path;
 use std::time::Instant;
 use teloxide::payloads::setters::*;
 use teloxide::prelude::Requester;
 use teloxide::types::{
-    ChatAction, ChatId, InlineKeyboardMarkup, Message, MessageId, ParseMode, ReplyParameters,
-    ThreadId,
+    ChatAction, ChatId, InlineKeyboardMarkup, InputFile, Message, MessageId, ParseMode,
+    ReplyParameters, ThreadId,
 };
 use teloxide::{ApiError, Bot, RequestError};
 use tracing::Instrument;
@@ -242,6 +244,128 @@ impl TelegramSender {
                     self.send_chunks(chat_id, topic_id, plain_text, false, reply_to)
                         .await
                         .map_err(|e| e.to_string())
+                }
+                Err(e) => Err(e.to_string()),
+            };
+            note_outbound(&res, started, false);
+            res
+        }
+        .instrument(span)
+        .await
+    }
+
+    /// Um upload (foto/vídeo/áudio/animação/documento/voz) sem fallback. Erro cru.
+    #[allow(clippy::too_many_arguments)]
+    async fn send_file_once(
+        &self,
+        chat_id: i64,
+        topic_id: Option<i64>,
+        path: &Path,
+        kind: FileKind,
+        caption: Option<&str>,
+        html: bool,
+        reply_to: Option<i32>,
+        duration: Option<u32>,
+    ) -> Result<Message, RequestError> {
+        let chat = ChatId(chat_id);
+        let file = InputFile::file(path);
+        let topic = topic(topic_id);
+        let reply =
+            reply_to.map(|r| ReplyParameters::new(MessageId(r)).allow_sending_without_reply());
+        // Os setters têm o mesmo nome em todos os payloads, mas cada um é um tipo
+        // diferente; a macro evita repetir o encadeamento seis vezes.
+        macro_rules! finish {
+            ($req:expr) => {{
+                let mut req = $req;
+                if let Some(t) = topic {
+                    req = req.message_thread_id(t);
+                }
+                if let Some(c) = caption {
+                    req = req.caption(c);
+                    if html {
+                        req = req.parse_mode(ParseMode::Html);
+                    }
+                }
+                if let Some(r) = reply {
+                    req = req.reply_parameters(r);
+                }
+                req.await
+            }};
+        }
+        match kind {
+            FileKind::Photo => finish!(self.bot.send_photo(chat, file)),
+            FileKind::Video => {
+                let mut req = self.bot.send_video(chat, file).supports_streaming(true);
+                if let Some(d) = duration {
+                    req = req.duration(d);
+                }
+                finish!(req)
+            }
+            FileKind::Audio => {
+                let mut req = self.bot.send_audio(chat, file);
+                if let Some(d) = duration {
+                    req = req.duration(d);
+                }
+                finish!(req)
+            }
+            FileKind::Animation => finish!(self.bot.send_animation(chat, file)),
+            FileKind::Document => finish!(self.bot.send_document(chat, file)),
+            FileKind::Voice => {
+                let mut req = self.bot.send_voice(chat, file);
+                if let Some(d) = duration {
+                    req = req.duration(d);
+                }
+                finish!(req)
+            }
+        }
+    }
+
+    /// Envia um arquivo local pelo método do Bot API indicado por `kind`, com
+    /// legenda opcional. Em `html`, se o Telegram recusar o parse da legenda,
+    /// reenvia com a legenda como texto puro. Devolve o id da mensagem.
+    #[allow(clippy::too_many_arguments)]
+    pub async fn send_file(
+        &self,
+        chat_id: i64,
+        topic_id: Option<i64>,
+        thread_id: Option<will_core::ThreadId>,
+        path: &Path,
+        kind: FileKind,
+        caption: Option<&str>,
+        html: bool,
+        reply_to: Option<i32>,
+        duration: Option<u32>,
+    ) -> Result<i32, String> {
+        let span = outbound_span(chat_id, topic_id, thread_id, kind.as_str());
+        async move {
+            let started = Instant::now();
+            let action = match kind {
+                FileKind::Photo => ChatAction::UploadPhoto,
+                FileKind::Video | FileKind::Animation => ChatAction::UploadVideo,
+                FileKind::Audio => ChatAction::UploadVoice,
+                FileKind::Voice => ChatAction::RecordVoice,
+                FileKind::Document => ChatAction::UploadDocument,
+            };
+            self.chat_action(chat_id, topic_id, action).await;
+            let res = match self
+                .send_file_once(
+                    chat_id, topic_id, path, kind, caption, html, reply_to, duration,
+                )
+                .await
+            {
+                Ok(m) => Ok(m.id.0),
+                Err(e) if html && caption.is_some() && is_parse_error(&e) => {
+                    tracing::warn!(
+                        chat_id,
+                        error = %e,
+                        "HTML da legenda recusado pelo Telegram, reenviando como texto"
+                    );
+                    self.send_file_once(
+                        chat_id, topic_id, path, kind, caption, false, reply_to, duration,
+                    )
+                    .await
+                    .map(|m| m.id.0)
+                    .map_err(|e| e.to_string())
                 }
                 Err(e) => Err(e.to_string()),
             };

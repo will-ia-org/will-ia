@@ -879,6 +879,7 @@ pub static TABLE: &[(&str, &str)] = &[
     ("decidido em {}", "decided at {}"),
     ("Telegram · enviar mensagem", "Telegram · send message"),
     ("Telegram · enviar arquivo", "Telegram · send file"),
+    ("Telegram · enviar mensagem de voz", "Telegram · send voice message"),
     ("WhatsApp · enviar mensagem", "WhatsApp · send message"),
     ("WhatsApp · enviar mídia", "WhatsApp · send media"),
     ("WhatsApp · marcar como lida", "WhatsApp · mark as read"),

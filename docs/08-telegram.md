@@ -56,6 +56,8 @@ Comportamento: cria a mensagem de status na primeira entrada; edita com throttle
 5. Opcional: **resumo em áudio** (voice note) se habilitado e resposta ≥ 120 chars: resumo "falável" por um modelo de texto + TTS em Ogg/Opus → `sendVoice` com `record_voice` como chat action. Best-effort, nunca bloqueia.
 6. Erro (`is_error`) → prefixo ⚠️ e sem áudio.
 
+Ferramentas MCP do canal (`tool.rs`): `telegram_send_message`, `telegram_send_file` e `telegram_send_voice` — especificação e regras em [09](09-servidor-mcp.md). Os uploads reaproveitam o `TelegramSender` (`send_file`: chat action por tipo, legenda com fallback HTML→texto, span `outbound` com `kind` = photo/video/audio/animation/document/voice).
+
 Formatação: a referência envia a final como **texto puro** e instrui o agente (via `--append-system-prompt`) a evitar Markdown. Mantemos isso como padrão, com opção "converter Markdown → HTML do Telegram" para quem preferir formatação (conversor próprio, escapando `& < >`).
 
 ## Comandos builtin

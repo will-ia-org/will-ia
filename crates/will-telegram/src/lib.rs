@@ -9,12 +9,13 @@ mod commands;
 pub mod conversation;
 mod events;
 mod handler;
+pub mod media;
 mod sender;
 pub mod text;
 mod tool;
 
 pub use sender::TelegramSender;
-pub use tool::SendMessageTool;
+pub use tool::{SendFileTool, SendMessageTool, SendVoiceTool};
 
 use crate::conversation::Conversation;
 use parking_lot::Mutex;
@@ -539,9 +540,23 @@ impl ToolProvider for TelegramModule {
     }
 
     fn tools(&self) -> Vec<Arc<dyn WillTool>> {
-        vec![Arc::new(SendMessageTool {
-            sender: self.sender.clone(),
-        })]
+        vec![
+            Arc::new(SendMessageTool {
+                sender: self.sender.clone(),
+            }),
+            Arc::new(SendFileTool {
+                sender: self.sender.clone(),
+                kb_path: self.kb_path.clone(),
+            }),
+            Arc::new(SendVoiceTool {
+                sender: self.sender.clone(),
+                kb_path: self.kb_path.clone(),
+                openai: self.openai.clone(),
+                voice: self.settings.audio_voice.clone(),
+                speed: self.settings.audio_speed,
+                voice_dir: tool::default_voice_dir(&self.kb_path, &self.settings.attachments_dir),
+            }),
+        ]
     }
 
     fn available(&self) -> bool {
