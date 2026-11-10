@@ -719,8 +719,17 @@ impl Client {
     pub async fn complete_task(&self, id: &str) -> ApiResult {
         self.post(&format!("tasks/{id}/complete"), None).await
     }
+    /// Fecha como não realizada.
+    pub async fn skip_task(&self, id: &str) -> ApiResult {
+        self.post(&format!("tasks/{id}/skip"), None).await
+    }
     pub async fn reopen_task(&self, id: &str) -> ApiResult {
         self.post(&format!("tasks/{id}/reopen"), None).await
+    }
+    /// Sincroniza tarefas ↔ Google Calendar: `{from, to}` (`YYYY-MM-DD`) e
+    /// `calendar_id` opcionais; devolve o relatório.
+    pub async fn sync_tasks_calendar(&self, body: Value) -> ApiResult {
+        self.post("tasks/sync-calendar", Some(body)).await
     }
     // ----- triggers -----
     pub async fn triggers(&self) -> ApiResult {

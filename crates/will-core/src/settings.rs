@@ -658,6 +658,9 @@ pub struct TasksSettings {
     pub notify_native: bool,
     /// Ordenação do Gantt guardada: `start` | `alpha` | `priority`.
     pub sort: String,
+    /// Agenda do Google usada na sincronização (id); vazio = a agenda padrão
+    /// de criação configurada em Google › Agenda.
+    pub sync_calendar_id: String,
 }
 impl Default for TasksSettings {
     fn default() -> Self {
@@ -668,6 +671,7 @@ impl Default for TasksSettings {
             notify_overdue: false,
             notify_native: true,
             sort: "start".into(),
+            sync_calendar_id: String::new(),
         }
     }
 }

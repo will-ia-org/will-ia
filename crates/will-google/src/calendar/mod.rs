@@ -1011,6 +1011,161 @@ async fn respond(m: &GoogleModule, args: &Value) -> Result<ToolOutput, ToolError
     Ok(ToolOutput::json(&out))
 }
 
+// ----- acesso cru para a sincronização de tarefas (`will-tasks`, docs/31) -----
+
+/// Operações de agenda sem a camada de ferramenta (sem política, sem resumo
+/// de aprovação): usadas pela sincronização Tarefas ↔ Google Calendar, que é
+/// uma ação explícita do usuário no app. Exigem a Agenda ligada e uma agenda
+/// **habilitada e gravável**.
+impl GoogleModule {
+    fn calendar_on(&self) -> Result<(), GoogleError> {
+        if !self.config().calendar.enabled {
+            return Err(GoogleError::Config(
+                "Agenda desligada (Configurações › Google › Agenda)".into(),
+            ));
+        }
+        Ok(())
+    }
+
+    /// Agenda alvo da sincronização: `wanted` (id) entre as habilitadas, ou a
+    /// padrão de criação / a única gravável. Precisa ser gravável.
+    pub async fn sync_calendar(&self, wanted: Option<&str>) -> Result<GoogleCalendar, GoogleError> {
+        self.calendar_on()?;
+        let list = self.enabled_calendars().await?;
+        if list.is_empty() {
+            return Err(GoogleError::Config(
+                "nenhuma agenda habilitada (Configurações › Google › Agenda)".into(),
+            ));
+        }
+        let cal = match wanted.map(str::trim).filter(|w| !w.is_empty()) {
+            Some(id) => list
+                .iter()
+                .find(|c| c.calendar_id == id)
+                .cloned()
+                .ok_or_else(|| {
+                    GoogleError::Invalid(format!(
+                        "agenda '{id}' não está habilitada em Google › Agenda"
+                    ))
+                })?,
+            None => {
+                let writable: Vec<&GoogleCalendar> =
+                    list.iter().filter(|c| is_writable(c)).collect();
+                match list.iter().find(|c| c.default_for_create) {
+                    Some(c) => c.clone(),
+                    None if writable.len() == 1 => writable[0].clone(),
+                    None => {
+                        return Err(GoogleError::Config(
+                            "escolha a agenda da sincronização (ou marque uma agenda padrão em Google › Agenda)"
+                                .into(),
+                        ))
+                    }
+                }
+            }
+        };
+        if !is_writable(&cal) {
+            return Err(GoogleError::Invalid(format!(
+                "agenda '{}' é somente leitura",
+                cal.summary
+            )));
+        }
+        Ok(cal)
+    }
+
+    /// Eventos (ocorrências expandidas) com início em `[time_min, time_max)`,
+    /// crus como a API devolve. Até 2500.
+    pub async fn calendar_events_raw(
+        &self,
+        cal: &GoogleCalendar,
+        time_min: &str,
+        time_max: &str,
+    ) -> Result<Vec<Value>, GoogleError> {
+        self.calendar_on()?;
+        let tz = self.config().calendar.timezone;
+        fetch_raw_events(self, cal, time_min, time_max, None, 2500, tz.as_deref()).await
+    }
+
+    /// Evento pelo id; `None` se não existe mais (404/410) ou está cancelado.
+    pub async fn calendar_event_raw(
+        &self,
+        cal: &GoogleCalendar,
+        event_id: &str,
+    ) -> Result<Option<Value>, GoogleError> {
+        self.calendar_on()?;
+        let acc = self.account_ready(&cal.account_id).await?;
+        let path = format!(
+            "calendar/v3/calendars/{}/events/{}",
+            enc(&cal.calendar_id),
+            enc(event_id)
+        );
+        match self.client.get(&acc, &path, &[]).await {
+            Ok(ev) => {
+                Ok((ev.get("status").and_then(|s| s.as_str()) != Some("cancelled")).then_some(ev))
+            }
+            Err(GoogleError::Api {
+                status: 404 | 410, ..
+            }) => Ok(None),
+            Err(e) => Err(e),
+        }
+    }
+
+    pub async fn calendar_insert_raw(
+        &self,
+        cal: &GoogleCalendar,
+        body: &Value,
+    ) -> Result<Value, GoogleError> {
+        self.calendar_on()?;
+        let acc = self.account_ready(&cal.account_id).await?;
+        let path = format!("calendar/v3/calendars/{}/events", enc(&cal.calendar_id));
+        self.client
+            .post(&acc, &path, &[("sendUpdates", "none".into())], body)
+            .await
+    }
+
+    pub async fn calendar_patch_raw(
+        &self,
+        cal: &GoogleCalendar,
+        event_id: &str,
+        body: &Value,
+    ) -> Result<Value, GoogleError> {
+        self.calendar_on()?;
+        let acc = self.account_ready(&cal.account_id).await?;
+        let path = format!(
+            "calendar/v3/calendars/{}/events/{}",
+            enc(&cal.calendar_id),
+            enc(event_id)
+        );
+        self.client
+            .patch(&acc, &path, &[("sendUpdates", "none".into())], body)
+            .await
+    }
+
+    /// Apaga o evento; já inexistente (404/410) conta como sucesso.
+    pub async fn calendar_delete_raw(
+        &self,
+        cal: &GoogleCalendar,
+        event_id: &str,
+    ) -> Result<(), GoogleError> {
+        self.calendar_on()?;
+        let acc = self.account_ready(&cal.account_id).await?;
+        let path = format!(
+            "calendar/v3/calendars/{}/events/{}",
+            enc(&cal.calendar_id),
+            enc(event_id)
+        );
+        match self
+            .client
+            .delete(&acc, &path, &[("sendUpdates", "none".into())])
+            .await
+        {
+            Ok(_) => Ok(()),
+            Err(GoogleError::Api {
+                status: 404 | 410, ..
+            }) => Ok(()),
+            Err(e) => Err(e),
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

@@ -2,7 +2,9 @@
 //! opcional, prioridade e conclusão, vistos num Gantt no app e manipulados
 //! pelo agente (`tasks_*`). O estado é **derivado** do relógio:
 //! `upcoming` (ainda não começou) → `running` (começou; sem fim ou antes do fim)
-//! → `overdue` (passou do fim sem concluir); `done` quando marcada concluída.
+//! → `overdue` (passou do fim sem concluir); `done` quando marcada concluída e
+//! `skipped` quando fechada como **não realizada** (some da tela como a
+//! concluída, mas registra que não foi feita — ex.: faltou à academia).
 
 use crate::ids::TaskId;
 use chrono::{DateTime, Utc};
@@ -68,6 +70,7 @@ pub enum TaskState {
     Running,
     Overdue,
     Done,
+    Skipped,
 }
 
 impl TaskState {
@@ -77,6 +80,7 @@ impl TaskState {
             TaskState::Running => "running",
             TaskState::Overdue => "overdue",
             TaskState::Done => "done",
+            TaskState::Skipped => "skipped",
         }
     }
     pub fn label_pt(self) -> &'static str {
@@ -85,6 +89,7 @@ impl TaskState {
             TaskState::Running => "em andamento",
             TaskState::Overdue => "atrasada",
             TaskState::Done => "concluída",
+            TaskState::Skipped => "não realizada",
         }
     }
 }
@@ -98,8 +103,11 @@ pub struct Task {
     pub start_at: DateTime<Utc>,
     /// Fim (opcional): a partir dele, sem conclusão, a tarefa fica atrasada.
     pub end_at: Option<DateTime<Utc>>,
-    /// Quando foi marcada como concluída (`None` = pendente).
+    /// Quando foi fechada (`None` = pendente): concluída, ou não realizada se `skipped`.
     pub done_at: Option<DateTime<Utc>>,
+    /// Fechada como **não realizada** (só vale com `done_at`).
+    #[serde(default)]
+    pub skipped: bool,
     pub priority: TaskPriority,
     /// `agent` (via MCP) ou `user` (UI/API).
     pub created_by: String,
@@ -108,12 +116,33 @@ pub struct Task {
     /// Quando o laço notou que entrou em andamento / em atraso (evita avisar duas vezes).
     pub notified_start_at: Option<DateTime<Utc>>,
     pub notified_overdue_at: Option<DateTime<Utc>>,
+    /// Vínculo com o Google Calendar (sincronização, `docs/31`): agenda e
+    /// evento espelhados; `synced_at` = última sincronização no relógio local
+    /// (`updated_at > synced_at` ⇒ editada aqui depois); `remote_updated_at` =
+    /// `updated` do evento visto nela (diferente ⇒ editado no Google depois).
+    #[serde(default)]
+    pub calendar_id: Option<String>,
+    #[serde(default)]
+    pub event_id: Option<String>,
+    #[serde(default)]
+    pub synced_at: Option<DateTime<Utc>>,
+    #[serde(default)]
+    pub remote_updated_at: Option<DateTime<Utc>>,
 }
 
 impl Task {
+    /// Está espelhada num evento do Google Calendar.
+    pub fn is_linked(&self) -> bool {
+        self.calendar_id.is_some() && self.event_id.is_some()
+    }
+
     pub fn state_at(&self, now: DateTime<Utc>) -> TaskState {
         if self.done_at.is_some() {
-            return TaskState::Done;
+            return if self.skipped {
+                TaskState::Skipped
+            } else {
+                TaskState::Done
+            };
         }
         if now < self.start_at {
             return TaskState::Upcoming;
@@ -145,12 +174,17 @@ mod tests {
             start_at: t(start),
             end_at: end.map(t),
             done_at: None,
+            skipped: false,
             priority: TaskPriority::Medium,
             created_by: "user".into(),
             created_at: t(0),
             updated_at: t(0),
             notified_start_at: None,
             notified_overdue_at: None,
+            calendar_id: None,
+            event_id: None,
+            synced_at: None,
+            remote_updated_at: None,
         }
     }
 
@@ -166,6 +200,8 @@ mod tests {
         let mut done = task(10, Some(12));
         done.done_at = Some(t(11));
         assert_eq!(done.state_at(t(20)), TaskState::Done);
+        done.skipped = true;
+        assert_eq!(done.state_at(t(20)), TaskState::Skipped);
     }
 
     #[test]

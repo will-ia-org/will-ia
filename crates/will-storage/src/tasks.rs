@@ -13,6 +13,34 @@ pub struct NewTask {
     pub end_at: Option<DateTime<Utc>>,
     pub priority: TaskPriority,
     pub created_by: String,
+    /// Só na importação do Google Calendar: já nasce fechada e/ou vinculada.
+    pub done_at: Option<DateTime<Utc>>,
+    pub skipped: bool,
+    pub link: Option<TaskLink>,
+}
+
+/// Vínculo com um evento do Google Calendar.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TaskLink {
+    pub calendar_id: String,
+    pub event_id: String,
+    /// Relógio local no momento da sincronização.
+    pub synced_at: DateTime<Utc>,
+    /// `updated` do evento no Google nesse momento.
+    pub remote_updated_at: DateTime<Utc>,
+}
+
+/// Conteúdo vindo do evento do Google (aplicado inteiro, `updated_at = synced_at`).
+#[derive(Debug, Clone)]
+pub struct RemoteTask {
+    pub title: String,
+    pub description: String,
+    pub start_at: DateTime<Utc>,
+    pub end_at: Option<DateTime<Utc>>,
+    pub done_at: Option<DateTime<Utc>>,
+    pub skipped: bool,
+    pub priority: TaskPriority,
+    pub link: TaskLink,
 }
 
 /// Campos editáveis; `None` = não mexe. `end_at: Some(None)` limpa o fim.
@@ -38,35 +66,159 @@ fn row_to_task(r: &sqlx::sqlite::SqliteRow) -> Option<Task> {
         start_at: parse_dt(&r.get::<String, _>("start_at")),
         end_at: opt_dt(r, "end_at"),
         done_at: opt_dt(r, "done_at"),
+        skipped: r.get::<i64, _>("skipped") != 0,
         priority: TaskPriority::from_rank(r.get::<i64, _>("priority")),
         created_by: r.get("created_by"),
         created_at: parse_dt(&r.get::<String, _>("created_at")),
         updated_at: parse_dt(&r.get::<String, _>("updated_at")),
         notified_start_at: opt_dt(r, "notified_start_at"),
         notified_overdue_at: opt_dt(r, "notified_overdue_at"),
+        calendar_id: r.get::<Option<String>, _>("calendar_id"),
+        event_id: r.get::<Option<String>, _>("event_id"),
+        synced_at: opt_dt(r, "synced_at"),
+        remote_updated_at: opt_dt(r, "remote_updated_at"),
     })
 }
 
 impl Storage {
     pub async fn insert_task(&self, n: &NewTask) -> Result<Task> {
         let id = TaskId::new();
-        let ts = now();
+        // Importada da agenda: `created_at`/`updated_at` = `synced_at`, senão a
+        // tarefa pareceria "editada depois da sincronização" na rodada seguinte.
+        let ts = n.link.as_ref().map(|l| l.synced_at).unwrap_or_else(now);
+        // Importada já concluída: as marcas de aviso entram preenchidas (o
+        // laço não avisa "entrou em andamento" de algo que já acabou).
+        let marks = n.done_at.map(|_| fmt(ts));
         sqlx::query(
-            "INSERT INTO tasks (id, title, description, start_at, end_at, priority, created_by, created_at, updated_at) \
-             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            "INSERT INTO tasks (id, title, description, start_at, end_at, done_at, skipped, priority, created_by, created_at, updated_at, \
+             notified_start_at, notified_overdue_at, calendar_id, event_id, synced_at, remote_updated_at) \
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
         )
         .bind(id.to_string())
         .bind(&n.title)
         .bind(&n.description)
         .bind(fmt(n.start_at))
         .bind(n.end_at.map(fmt))
+        .bind(n.done_at.map(fmt))
+        .bind(n.done_at.is_some() && n.skipped)
         .bind(i64::from(n.priority.rank()))
         .bind(&n.created_by)
         .bind(fmt(ts))
         .bind(fmt(ts))
+        .bind(&marks)
+        .bind(&marks)
+        .bind(n.link.as_ref().map(|l| l.calendar_id.clone()))
+        .bind(n.link.as_ref().map(|l| l.event_id.clone()))
+        .bind(n.link.as_ref().map(|l| fmt(l.synced_at)))
+        .bind(n.link.as_ref().map(|l| fmt(l.remote_updated_at)))
         .execute(&self.pool)
         .await?;
         self.get_task(id).await
+    }
+
+    /// Tarefa vinculada a um evento da agenda.
+    pub async fn find_task_by_event(
+        &self,
+        calendar_id: &str,
+        event_id: &str,
+    ) -> Result<Option<Task>> {
+        let r = sqlx::query("SELECT * FROM tasks WHERE calendar_id = ? AND event_id = ?")
+            .bind(calendar_id)
+            .bind(event_id)
+            .fetch_optional(&self.pool)
+            .await?;
+        Ok(r.as_ref().and_then(row_to_task))
+    }
+
+    /// Grava (ou renova) o vínculo com o evento; não mexe em `updated_at`.
+    pub async fn set_task_link(&self, id: TaskId, link: &TaskLink) -> Result<()> {
+        sqlx::query(
+            "UPDATE tasks SET calendar_id = ?, event_id = ?, synced_at = ?, remote_updated_at = ? WHERE id = ?",
+        )
+        .bind(&link.calendar_id)
+        .bind(&link.event_id)
+        .bind(fmt(link.synced_at))
+        .bind(fmt(link.remote_updated_at))
+        .bind(id.to_string())
+        .execute(&self.pool)
+        .await?;
+        Ok(())
+    }
+
+    /// Aplica o conteúdo do evento do Google por cima da tarefa (a agenda venceu).
+    /// `updated_at` e `synced_at` recebem o mesmo instante, então a tarefa não
+    /// conta como "editada localmente" na próxima sincronização. Mudança de
+    /// período zera as marcas de aviso; concluída, as marcas ficam preenchidas.
+    pub async fn apply_remote_task(&self, id: TaskId, r: &RemoteTask) -> Result<Task> {
+        let cur = self.get_task(id).await?;
+        let period_changed = cur.start_at != r.start_at || cur.end_at != r.end_at;
+        let ts = fmt(r.link.synced_at);
+        sqlx::query(
+            "UPDATE tasks SET title = ?, description = ?, start_at = ?, end_at = ?, done_at = ?, skipped = ?, priority = ?, \
+             updated_at = ?, calendar_id = ?, event_id = ?, synced_at = ?, remote_updated_at = ?, \
+             notified_start_at = CASE WHEN ? THEN NULL WHEN ? THEN COALESCE(notified_start_at, ?) ELSE notified_start_at END, \
+             notified_overdue_at = CASE WHEN ? THEN NULL WHEN ? THEN COALESCE(notified_overdue_at, ?) ELSE notified_overdue_at END \
+             WHERE id = ?",
+        )
+        .bind(&r.title)
+        .bind(&r.description)
+        .bind(fmt(r.start_at))
+        .bind(r.end_at.map(fmt))
+        .bind(r.done_at.map(fmt))
+        .bind(r.done_at.is_some() && r.skipped)
+        .bind(i64::from(r.priority.rank()))
+        .bind(&ts)
+        .bind(&r.link.calendar_id)
+        .bind(&r.link.event_id)
+        .bind(&ts)
+        .bind(fmt(r.link.remote_updated_at))
+        .bind(period_changed && r.done_at.is_none())
+        .bind(r.done_at.is_some())
+        .bind(&ts)
+        .bind(period_changed && r.done_at.is_none())
+        .bind(r.done_at.is_some())
+        .bind(&ts)
+        .bind(id.to_string())
+        .execute(&self.pool)
+        .await?;
+        self.get_task(id).await
+    }
+
+    // ----- lápides (evento de tarefa apagada que ainda não saiu do Google) -----
+
+    pub async fn add_task_tombstone(&self, calendar_id: &str, event_id: &str) -> Result<()> {
+        sqlx::query(
+            "INSERT OR REPLACE INTO task_tombstones (calendar_id, event_id, deleted_at) VALUES (?, ?, ?)",
+        )
+        .bind(calendar_id)
+        .bind(event_id)
+        .bind(fmt(now()))
+        .execute(&self.pool)
+        .await?;
+        Ok(())
+    }
+
+    /// Ids de evento pendentes de exclusão na agenda.
+    pub async fn list_task_tombstones(&self, calendar_id: &str) -> Result<Vec<String>> {
+        let rows = sqlx::query(
+            "SELECT event_id FROM task_tombstones WHERE calendar_id = ? ORDER BY deleted_at",
+        )
+        .bind(calendar_id)
+        .fetch_all(&self.pool)
+        .await?;
+        Ok(rows
+            .iter()
+            .map(|r| r.get::<String, _>("event_id"))
+            .collect())
+    }
+
+    pub async fn remove_task_tombstone(&self, calendar_id: &str, event_id: &str) -> Result<()> {
+        sqlx::query("DELETE FROM task_tombstones WHERE calendar_id = ? AND event_id = ?")
+            .bind(calendar_id)
+            .bind(event_id)
+            .execute(&self.pool)
+            .await?;
+        Ok(())
     }
 
     pub async fn get_task(&self, id: TaskId) -> Result<Task> {
@@ -144,20 +296,22 @@ impl Storage {
         self.get_task(id).await
     }
 
-    /// `done = true` conclui agora; `false` reabre (e limpa a marca de atraso
-    /// para o laço poder avisar de novo se continuar vencida).
-    pub async fn set_task_done(&self, id: TaskId, done: bool) -> Result<Task> {
+    /// `done = true` fecha agora (concluída, ou **não realizada** com `skipped`);
+    /// `false` reabre (e limpa a marca de atraso para o laço poder avisar de
+    /// novo se continuar vencida).
+    pub async fn set_task_done(&self, id: TaskId, done: bool, skipped: bool) -> Result<Task> {
         let ts = fmt(now());
         if done {
-            sqlx::query("UPDATE tasks SET done_at = ?, updated_at = ? WHERE id = ?")
+            sqlx::query("UPDATE tasks SET done_at = ?, skipped = ?, updated_at = ? WHERE id = ?")
                 .bind(&ts)
+                .bind(skipped)
                 .bind(&ts)
                 .bind(id.to_string())
                 .execute(&self.pool)
                 .await?;
         } else {
             sqlx::query(
-                "UPDATE tasks SET done_at = NULL, notified_overdue_at = NULL, updated_at = ? WHERE id = ?",
+                "UPDATE tasks SET done_at = NULL, skipped = 0, notified_overdue_at = NULL, updated_at = ? WHERE id = ?",
             )
             .bind(&ts)
             .bind(id.to_string())

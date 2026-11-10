@@ -7,7 +7,7 @@ use axum::Json;
 use serde_json::{json, Value};
 use std::sync::Arc;
 use will_core::TaskId;
-use will_tasks::{TaskInput, TasksModule};
+use will_tasks::{SyncRequest, TaskInput, TasksModule};
 
 fn module(state: &App) -> Result<Arc<TasksModule>, ApiError> {
     state.tasks.read().clone().ok_or_else(|| {
@@ -24,7 +24,7 @@ fn tid(s: &str) -> Result<TaskId, ApiError> {
 
 #[derive(serde::Deserialize, Default)]
 pub struct ListQuery {
-    /// `pending` (padrão) | `running` | `overdue` | `upcoming` | `done` | `all`.
+    /// `pending` (padrão) | `running` | `overdue` | `upcoming` | `done` | `skipped` | `all`.
     pub filter: Option<String>,
 }
 
@@ -79,8 +79,26 @@ pub async fn complete(State(state): State<App>, Path(id): Path<String>) -> ApiRe
     Ok(Json(json!(v)))
 }
 
+/// Fecha como não realizada (some da tela como a concluída, sem dizer que foi feita).
+pub async fn skip(State(state): State<App>, Path(id): Path<String>) -> ApiResult<Value> {
+    let m = module(&state)?;
+    let v = m.skip(tid(&id)?).await.map_err(bad)?;
+    Ok(Json(json!(v)))
+}
+
 pub async fn reopen(State(state): State<App>, Path(id): Path<String>) -> ApiResult<Value> {
     let m = module(&state)?;
     let v = m.set_done(tid(&id)?, false).await.map_err(bad)?;
     Ok(Json(json!(v)))
+}
+
+/// Sincroniza tarefas ↔ Google Calendar na janela pedida (padrão: hoje → +2
+/// meses) e na agenda escolhida (padrão: configurações / agenda padrão).
+pub async fn sync_calendar(
+    State(state): State<App>,
+    Json(body): Json<SyncRequest>,
+) -> ApiResult<Value> {
+    let m = module(&state)?;
+    let rep = m.sync_calendar(body).await.map_err(bad)?;
+    Ok(Json(json!(rep)))
 }

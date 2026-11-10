@@ -207,6 +207,9 @@ Detalhes em [24](24-scheduler.md). A página **Agendamentos** (fora de Configura
 | Avisar no Telegram ao entrar em andamento (`notify_start`) | bool | false |
 | Avisar no Telegram ao entrar em atraso (`notify_overdue`) | bool | false |
 | Ordenação do Gantt (`sort`) | `start` \| `alpha` \| `priority` | `start` (salva pelo seletor da página) |
+- `sync_calendar_id` (vazio): agenda do Google usada por **Sincronizar com o Google Calendar** (vazio = a
+  padrão de criação de Google › Agenda). A aba **Google Calendar** da seção traz o seletor de agenda, o período (dois
+  calendários; padrão hoje → +2 meses) e o botão **Sincronizar agora** com o relatório da última rodada.
 
 ### Rede (`network`, só admin; vale no próximo início do servidor)
 | Campo | Tipo | Padrão |

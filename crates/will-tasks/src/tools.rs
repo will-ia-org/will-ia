@@ -18,17 +18,19 @@ enum Kind {
     Update,
     Delete,
     Complete,
+    Skip,
     Reopen,
 }
 
 impl Kind {
-    const ALL: [Kind; 7] = [
+    const ALL: [Kind; 8] = [
         Kind::Create,
         Kind::List,
         Kind::Get,
         Kind::Update,
         Kind::Delete,
         Kind::Complete,
+        Kind::Skip,
         Kind::Reopen,
     ];
     fn name(self) -> &'static str {
@@ -39,6 +41,7 @@ impl Kind {
             Kind::Update => "tasks_update",
             Kind::Delete => "tasks_delete",
             Kind::Complete => "tasks_complete",
+            Kind::Skip => "tasks_skip",
             Kind::Reopen => "tasks_reopen",
         }
     }
@@ -114,8 +117,8 @@ impl WillTool for TaskTool {
                 schema(subset(&["title", "description", "start_at", "end_at", "priority"]), &["title", "start_at"]),
             ),
             Kind::List => (
-                "Lista tarefas com estado e horários no fuso configurado. `filter`: pending (padrão: tudo que não foi concluído), running (em andamento), overdue (atrasadas), upcoming (futuras), done (concluídas) ou all.",
-                schema(json!({"filter": {"type": "string", "enum": ["pending", "running", "overdue", "upcoming", "done", "all"]}}), &[]),
+                "Lista tarefas com estado e horários no fuso configurado. `filter`: pending (padrão: tudo que não foi fechado), running (em andamento), overdue (atrasadas), upcoming (futuras), done (concluídas), skipped (não realizadas) ou all.",
+                schema(json!({"filter": {"type": "string", "enum": ["pending", "running", "overdue", "upcoming", "done", "skipped", "all"]}}), &[]),
             ),
             Kind::Get => (
                 "Detalha uma tarefa pelo id (completo ou prefixo).",
@@ -133,8 +136,12 @@ impl WillTool for TaskTool {
                 "Marca a tarefa como concluída (fica verde e some do Gantt por padrão).",
                 schema(subset(&["id"]), &["id"]),
             ),
+            Kind::Skip => (
+                "Fecha a tarefa como NÃO realizada (o usuário faltou/desistiu): some do Gantt como a concluída, mas fica registrado que não foi feita. Use quando o usuário disser que não fez, pulou ou faltou — não use tasks_complete nesse caso.",
+                schema(subset(&["id"]), &["id"]),
+            ),
             Kind::Reopen => (
-                "Desfaz a conclusão: a tarefa volta a pendente (o estado volta a seguir o relógio).",
+                "Desfaz a conclusão ou a marcação de não realizada: a tarefa volta a pendente (o estado volta a seguir o relógio).",
                 schema(subset(&["id"]), &["id"]),
             ),
         };
@@ -161,6 +168,7 @@ impl WillTool for TaskTool {
             Kind::Update => format!("Alterar tarefa {}", id()),
             Kind::Delete => format!("Remover tarefa {}", id()),
             Kind::Complete => format!("Concluir tarefa {}", id()),
+            Kind::Skip => format!("Marcar tarefa {} como não realizada", id()),
             Kind::Reopen => format!("Reabrir tarefa {}", id()),
         }
     }
@@ -228,15 +236,16 @@ impl WillTool for TaskTool {
                 m.delete(id).await.map_err(ToolError::Failed)?;
                 Ok(ToolOutput::json(&json!({"ok": true, "deleted": id})))
             }
-            Kind::Complete | Kind::Reopen => {
+            Kind::Complete | Kind::Skip | Kind::Reopen => {
                 let id = m
                     .resolve_id(arg_str(&args, "id")?)
                     .await
                     .map_err(ToolError::InvalidArgs)?;
-                let v = m
-                    .set_done(id, self.kind == Kind::Complete)
-                    .await
-                    .map_err(ToolError::Failed)?;
+                let v = match self.kind {
+                    Kind::Skip => m.skip(id).await,
+                    k => m.set_done(id, k == Kind::Complete).await,
+                }
+                .map_err(ToolError::Failed)?;
                 Ok(ToolOutput::json(&json!({"ok": true, "task": v})))
             }
         }

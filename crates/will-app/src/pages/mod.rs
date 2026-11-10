@@ -343,18 +343,31 @@ impl Pages {
                     let fill = if hovered { pal.card_alt } else { pal.card };
                     let stroke =
                         egui::Stroke::new(1.0, if hovered { pal.accent } else { pal.border });
-                    ui.painter()
-                        .rect(rect, 10.0, fill, stroke, egui::StrokeKind::Inside);
-                    if let Some((tone, _)) = &status {
-                        // filete colorido à esquerda com o estado do módulo
-                        ui.painter().rect_filled(
-                            egui::Rect::from_min_size(
-                                egui::pos2(rect.left() + 1.0, rect.top() + 14.0),
-                                egui::vec2(3.0, rect.height() - 28.0),
-                            ),
-                            2.0,
-                            tone.color(dark),
-                        );
+                    match &status {
+                        Some((tone, _)) => {
+                            // faixa colorida à esquerda, da altura toda e por dentro
+                            // da borda arredondada: o cartão inteiro na cor do estado
+                            // e o fundo por cima deslocado 4 px (cantos concêntricos)
+                            ui.painter().rect_filled(rect, 10.0, tone.color(dark));
+                            let mut body = rect;
+                            body.min.x += 4.0;
+                            ui.painter().rect_filled(
+                                body,
+                                egui::CornerRadius {
+                                    nw: 6,
+                                    sw: 6,
+                                    ne: 10,
+                                    se: 10,
+                                },
+                                fill,
+                            );
+                            ui.painter()
+                                .rect_stroke(rect, 10.0, stroke, egui::StrokeKind::Inside);
+                        }
+                        None => {
+                            ui.painter()
+                                .rect(rect, 10.0, fill, stroke, egui::StrokeKind::Inside);
+                        }
                     }
                     let inner = rect.shrink2(egui::vec2(16.0, 12.0));
                     let mut child = ui.new_child(
@@ -364,6 +377,9 @@ impl Pages {
                     );
                     child.set_clip_rect(inner);
                     child.spacing_mut().item_spacing.y = 6.0;
+                    // os textos não podem ser selecionáveis: senão roubam o clique
+                    // e o hover do cartão (a área clicável virava só as bordas)
+                    child.style_mut().interaction.selectable_labels = false;
                     child.horizontal(|ui| {
                         ui.label(
                             egui::RichText::new(sec.label())
@@ -387,7 +403,11 @@ impl Pages {
                         )
                         .wrap(),
                     );
-                    let resp = resp.on_hover_cursor(egui::CursorIcon::PointingHand);
+                    // registra o clique por cima do conteúdo: o cartão inteiro é a
+                    // área clicável, com o cursor de mão em qualquer ponto dele
+                    let resp = ui
+                        .interact(rect, resp.id, egui::Sense::click())
+                        .on_hover_cursor(egui::CursorIcon::PointingHand);
                     if resp.clicked() {
                         go = Some(Nav::Settings(sec));
                     }

@@ -276,7 +276,9 @@ pub fn router(state: App) -> Router {
             get(tasks::get_one).put(tasks::update).delete(tasks::delete),
         )
         .route("/tasks/{id}/complete", post(tasks::complete))
+        .route("/tasks/{id}/skip", post(tasks::skip))
         .route("/tasks/{id}/reopen", post(tasks::reopen))
+        .route("/tasks/sync-calendar", post(tasks::sync_calendar))
         .route("/triggers", get(triggers::list).post(triggers::create))
         .route("/triggers/gmail/poll", post(triggers::gmail_poll))
         .route(

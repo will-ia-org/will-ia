@@ -7,7 +7,10 @@
 //! (destino padrão) por um [`TaskNotifier`] injetado pelo servidor. A marca
 //! `notified_*` no banco garante um aviso só por transição.
 
+pub mod sync;
 pub mod tools;
+
+pub use sync::{CalendarBridge, CalendarInfo, NoCalendar, SyncReport, SyncRequest};
 
 use async_trait::async_trait;
 use chrono::{DateTime, NaiveDateTime, Offset, TimeZone, Utc};
@@ -22,8 +25,8 @@ use will_storage::Storage;
 
 pub const FAMILY: &str = "tasks";
 const TICK: Duration = Duration::from_secs(30);
-const TITLE_MAX: usize = 120;
-const DESCRIPTION_MAX: usize = 8_000;
+pub(crate) const TITLE_MAX: usize = 120;
+pub(crate) const DESCRIPTION_MAX: usize = 8_000;
 
 /// Quem entrega o aviso (o servidor liga ao Telegram, destino padrão).
 #[async_trait]
@@ -36,6 +39,8 @@ pub struct TasksDeps {
     pub storage: Storage,
     pub bus: EventBus,
     pub notifier: Arc<dyn TaskNotifier>,
+    /// Google Calendar (sincronização e exclusão espelhada); [`NoCalendar`] sem o módulo.
+    pub calendar: Arc<dyn CalendarBridge>,
 }
 
 /// Entrada de criação/edição (agente, UI ou API). Datas: ISO-8601 com fuso ou
@@ -105,7 +110,7 @@ impl Zone {
             Zone::Local => at.with_timezone(&chrono::Local).format(pat).to_string(),
         }
     }
-    fn resolve_naive(&self, n: NaiveDateTime) -> Result<DateTime<Utc>, String> {
+    pub(crate) fn resolve_naive(&self, n: NaiveDateTime) -> Result<DateTime<Utc>, String> {
         let r = match self {
             Zone::Tz(tz) => tz
                 .from_local_datetime(&n)
@@ -155,6 +160,8 @@ pub struct TasksModule {
     deps: TasksDeps,
     cfg: RwLock<TasksSettings>,
     cancel: RwLock<Option<CancellationToken>>,
+    /// Uma sincronização com a agenda por vez.
+    sync_lock: tokio::sync::Mutex<()>,
 }
 
 impl TasksModule {
@@ -163,6 +170,7 @@ impl TasksModule {
             deps,
             cfg: RwLock::new(cfg),
             cancel: RwLock::new(None),
+            sync_lock: tokio::sync::Mutex::new(()),
         })
     }
 
@@ -431,6 +439,9 @@ impl TasksModule {
                 end_at,
                 priority,
                 created_by: created_by.into(),
+                done_at: None,
+                skipped: false,
+                link: None,
             })
             .await
             .map_err(|e| e.to_string())?;
@@ -458,10 +469,10 @@ impl TasksModule {
         Ok(self.view(t))
     }
 
-    /// `filter`: `pending` (padrão: tudo que não foi concluído), `running`,
-    /// `overdue`, `upcoming`, `done`, `all`.
+    /// `filter`: `pending` (padrão: tudo que não foi fechado), `running`,
+    /// `overdue`, `upcoming`, `done`, `skipped`, `all`.
     pub async fn list(&self, filter: &str) -> Result<Vec<TaskView>, String> {
-        let include_done = matches!(filter, "all" | "done");
+        let include_done = matches!(filter, "all" | "done" | "skipped");
         let list = self
             .deps
             .storage
@@ -473,10 +484,11 @@ impl TasksModule {
             "overdue" => Some(TaskState::Overdue),
             "upcoming" => Some(TaskState::Upcoming),
             "done" => Some(TaskState::Done),
+            "skipped" => Some(TaskState::Skipped),
             "all" | "pending" | "" => None,
             other => {
                 return Err(format!(
-                "filtro inválido \"{other}\": use pending, running, overdue, upcoming, done ou all"
+                "filtro inválido \"{other}\": use pending, running, overdue, upcoming, done, skipped ou all"
             ))
             }
         };
@@ -538,24 +550,45 @@ impl TasksModule {
         Ok(self.view(t))
     }
 
+    /// Conclui (`true`) ou reabre (`false`).
     pub async fn set_done(&self, id: TaskId, done: bool) -> Result<TaskView, String> {
+        self.close(id, done, false).await
+    }
+
+    /// Fecha como **não realizada**: some da tela como a concluída, mas fica
+    /// registrado que não foi feita (reabrir limpa).
+    pub async fn skip(&self, id: TaskId) -> Result<TaskView, String> {
+        self.close(id, true, true).await
+    }
+
+    async fn close(&self, id: TaskId, done: bool, skipped: bool) -> Result<TaskView, String> {
         let t = self
             .deps
             .storage
-            .set_task_done(id, done)
+            .set_task_done(id, done, skipped)
             .await
             .map_err(|e| e.to_string())?;
-        tracing::info!(task_id = %t.id, title = %t.title, done, "tarefa concluída/reaberta");
+        tracing::info!(task_id = %t.id, title = %t.title, done, skipped, "tarefa fechada/reaberta");
         self.deps.bus.emit(Event::TasksChanged);
         Ok(self.view(t))
     }
 
+    /// Remove a tarefa; espelhada na agenda, apaga o evento também (lápide se falhar).
     pub async fn delete(&self, id: TaskId) -> Result<(), String> {
+        let cur = self
+            .deps
+            .storage
+            .get_task(id)
+            .await
+            .map_err(|e| e.to_string())?;
         self.deps
             .storage
             .delete_task(id)
             .await
             .map_err(|e| e.to_string())?;
+        if cur.is_linked() {
+            self.unlink_remote(&cur).await;
+        }
         tracing::info!(task_id = %id, "tarefa removida");
         self.deps.bus.emit(Event::TasksChanged);
         Ok(())

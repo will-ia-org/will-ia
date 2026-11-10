@@ -551,6 +551,7 @@ pub fn start_tasks(state: &Arc<AppState>) {
                     notifier: Arc::new(TelegramTaskNotifier {
                         state: Arc::downgrade(state),
                     }),
+                    calendar: calendar_bridge(state),
                 },
                 cfg,
             );
@@ -560,6 +561,114 @@ pub fn start_tasks(state: &Arc<AppState>) {
                 .add_provider(Arc::new(will_tasks::tools::TasksProvider::new(m.clone())));
             m.start();
         }
+    }
+}
+
+#[cfg(feature = "google")]
+fn calendar_bridge(state: &Arc<AppState>) -> Arc<dyn will_tasks::CalendarBridge> {
+    Arc::new(GoogleCalendarBridge {
+        state: Arc::downgrade(state),
+    })
+}
+
+#[cfg(not(feature = "google"))]
+fn calendar_bridge(_state: &Arc<AppState>) -> Arc<dyn will_tasks::CalendarBridge> {
+    Arc::new(will_tasks::NoCalendar)
+}
+
+/// Sincronização de tarefas → módulo Google (agenda habilitada e gravável).
+#[cfg(feature = "google")]
+struct GoogleCalendarBridge {
+    state: std::sync::Weak<AppState>,
+}
+
+#[cfg(feature = "google")]
+impl GoogleCalendarBridge {
+    fn google(&self) -> Result<Arc<will_google::GoogleModule>, String> {
+        let state = self.state.upgrade().ok_or("servidor encerrando")?;
+        let g = state.google.read().clone();
+        g.ok_or_else(|| "módulo Google não inicializado (Configurações › Google)".to_string())
+    }
+    async fn cal(
+        &self,
+        calendar_id: &str,
+    ) -> Result<
+        (
+            Arc<will_google::GoogleModule>,
+            will_storage::google::GoogleCalendar,
+        ),
+        String,
+    > {
+        let g = self.google()?;
+        let c = g
+            .sync_calendar(Some(calendar_id))
+            .await
+            .map_err(|e| e.to_string())?;
+        Ok((g, c))
+    }
+}
+
+#[cfg(feature = "google")]
+#[async_trait::async_trait]
+impl will_tasks::CalendarBridge for GoogleCalendarBridge {
+    async fn resolve_calendar(
+        &self,
+        wanted: Option<&str>,
+    ) -> Result<will_tasks::CalendarInfo, String> {
+        let g = self.google()?;
+        let c = g.sync_calendar(wanted).await.map_err(|e| e.to_string())?;
+        Ok(will_tasks::CalendarInfo {
+            calendar_id: c.calendar_id,
+            summary: c.summary,
+        })
+    }
+    async fn list_events(
+        &self,
+        calendar_id: &str,
+        time_min: &str,
+        time_max: &str,
+    ) -> Result<Vec<serde_json::Value>, String> {
+        let (g, c) = self.cal(calendar_id).await?;
+        g.calendar_events_raw(&c, time_min, time_max)
+            .await
+            .map_err(|e| e.to_string())
+    }
+    async fn get_event(
+        &self,
+        calendar_id: &str,
+        event_id: &str,
+    ) -> Result<Option<serde_json::Value>, String> {
+        let (g, c) = self.cal(calendar_id).await?;
+        g.calendar_event_raw(&c, event_id)
+            .await
+            .map_err(|e| e.to_string())
+    }
+    async fn insert_event(
+        &self,
+        calendar_id: &str,
+        body: &serde_json::Value,
+    ) -> Result<serde_json::Value, String> {
+        let (g, c) = self.cal(calendar_id).await?;
+        g.calendar_insert_raw(&c, body)
+            .await
+            .map_err(|e| e.to_string())
+    }
+    async fn patch_event(
+        &self,
+        calendar_id: &str,
+        event_id: &str,
+        body: &serde_json::Value,
+    ) -> Result<serde_json::Value, String> {
+        let (g, c) = self.cal(calendar_id).await?;
+        g.calendar_patch_raw(&c, event_id, body)
+            .await
+            .map_err(|e| e.to_string())
+    }
+    async fn delete_event(&self, calendar_id: &str, event_id: &str) -> Result<(), String> {
+        let (g, c) = self.cal(calendar_id).await?;
+        g.calendar_delete_raw(&c, event_id)
+            .await
+            .map_err(|e| e.to_string())
     }
 }
 

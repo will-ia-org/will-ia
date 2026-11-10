@@ -20,7 +20,8 @@ const LIST_W: f32 = 280.0;
 const LIST_W_MIN: f32 = 160.0;
 const LIST_W_MAX: f32 = 640.0;
 const MIN_DAYS_VISIBLE: f32 = 0.5;
-const MAX_DAYS_VISIBLE: f32 = 90.0;
+/// Até 2 anos na tela: o eixo troca de escala (dias → semanas → meses).
+const MAX_DAYS_VISIBLE: f32 = 730.0;
 const OPEN_END_PX: f32 = 26.0;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -29,6 +30,8 @@ enum State {
     Running,
     Overdue,
     Done,
+    /// Fechada como não realizada (some como a concluída, mas não foi feita).
+    Skipped,
 }
 
 impl State {
@@ -38,6 +41,7 @@ impl State {
             State::Running => tr("em andamento"),
             State::Overdue => tr("atrasada"),
             State::Done => tr("concluída"),
+            State::Skipped => tr("não realizada"),
         }
     }
 }
@@ -50,9 +54,12 @@ struct Row {
     start: DateTime<Utc>,
     end: Option<DateTime<Utc>>,
     done: bool,
+    skipped: bool,
     priority: u8,
     start_local: String,
     end_local: String,
+    /// Espelhada num evento do Google Calendar.
+    linked: bool,
 }
 
 impl Row {
@@ -74,15 +81,21 @@ impl Row {
             start,
             end,
             done: v.get("done_at").is_some_and(|d| !d.is_null()),
+            skipped: ui::b(v, "skipped"),
             priority: ui::i(v, "priority_rank").clamp(1, 3) as u8,
             start_local: ui::s(v, "start_local"),
             end_local: ui::s(v, "end_local"),
+            linked: v.get("event_id").is_some_and(|e| e.is_string()),
         })
     }
 
     fn state(&self, now: DateTime<Utc>) -> State {
         if self.done {
-            State::Done
+            if self.skipped {
+                State::Skipped
+            } else {
+                State::Done
+            }
         } else if now < self.start {
             State::Upcoming
         } else if self.end.is_some_and(|e| now >= e) {
@@ -108,6 +121,9 @@ struct Form {
     end_m: u32,
     priority: String,
     done: bool,
+    skipped: bool,
+    /// Espelhada no Google Calendar (só informativo no cabeçalho).
+    linked: bool,
     save: Option<Task<Value>>,
     error: Option<String>,
     /// Aba Descrição: editor (true) ou Markdown renderizado (false).
@@ -122,7 +138,7 @@ fn next_quarter(offset_minutes: i32) -> NaiveDateTime {
     base + chrono::Duration::minutes(q)
 }
 
-fn jdate(n: chrono::NaiveDate) -> jiff::civil::Date {
+pub(crate) fn jdate(n: chrono::NaiveDate) -> jiff::civil::Date {
     jiff::civil::Date::new(n.year() as i16, n.month() as i8, n.day() as i8).unwrap_or_default()
 }
 
@@ -164,6 +180,8 @@ impl Form {
             end_m: 0,
             priority: "medium".into(),
             done: false,
+            skipped: false,
+            linked: false,
             save: None,
             error: None,
             desc_edit: false,
@@ -186,6 +204,7 @@ impl Form {
         f.editing = Some(r.id.clone());
         f.title = r.title.clone();
         f.description = r.description.clone();
+        f.linked = r.linked;
         if let Some((d, h, m)) = parse_local(&r.start_local) {
             f.start_date = d;
             f.start_h = h;
@@ -210,6 +229,7 @@ impl Form {
         }
         .into();
         f.done = r.done;
+        f.skipped = r.skipped;
         f
     }
 
@@ -284,7 +304,10 @@ fn time_picker(ui: &mut egui::Ui, id: &str, h: &mut u32, m: &mut u32) {
         });
 }
 
-fn date_picker<'a>(d: &'a mut jiff::civil::Date, id: &'a str) -> egui_extras::DatePickerButton<'a> {
+pub(crate) fn date_picker<'a>(
+    d: &'a mut jiff::civil::Date,
+    id: &'a str,
+) -> egui_extras::DatePickerButton<'a> {
     egui_extras::DatePickerButton::new(d)
         .id_salt(id)
         .format("%d/%m/%Y")
@@ -328,6 +351,23 @@ fn local_naive(dt: DateTime<Utc>, offset_minutes: i32) -> NaiveDateTime {
 /// Horas locais desde a época (eixo x do Gantt).
 fn local_hours(dt: DateTime<Utc>, offset_minutes: i32) -> f64 {
     dt.timestamp() as f64 / 3600.0 + f64::from(offset_minutes) / 60.0
+}
+
+fn month_pt(m: u32) -> &'static str {
+    match m {
+        1 => tr("jan"),
+        2 => tr("fev"),
+        3 => tr("mar"),
+        4 => tr("abr"),
+        5 => tr("mai"),
+        6 => tr("jun"),
+        7 => tr("jul"),
+        8 => tr("ago"),
+        9 => tr("set"),
+        10 => tr("out"),
+        11 => tr("nov"),
+        _ => tr("dez"),
+    }
 }
 
 fn weekday_pt(n: NaiveDateTime) -> &'static str {
@@ -529,6 +569,7 @@ impl TasksPage {
         let t = cx.svc.call(move |c| async move {
             match kind {
                 "complete" => c.complete_task(&id).await,
+                "skip" => c.skip_task(&id).await,
                 "reopen" => c.reopen_task(&id).await,
                 _ => c.delete_task(&id).await,
             }
@@ -568,6 +609,7 @@ impl TasksPage {
             State::Running => pal.accent,
             State::Overdue => Tone::Danger.color(dark),
             State::Done => Tone::Success.color(dark),
+            State::Skipped => pal.text_weak.gamma_multiply(0.35),
         }
     }
 
@@ -697,6 +739,7 @@ impl TasksPage {
                 (State::Running, tr("em andamento")),
                 (State::Overdue, tr("atrasada")),
                 (State::Done, tr("concluída")),
+                (State::Skipped, tr("não realizada")),
             ] {
                 let (r, _) = ui.allocate_exact_size(Vec2::splat(10.0), Sense::hover());
                 ui.painter()
@@ -1103,8 +1146,26 @@ impl TasksPage {
         let hours_visible = f64::from(tl.width() / zoom);
         let first_day = (view_start / 24.0).floor() * 24.0;
         let x_of = |h: f64| -> f32 { tl.left() + ((h - view_start) as f32) * zoom };
-        // passo dos ticks de hora conforme o zoom
-        let hour_step = if zoom >= 40.0 {
+        // escala do eixo conforme os pixels por dia: dias (com ticks de hora),
+        // semanas (segunda a domingo) ou meses
+        let px_day = zoom * 24.0;
+        #[derive(PartialEq, Clone, Copy)]
+        enum Scale {
+            Day,
+            Week,
+            Month,
+        }
+        let scale = if px_day >= 30.0 {
+            Scale::Day
+        } else if px_day >= 7.0 {
+            Scale::Week
+        } else {
+            Scale::Month
+        };
+        // passo dos ticks de hora conforme o zoom (só na escala de dias)
+        let hour_step = if scale != Scale::Day {
+            0
+        } else if zoom >= 40.0 {
             1
         } else if zoom >= 18.0 {
             3
@@ -1116,20 +1177,33 @@ impl TasksPage {
             0
         };
         let mut day = first_day;
-        let mut k = 0;
+        let mut k = 0; // índice do período (dia/semana/mês) para alternar o fundo
+                       // os rótulos são desenhados depois do laço: senão as faixas dos dias
+                       // seguintes cobrem o texto que ultrapassa o primeiro dia do período
+        let mut texts: Vec<(Pos2, Align2, String, egui::FontId, Color32)> = Vec::new();
         while day < view_start + hours_visible {
             let x0 = x_of(day);
             let x1 = x_of(day + 24.0);
+            let Some(n) = DateTime::from_timestamp((day * 3600.0) as i64, 0).map(|d| d.naive_utc())
+            else {
+                day += 24.0;
+                continue;
+            };
+            let weekend = matches!(n.weekday(), chrono::Weekday::Sat | chrono::Weekday::Sun);
+            let period_start = match scale {
+                Scale::Day => true,
+                Scale::Week => n.weekday() == chrono::Weekday::Mon,
+                Scale::Month => n.day() == 1,
+            };
+            if period_start {
+                k += 1;
+            }
             let band = Rect::from_min_max(
                 Pos2::new(x0.max(tl.left()), tl.top()),
                 Pos2::new(x1.min(tl.right()), tl.bottom()),
             );
-            let n = DateTime::from_timestamp((day * 3600.0) as i64, 0).map(|d| d.naive_utc());
-            let weekend = n.is_some_and(|n| {
-                matches!(n.weekday(), chrono::Weekday::Sat | chrono::Weekday::Sun)
-            });
             if band.width() > 0.0 {
-                let shade = if weekend {
+                let shade = if weekend && px_day >= 7.0 {
                     pal.card_alt.gamma_multiply(if dark { 0.9 } else { 1.0 })
                 } else if k % 2 == 0 {
                     pal.card
@@ -1138,10 +1212,18 @@ impl TasksPage {
                 };
                 p.rect_filled(band, 0.0, shade);
             }
-            p.line_segment(
-                [Pos2::new(x0, tl.top()), Pos2::new(x0, tl.bottom())],
-                Stroke::new(1.0, pal.border),
-            );
+            // separador: forte no início do período, fraco entre dias (semanas)
+            if period_start {
+                p.line_segment(
+                    [Pos2::new(x0, tl.top()), Pos2::new(x0, tl.bottom())],
+                    Stroke::new(1.0, pal.border),
+                );
+            } else if scale == Scale::Week {
+                p.line_segment(
+                    [Pos2::new(x0, tl.top()), Pos2::new(x0, tl.bottom())],
+                    Stroke::new(1.0, pal.border.gamma_multiply(0.35)),
+                );
+            }
             if hour_step > 0 {
                 let mut h = hour_step;
                 while h < 24 {
@@ -1155,44 +1237,126 @@ impl TasksPage {
                             Stroke::new(1.0, pal.border.gamma_multiply(0.5)),
                         );
                         if labels && zoom >= 8.0 {
-                            p.text(
+                            texts.push((
                                 Pos2::new(x + 2.0, tl.bottom() - 11.0),
                                 Align2::LEFT_BOTTOM,
                                 format!("{h:02}h"),
                                 egui::FontId::proportional(9.5),
                                 pal.text_weak,
-                            );
+                            ));
                         }
                     }
                     h += hour_step;
                 }
             }
             if labels {
-                if let Some(n) = n {
-                    let text = if zoom * 24.0 > 90.0 {
-                        format!("{} {}", weekday_pt(n), n.format("%d/%m"))
-                    } else {
-                        n.format("%d/%m").to_string()
-                    };
-                    let is_today = (now_h / 24.0).floor() * 24.0 == day;
-                    let lx = (x0 + 6.0).max(tl.left() + 6.0);
-                    if x1 - lx > 24.0 {
-                        p.text(
+                let is_today = (now_h / 24.0).floor() * 24.0 == day;
+                match scale {
+                    Scale::Day => {
+                        let text = if px_day > 90.0 {
+                            format!("{} {}", weekday_pt(n), n.format("%d/%m"))
+                        } else {
+                            n.format("%d/%m").to_string()
+                        };
+                        let lx = (x0 + 6.0).max(tl.left() + 6.0);
+                        if x1 - lx > 24.0 {
+                            texts.push((
+                                Pos2::new(lx, tl.top() + 6.0),
+                                Align2::LEFT_TOP,
+                                text,
+                                if is_today {
+                                    ui::semibold(12.0)
+                                } else {
+                                    ui::medium(12.0)
+                                },
+                                if is_today { pal.accent } else { pal.text_weak },
+                            ));
+                        }
+                    }
+                    Scale::Week if period_start => {
+                        // rótulo da semana: data da segunda + número ISO
+                        let text = format!("{} · S{}", n.format("%d/%m"), n.iso_week().week());
+                        let lx = (x0 + 6.0).max(tl.left() + 6.0);
+                        if x_of(day + 7.0 * 24.0) - lx > 30.0 {
+                            texts.push((
+                                Pos2::new(lx, tl.top() + 6.0),
+                                Align2::LEFT_TOP,
+                                text,
+                                ui::medium(12.0),
+                                pal.text_weak,
+                            ));
+                        }
+                        // dia da semana abaixo, quando cabe
+                        if px_day >= 14.0 {
+                            let mut d = day;
+                            for _ in 0..7 {
+                                let dx = x_of(d) + 2.0;
+                                if let Some(dn) = DateTime::from_timestamp((d * 3600.0) as i64, 0) {
+                                    let dn = dn.naive_utc();
+                                    let today = (now_h / 24.0).floor() * 24.0 == d;
+                                    texts.push((
+                                        Pos2::new(dx, tl.bottom() - 2.0),
+                                        Align2::LEFT_BOTTOM,
+                                        dn.format("%d").to_string(),
+                                        egui::FontId::proportional(9.5),
+                                        if today { pal.accent } else { pal.text_weak },
+                                    ));
+                                }
+                                d += 24.0;
+                            }
+                        }
+                    }
+                    Scale::Month if period_start => {
+                        // rótulo conforme a largura do mês: "nov 2026" → "nov" → só o ano em janeiro
+                        let days_in_month = {
+                            let (y, m) = (n.year(), n.month());
+                            let next = if m == 12 {
+                                chrono::NaiveDate::from_ymd_opt(y + 1, 1, 1)
+                            } else {
+                                chrono::NaiveDate::from_ymd_opt(y, m + 1, 1)
+                            };
+                            next.zip(chrono::NaiveDate::from_ymd_opt(y, m, 1))
+                                .map(|(a, b)| (a - b).num_days())
+                                .unwrap_or(30) as f32
+                        };
+                        let month_w = days_in_month * px_day;
+                        let text = if month_w >= 78.0 {
+                            Some(format!("{} {}", month_pt(n.month()), n.format("%Y")))
+                        } else if month_w >= 34.0 {
+                            Some(if n.month() == 1 {
+                                format!("{} {}", month_pt(1), n.format("%y"))
+                            } else {
+                                month_pt(n.month()).to_string()
+                            })
+                        } else if n.month() == 1 {
+                            Some(n.format("%Y").to_string())
+                        } else {
+                            None
+                        };
+                        let Some(text) = text else {
+                            day += 24.0;
+                            continue;
+                        };
+                        let lx = (x0 + 6.0).max(tl.left() + 6.0);
+                        texts.push((
                             Pos2::new(lx, tl.top() + 6.0),
                             Align2::LEFT_TOP,
                             text,
-                            if is_today {
-                                ui::semibold(12.0)
-                            } else {
-                                ui::medium(12.0)
-                            },
-                            if is_today { pal.accent } else { pal.text_weak },
-                        );
+                            ui::medium(12.0),
+                            pal.text_weak,
+                        ));
                     }
+                    _ => {}
+                }
+                // na escala de semanas/meses, marca o dia de hoje como uma faixa fina
+                if is_today && scale != Scale::Day && band.width() > 0.0 {
+                    p.rect_filled(band, 0.0, pal.accent.gamma_multiply(0.12));
                 }
             }
             day += 24.0;
-            k += 1;
+        }
+        for (pos, align, text, font, color) in texts {
+            p.text(pos, align, text, font, color);
         }
         // linha do agora
         let nx = x_of(now_h);
@@ -1281,8 +1445,13 @@ impl TasksPage {
                     ui.label(egui::RichText::new(title).font(ui::semibold(18.0)));
                     if f.editing.is_some() {
                         ui.add_space(8.0);
-                        if f.done {
+                        if f.done && f.skipped {
+                            ui::badge(ui, tr("não realizada"), Tone::Neutral);
+                        } else if f.done {
                             ui::badge(ui, tr("concluída"), Tone::Success);
+                        }
+                        if f.linked {
+                            ui::badge(ui, tr("Google Agenda"), Tone::Info);
                         }
                     }
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
@@ -1486,17 +1655,23 @@ impl TasksPage {
                             ask = Some((id.clone(), f.title.clone(), "delete"));
                         }
                         ui.add_space(6.0);
-                        let label = if f.done {
-                            tr("Reabrir")
+                        if f.done {
+                            if ui.button(tr("Reabrir")).clicked() {
+                                ask = Some((id, f.title.clone(), "reopen"));
+                            }
                         } else {
-                            tr("Concluir")
-                        };
-                        if ui.button(label).clicked() {
-                            ask = Some((
-                                id,
-                                f.title.clone(),
-                                if f.done { "reopen" } else { "complete" },
-                            ));
+                            if ui.button(tr("Concluir")).clicked() {
+                                ask = Some((id.clone(), f.title.clone(), "complete"));
+                            }
+                            if ui
+                                .button(tr("Não realizada"))
+                                .on_hover_text(tr(
+                                    "Fecha sem dizer que foi feita (faltou, desistiu): some do painel como a concluída, mas fica registrado.",
+                                ))
+                                .clicked()
+                            {
+                                ask = Some((id, f.title.clone(), "skip"));
+                            }
                         }
                     }
                     // direita: Cancelar e a ação primária (Salvar) na ponta
@@ -1562,6 +1737,16 @@ impl TasksPage {
                 tr("Excluir"),
                 true,
                 tr("Tarefa excluída."),
+            ),
+            "skip" => (
+                tr("Marcar como não realizada?"),
+                trf(
+                    "\"{}\" some do painel como a concluída, mas fica registrado que não foi feita (não conta como realizada).",
+                    &[&title],
+                ),
+                tr("Não realizada"),
+                false,
+                tr("Tarefa marcada como não realizada."),
             ),
             "reopen" => (
                 tr("Reabrir tarefa?"),

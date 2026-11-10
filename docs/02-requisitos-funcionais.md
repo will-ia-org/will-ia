@@ -209,6 +209,8 @@ Convenção de identificação: `RF-<módulo>-<nº>`. Prioridade: **M** (Must, M
 | RF-TSK-05 | Ferramentas `tasks_create`, `tasks_list` (filtros pending/running/overdue/upcoming/done/all), `tasks_get`, `tasks_update`, `tasks_delete`, `tasks_complete`, `tasks_reopen`, família `tasks`, política padrão **auto**. | S |
 | RF-TSK-06 | Laço de 30 s nota as transições **entrou em andamento** e **entrou em atraso**: notificação nativa (`notify_native`, padrão ligado) e, com `notify_start`/`notify_overdue` (padrão desligados), aviso no Telegram (destino padrão); uma vez por transição (`notified_*`). | S |
 | RF-TSK-07 | API local `GET/POST /api/tasks`, `GET/PUT/DELETE /api/tasks/{id}`, `POST /api/tasks/{id}/complete|reopen`; evento `TasksChanged` recarrega a UI. Seção Configurações › Tarefas: habilitar, fuso, os dois avisos. | S |
+| RF-TSK-09 | Estado **não realizada** (`skipped` com `done_at`): fecha a tarefa sem contar como feita (faltou/desistiu); some do Gantt como a concluída, cinza e riscada quando as concluídas são mostradas; `tasks_skip`, `POST /api/tasks/{id}/skip`, botão Não realizada no formulário (com confirmação); na agenda `✗ título`. | S |
+| RF-TSK-08 | **Sincronizar com o Google Calendar** (botão em Configurações › Tarefas, `POST /api/tasks/sync-calendar`): uma agenda (`sync_calendar_id`, vazio = padrão), janela de datas (padrão hoje → +2 meses). Tarefa ↔ evento sem duplicar (`calendar_id`+`event_id` na tarefa, `will_task_id` privado no evento); última edição vence; exclusão nos dois sentidos (lápides quando o Google falha); concluída = `✓ título`; dia inteiro ⇄ 00:00–23:59; recorrente uma ocorrência por vez. | S |
 
 ## RF-BRW — Browser CDP (proxy para o agent-browser; não é canal)
 
