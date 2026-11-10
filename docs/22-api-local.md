@@ -125,7 +125,8 @@ Códigos: **401** `token de sessão ausente` / `token de sessão inválido` (tam
 | Método | Rota | Descrição |
 |---|---|---|
 | POST | `/api/telegram/test` | `getMe` |
-| GET | `/api/telegram/status` | threads por key |
+| GET | `/api/telegram/status` | threads por key + `mirror` (estado do fórum do espelho) |
+| POST | `/api/telegram/sync-threads` | espelha cada thread do app num tópico do fórum → `{created, failed, skipped, errors}` |
 
 ### Triggers (`docs/30`)
 | Método | Rota | Descrição |

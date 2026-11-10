@@ -103,6 +103,7 @@ Convenção de identificação: `RF-<módulo>-<nº>`. Prioridade: **M** (Must, M
 | RF-TG-07 | Mensagens de texto e legendas de mídia são suportadas; anexos (documentos, imagens) são baixados para a pasta `inbox/` da base de conhecimento e referenciados no prompt. | S |
 | RF-TG-08 | Mensagens de voz são transcritas (via OpenAI) e tratadas como texto. | C |
 | RF-TG-09 | Fechamento/exclusão de tópico no Telegram arquiva a thread correspondente. | C |
+| RF-TG-11 | **Espelho app ↔ tópicos** (`telegram.mirror_threads` + `forum_chat_id`): thread criada no app/HTTP/MCP cria um tópico no fórum e nasce vinculada a ele; renomear/apagar a thread renomeia/apaga o tópico; ação **Sincronizar threads** espelha as threads `ui` existentes. Só age com o módulo no ar e o fórum validado (supergrupo com Tópicos, bot admin com "Gerenciar tópicos"); senão a thread vive só no app, sem bloquear a criação. | S |
 
 ## RF-MCP — Servidor MCP
 

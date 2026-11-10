@@ -296,6 +296,10 @@ pub fn router(state: App) -> Router {
         .route("/telemetry/client-config", get(telemetry::client_config))
         .route("/telegram/test", post(integrations::telegram_test))
         .route("/telegram/status", get(integrations::telegram_status))
+        .route(
+            "/telegram/sync-threads",
+            post(integrations::telegram_sync_threads),
+        )
         .route("/voice/start", post(integrations::voice_start))
         .route("/voice/stop", post(integrations::voice_stop))
         .route("/voice/toggle", post(integrations::voice_toggle))

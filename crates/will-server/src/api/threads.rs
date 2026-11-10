@@ -269,13 +269,16 @@ pub async fn rename(
     Json(b): Json<RenameBody>,
 ) -> ApiResult<Value> {
     let t = tid(&id)?;
-    state.storage.rename_thread(t, b.title.trim()).await?;
-    tracing::info!(thread_id = %t, "thread renomeada pelo usuário");
-    if let Ok(th) = state.host().get_thread(t).await {
-        state
-            .bus
-            .emit(will_core::Event::ThreadUpdated { thread: th });
+    let title = b.title.trim();
+    if title.is_empty() {
+        return Err(super::bad("título vazio"));
     }
+    state
+        .host()
+        .rename_thread(t, title)
+        .await
+        .map_err(super::internal)?;
+    tracing::info!(thread_id = %t, "thread renomeada pelo usuário");
     Ok(Json(json!({ "ok": true })))
 }
 

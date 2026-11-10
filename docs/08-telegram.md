@@ -68,7 +68,7 @@ Formatação: a referência envia a final como **texto puro** e instrui o agente
 | `/novo` | Zera a conversa **desta thread** (nova sessão). Limpa a pilha. |
 | `/reiniciar` | Reinicia o processo desta thread mantendo o contexto (`--resume`). |
 | `/topico <nome>` | Cria tópico no fórum (`createForumTopic`) e saúda nele. |
-| `/apagar` | Só dentro de tópico: apaga a thread no serviço (sessão + pilha) **e** o tópico no Telegram (`deleteForumTopic`). |
+| `/apagar` | Só dentro de tópico: apaga a thread no serviço (sessão + pilha) **e** o tópico no Telegram (`deleteForumTopic`; com o espelho ligado, quem apaga o tópico é o host, pelo `mirror_delete`). |
 | `/limpar [key\|tudo]` | Lista threads dormentes / remove do serviço (não toca no Telegram). Necessário porque o Telegram **não notifica** exclusão de tópico e a API não permite perguntar se um tópico existe. |
 | `/status` | Uptime e lista de threads: 🟢 pronta · 🟡 trabalhando · ⚪ dormindo (volta com `--resume`) · ❌ sessão expirada (volta do zero). |
 | `/chave` | Teclado inline para escolher o token ativo do Claude (✅ na ativa, 🔴 na reprovada). Testa antes de aplicar; aplica sem reiniciar o serviço (derruba os processos, voltam com `--resume`). |
@@ -103,6 +103,25 @@ Normalização: remove `/`, `@bot`, acentos e caixa, de modo que `/tópico` e `/
 2. Crie um grupo, adicione o bot, ligue **Tópicos** (vira supergrupo), promova o bot a **admin** com "gerenciar tópicos".
 3. Mande `/start` no grupo; copie o chat ID (negativo) e seu user ID para as allowlists.
 4. Crie tópicos com `/topico Nome`. Cada tópico é uma conversa paralela com o cérebro.
+5. (Opcional) Ligue **Espelhar threads** e informe o chat ID do grupo em **Fórum do espelho**: threads criadas no app viram tópicos; **Sincronizar threads** espelha as que já existem.
+
+## Espelho app ↔ tópicos (`mirror.rs`)
+
+O sentido Telegram → app sempre existiu (tópico novo vira thread na primeira mensagem). O espelho fecha o sentido inverso, para toda thread local existir também no fórum e vice-versa:
+
+| Ação no app / MCP | Efeito no Telegram |
+|---|---|
+| Thread nova (`+ Nova`, `POST /api/threads`, `create_thread` do MCP) | `createForumTopic` no `forum_chat_id` com o título (ou `"Nova thread"`); a thread nasce com origem `telegram { fórum, tópico }`, então respostas e aprovações já caem no tópico. |
+| Título derivado da 1ª mensagem | `editForumTopic` **só se** o tópico ainda se chama `"Nova thread"` (não sobrescreve o nome que o usuário deu no `/topico`). |
+| Renomear (`PATCH /api/threads/{id}`) | `editForumTopic` sempre (`Host::rename_thread`). |
+| Apagar (`DELETE /api/threads/{id}`, `/apagar`) | `deleteForumTopic` antes de apagar no banco (`Host::delete_thread` → `mirror_delete`). |
+| **Sincronizar threads** (`POST /api/telegram/sync-threads`) | Para cada thread de origem `ui` não arquivada: cria o tópico e troca a origem (`set_thread_origin`), emitindo `ThreadUpdated` para o módulo se vincular. Devolve `{created, failed, skipped, errors}`. |
+
+Condições (`ForumState`, validada no `start` do módulo e exposta em `GET /api/telegram/status` → `mirror`): `telegram.enabled` + `mirror_threads` + `forum_chat_id` em `allowed_chats` + `getChat.is_forum` + bot `Owner` ou `Administrator{can_manage_topics}`. Qualquer falha → a thread fica só no app (`origin = ui`), com aviso no log; a criação da thread nunca é bloqueada pelo Telegram. Threads de voz (`realtime`) não são espelhadas.
+
+**Resumo em áudio só para turnos do Telegram:** o módulo guarda os `TurnId` que ele mesmo abriu (`tg_turns`, preenchido no `send_message_with` do handler) e, no `TurnFinished`, só chama o TTS se o turno estiver nesse conjunto. Turno iniciado pelo app, pelo scheduler ou pelo MCP numa thread espelhada recebe o texto no tópico, mas **não** o áudio (quem está no app lê na tela; economiza TTS). `TurnFailed` limpa a marca.
+
+Limites conhecidos: o que o usuário digita **no app** não é copiado para o tópico (só a resposta do agente chega lá); `topic_names` é memória de processo, então após reiniciar o serviço um tópico `"Nova thread"` ainda sem mensagem não é renomeado pelo título automático (o rename manual continua valendo).
 
 ## Testes
 

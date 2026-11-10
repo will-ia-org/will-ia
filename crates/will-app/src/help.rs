@@ -99,6 +99,7 @@ pub const TELEGRAM: Help = Help {
         ("Descobrir os IDs", "No grupo, mande /start. O bot responde com o chat ID (negativo, começa com -100) e o seu user ID. Faça o mesmo no privado com o bot se quiser conversar por lá também."),
         ("Preencher as listas e salvar", "Cole o chat ID em Chats permitidos e o seu user ID em Usuários permitidos. Salve. A partir daí o bot responde no grupo e nos tópicos."),
         ("Criar tópicos", "Mande /topico Nome no grupo: o bot cria o tópico e saúda nele. Cada tópico é uma conversa paralela com o cérebro; o \"General\" também vale."),
+        ("Espelhar as threads do app", "Em Configuração, ligue Espelhar threads e informe o chat ID do grupo em Fórum do espelho. Salve. Na aba Bot, o bloco Espelho mostra \"pronto\"; clique em Sincronizar threads para criar um tópico para cada thread que já existe no app."),
     ],
     notes: &[
         ("O bot não responde", "Confira: módulo habilitado e salvo, token testado, chat ID (com o sinal negativo) e user ID nas listas, bot administrador do grupo. Mande /start: ele diz se o chat/usuário está liberado."),
@@ -106,6 +107,7 @@ pub const TELEGRAM: Help = Help {
         ("Comandos úteis", "/start (IDs e situação), /topico <nome> (novo tópico), /apagar (dentro de um tópico: apaga thread e tópico), /limpar (lista/remove threads dormentes). Os commands de .claude/commands/ da base também aparecem no menu."),
         ("Anexos e áudios", "Arquivos vão para <kb>/inbox/telegram/ e o caminho é passado ao agente. Mensagens de voz são transcritas com a chave da OpenAI (seção Voz) e tratadas como texto."),
         ("Aprovações pelo Telegram", "Ferramentas com política \"confirmar\" podem ser aprovadas por botões na mensagem do bot, além da UI e da notificação."),
+        ("Espelho app ↔ tópicos", "Com o espelho pronto, thread nova no app (ou criada pelo agente via MCP) vira tópico \"Nova thread\" no fórum e ganha o assunto na primeira mensagem; renomear ou apagar a thread no app renomeia/apaga o tópico; tópico novo no Telegram vira thread aqui na primeira mensagem. Se o fórum não estiver válido, nada muda: a thread vive só no app."),
     ],
     code: "",
     links: &[

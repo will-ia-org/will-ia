@@ -10,17 +10,19 @@ pub mod conversation;
 mod events;
 mod handler;
 pub mod media;
+pub mod mirror;
 mod sender;
 pub mod text;
 mod tool;
 
+pub use mirror::ForumState;
 pub use sender::TelegramSender;
 pub use tool::{SendFileTool, SendMessageTool, SendVoiceTool};
 
 use crate::conversation::Conversation;
 use parking_lot::Mutex;
 use secrecy::{ExposeSecret, SecretString};
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicI64, Ordering};
 use std::sync::Arc;
@@ -35,7 +37,7 @@ use tracing::Instrument;
 use will_core::settings::TelegramSettings;
 use will_core::{
     ApprovalId, Event, EventBus, Module, ModuleStatus, Origin, SharedThreadHost, ThreadId,
-    ToolProvider, WillTool,
+    ToolProvider, TurnId, WillTool,
 };
 use will_realtime::openai::OpenAi;
 use will_storage::Storage;
@@ -85,6 +87,11 @@ pub struct TelegramModule {
     pub(crate) bot_username: Mutex<Option<String>>,
     /// thread key → nome do tópico (quando conhecido).
     pub(crate) topic_names: Mutex<HashMap<String, String>>,
+    /// Fórum do espelho app ↔ tópicos (validado na subida).
+    pub(crate) forum: Mutex<mirror::ForumState>,
+    /// Turnos iniciados (ou alimentados) por mensagens vindas do Telegram.
+    /// Só esses ganham o resumo em áudio: quem fala pelo app lê na tela.
+    pub(crate) tg_turns: Mutex<HashSet<TurnId>>,
     offset: AtomicI64,
 }
 
@@ -139,6 +146,8 @@ impl TelegramModule {
             unauthorized_notice: Mutex::new(HashMap::new()),
             bot_username: Mutex::new(None),
             topic_names: Mutex::new(HashMap::new()),
+            forum: Mutex::new(mirror::ForumState::default()),
+            tg_turns: Mutex::new(HashSet::new()),
             offset: AtomicI64::new(0),
         })
     }
@@ -205,6 +214,30 @@ impl TelegramModule {
                 me.user.username.clone().unwrap_or_default()
             ),
         );
+
+        // fórum do espelho app ↔ tópicos
+        let forum = self.check_forum(me.user.id).await;
+        if forum.enabled {
+            match &forum.error {
+                None => {
+                    tracing::info!(chat_id = ?forum.chat_id, title = ?forum.chat_title, "espelho de threads: fórum validado");
+                    self.bus.log(
+                        "info",
+                        "telegram",
+                        format!(
+                            "espelho de threads ligado no fórum \"{}\"",
+                            forum.chat_title.clone().unwrap_or_default()
+                        ),
+                    );
+                }
+                Some(e) => {
+                    tracing::warn!(chat_id = ?forum.chat_id, error = %e, "espelho de threads indisponível");
+                    self.bus
+                        .log("warn", "telegram", format!("espelho de threads indisponível: {e}"));
+                }
+            }
+        }
+        *self.forum.lock() = forum;
 
         // comandos: builtins + comandos da KB (.claude/commands/*.md)
         let repo = commands::load_repo_commands(&self.kb_path);

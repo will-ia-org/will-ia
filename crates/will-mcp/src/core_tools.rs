@@ -149,7 +149,7 @@ impl WillTool for CreateThread {
     fn spec(&self) -> ToolSpec {
         ToolSpec {
             name: "create_thread".into(),
-            description: "Cria uma nova thread (conversa paralela com o cérebro) e opcionalmente envia um prompt inicial. Útil para delegar trabalho longo.".into(),
+            description: "Cria uma nova thread (conversa paralela com o cérebro) e opcionalmente envia um prompt inicial. Útil para delegar trabalho longo. Com o espelho do Telegram ligado, a thread também vira um tópico no fórum (título = nome do tópico).".into(),
             input_schema: schema(serde_json::json!({"title": {"type": "string"}, "initial_prompt": {"type": "string"}}), &["title"]),
             requires: vec![Module::Engine],
             default_policy: ToolPolicy::Confirm,

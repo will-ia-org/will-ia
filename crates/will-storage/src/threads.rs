@@ -156,6 +156,17 @@ impl Storage {
         Ok(())
     }
 
+    /// Troca a origem da thread (ex.: `ui` → tópico do Telegram ao espelhar).
+    pub async fn set_thread_origin(&self, id: ThreadId, origin: &Origin) -> Result<()> {
+        sqlx::query("UPDATE threads SET origin = ?, origin_ref = ? WHERE id = ?")
+            .bind(origin.kind().as_str())
+            .bind(origin.origin_ref())
+            .bind(id.to_string())
+            .execute(&self.pool)
+            .await?;
+        Ok(())
+    }
+
     pub async fn rename_thread(&self, id: ThreadId, title: &str) -> Result<()> {
         sqlx::query("UPDATE threads SET title = ? WHERE id = ?")
             .bind(title)

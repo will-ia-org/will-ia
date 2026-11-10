@@ -65,25 +65,39 @@ impl TelegramModule {
                 }
             }
             Event::TurnFinished {
-                thread_id, result, ..
+                thread_id,
+                turn_id,
+                result,
             } => {
+                // áudio só para turnos que vieram do Telegram; pelo app o
+                // usuário lê na tela (economiza TTS)
+                let from_telegram = self.tg_turns.lock().remove(&turn_id);
                 if let Some(conv) = self.bound_conv(thread_id).await {
-                    tracing::debug!(channel = "telegram", %thread_id, key = %conv.key, is_error = result.is_error, text_len = result.text.chars().count(), "turno terminou; finalizando no Telegram");
+                    tracing::debug!(channel = "telegram", %thread_id, key = %conv.key, is_error = result.is_error, from_telegram, text_len = result.text.chars().count(), "turno terminou; finalizando no Telegram");
                     let me = self.clone();
                     tokio::spawn(
-                        async move { me.finalize(conv, result.text, result.is_error).await }
-                            .instrument(tracing::Span::current()),
+                        async move {
+                            me.finalize(conv, result.text, result.is_error, from_telegram)
+                                .await
+                        }
+                        .instrument(tracing::Span::current()),
                     );
                 }
             }
             Event::TurnFailed {
-                thread_id, error, ..
+                thread_id,
+                turn_id,
+                error,
+                ..
             } => {
+                if let Some(t) = turn_id {
+                    self.tg_turns.lock().remove(&t);
+                }
                 if let Some(conv) = self.bound_conv(thread_id).await {
                     tracing::warn!(channel = "telegram", %thread_id, key = %conv.key, error = %error, "turno falhou; avisando no Telegram");
                     let me = self.clone();
                     tokio::spawn(
-                        async move { me.finalize(conv, error, true).await }
+                        async move { me.finalize(conv, error, true, false).await }
                             .instrument(tracing::Span::current()),
                     );
                 }
@@ -114,10 +128,16 @@ impl TelegramModule {
         }
     }
 
-    async fn finalize(&self, conv: Arc<Conversation>, text: String, is_error: bool) {
+    async fn finalize(
+        &self,
+        conv: Arc<Conversation>,
+        text: String,
+        is_error: bool,
+        with_audio: bool,
+    ) {
         let html = self.settings.reply_format == "html";
         let clean = conv.finalize(&text, is_error, html).await;
-        if let Some(clean) = clean {
+        if let (Some(clean), true) = (clean, with_audio) {
             self.maybe_send_audio(conv, clean).await;
         }
     }

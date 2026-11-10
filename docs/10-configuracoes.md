@@ -119,6 +119,8 @@ Painel de sessão na mesma seção: **Iniciar/Parar** (a sessão é a do usuári
 | Chats permitidos | lista de ids (int64) | — |
 | Usuários permitidos | lista de ids (int64) | — |
 | Destino padrão (chat/tópico) | par opcional | primeiro chat |
+| Espelhar threads (`mirror_threads`) | bool | true |
+| Fórum do espelho (`forum_chat_id`) | id opcional (supergrupo com Tópicos, em Chats permitidos) | — |
 | Anunciar no boot | bool | true |
 | Não autorizados | `ignorar` \| `responder_aviso` | `ignorar` |
 | Formato da resposta final | `texto` \| `html` | `texto` |
@@ -126,7 +128,7 @@ Painel de sessão na mesma seção: **Iniciar/Parar** (a sessão é a do usuári
 | Transcrever voice notes | bool | true (se houver OpenAI key) |
 | Pasta de anexos | path relativa à KB | `inbox/telegram` |
 
-Ações: **Testar bot** (`getMe`), **Descobrir IDs** (instrução `/start`).
+Ações: **Testar bot** (`getMe`), **Descobrir IDs** (instrução `/start`), **Sincronizar threads** (aba Bot; cria um tópico para cada thread do app — `docs/08`, "Espelho").
 
 ### MCP
 | Campo | Tipo | Padrão |

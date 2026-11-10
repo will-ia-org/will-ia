@@ -359,13 +359,18 @@ impl TelegramModule {
             .await;
             return;
         };
-        if let Some(tid) = self.thread_of(&inc.key) {
+        let bound = self.thread_of(&inc.key);
+        if let Some(tid) = bound {
             if let Err(e) = self.host.delete_thread(tid, false).await {
                 tracing::warn!(key = %inc.key, thread_id = %tid, error = %e, "delete_thread falhou");
             }
         }
         self.forget_key(&inc.key).await;
         self.topic_names.lock().remove(&inc.key);
+        // com o espelho ligado e thread vinculada, o host já apagou o tópico
+        if bound.is_some() && self.settings.mirror_threads {
+            return;
+        }
         match self
             .bot
             .delete_forum_topic(ChatId(inc.chat_id), ThreadId(MessageId(topic_id as i32)))

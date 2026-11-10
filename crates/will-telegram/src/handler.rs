@@ -384,6 +384,10 @@ impl TelegramModule {
                 result = self.host.send_message_with(t2, text, attachments).await;
             }
         }
+        if let Ok(turn) = &result {
+            // marca o turno como vindo do Telegram (habilita o resumo em áudio)
+            self.tg_turns.lock().insert(*turn);
+        }
         if let Err(e) = result {
             tracing::error!(key = %inc.key, error = %e, "send_message ao cérebro falhou");
             self.bus.log(

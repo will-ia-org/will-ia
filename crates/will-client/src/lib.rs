@@ -740,6 +740,10 @@ impl Client {
     pub async fn telegram_status(&self) -> ApiResult {
         self.get("telegram/status").await
     }
+    /// Cria um tópico no fórum para cada thread do app (espelho app ↔ Telegram).
+    pub async fn telegram_sync_threads(&self) -> ApiResult {
+        self.post("telegram/sync-threads", None).await
+    }
     /// `GET /api/telemetry/status`: contadores, fila, último envio/erro e
     /// `instance_id` da telemetria (Axiom).
     pub async fn telemetry_status(&self) -> ApiResult {

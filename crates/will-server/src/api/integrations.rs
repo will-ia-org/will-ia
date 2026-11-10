@@ -60,7 +60,7 @@ pub async fn telegram_status(State(state): State<App>) -> ApiResult<Value> {
         let m = state.telegram.read().await.clone();
         match m {
             Some(m) => Ok(Json(
-                json!({ "status": m.status(), "threads": m.thread_status_rows().await }),
+                json!({ "status": m.status(), "threads": m.thread_status_rows().await, "mirror": m.forum_state() }),
             )),
             None => Ok(Json(
                 json!({ "status": state.module_status.read().get(&will_core::Module::Telegram), "threads": [] }),
@@ -72,6 +72,21 @@ pub async fn telegram_status(State(state): State<App>) -> ApiResult<Value> {
         let _ = state;
         Ok(Json(json!({ "threads": [] })))
     }
+}
+
+/// Botão "Sincronizar threads": cada thread do app vira um tópico no fórum.
+pub async fn telegram_sync_threads(State(state): State<App>) -> ApiResult<Value> {
+    let v = state
+        .host()
+        .sync_threads_to_telegram()
+        .await
+        .map_err(bad)?;
+    tracing::info!(
+        created = v.get("created").and_then(|c| c.as_u64()).unwrap_or(0),
+        failed = v.get("failed").and_then(|c| c.as_u64()).unwrap_or(0),
+        "threads do app sincronizadas com o Telegram"
+    );
+    Ok(Json(v))
 }
 
 // ---------- Voz ----------

@@ -19,20 +19,101 @@ pub struct TelegramPage {
     status: Loader<Value>,
     test_task: Option<Task<Value>>,
     last_test: Option<Value>,
+    sync_task: Option<Task<Value>>,
+    last_sync: Option<Value>,
     token: SecretField,
     chats_buf: Option<String>,
     users_buf: Option<String>,
 }
 
 impl TelegramPage {
+    /// Bloco "Espelho app ↔ tópicos": estado do fórum + botão Sincronizar.
+    fn mirror_ui(&mut self, ui: &mut egui::Ui, cx: &mut Cx) {
+        ui.horizontal(|ui| {
+            ui.label(egui::RichText::new(tr("Espelho app ↔ tópicos")).strong());
+        });
+        let mirror = self
+            .status
+            .data
+            .as_ref()
+            .and_then(|v| v.get("mirror"))
+            .cloned()
+            .unwrap_or(Value::Null);
+        let enabled = ui::b(&mirror, "enabled");
+        let ok = ui::b(&mirror, "ok");
+        let err = ui::s(&mirror, "error");
+        let title = ui::s(&mirror, "chat_title");
+        ui.horizontal(|ui| {
+            if !enabled {
+                ui::badge(ui, tr("desligado"), Tone::Neutral);
+                ui.label(
+                    egui::RichText::new(tr("Ligue em Configuração › Espelhar threads."))
+                        .weak()
+                        .small(),
+                );
+            } else if ok {
+                ui::badge(ui, tr("pronto"), Tone::Success);
+                ui.label(
+                    egui::RichText::new(if title.is_empty() {
+                        trf("fórum {}", &[&ui::i(&mirror, "chat_id")])
+                    } else {
+                        trf("fórum \"{}\"", &[&title])
+                    })
+                    .weak()
+                    .small(),
+                );
+            } else {
+                ui::badge(ui, tr("indisponível"), Tone::Warning);
+                ui.label(egui::RichText::new(&err).weak().small());
+            }
+        });
+        ui.horizontal(|ui| {
+            let syncing = self.sync_task.is_some();
+            if ui
+                .add_enabled(!syncing && ok, egui::Button::new(tr("Sincronizar threads")))
+                .on_hover_text(tr(
+                    "Cria um tópico no fórum para cada thread do app que ainda não tem um.",
+                ))
+                .on_disabled_hover_text(tr("Precisa do espelho pronto (módulo no ar e fórum válido)."))
+                .clicked()
+            {
+                self.sync_task =
+                    Some(cx.svc.call(|c| async move { c.telegram_sync_threads().await }));
+            }
+            if syncing {
+                ui.spinner();
+            }
+            if let Some(v) = &self.last_sync {
+                ui.label(
+                    egui::RichText::new(trf(
+                        "{} criado(s) · {} falha(s) · {} já espelhada(s)",
+                        &[&ui::i(v, "created"), &ui::i(v, "failed"), &ui::i(v, "skipped")],
+                    ))
+                    .weak()
+                    .small(),
+                );
+            }
+        });
+        if let Some(errors) = self
+            .last_sync
+            .as_ref()
+            .and_then(|v| v.get("errors"))
+            .and_then(|e| e.as_array())
+        {
+            for e in errors.iter().take(5) {
+                ui::error_text(ui, e.as_str().unwrap_or(""));
+            }
+        }
+    }
+
     pub fn on_event(&mut self, ev: &Event) {
         match ev {
             Event::SettingsChanged { section } if section == "telegram" => {
                 self.status.loaded_at = None
             }
-            Event::ThreadCreated { .. } | Event::ThreadDeleted { .. } => {
-                self.status.loaded_at = None
-            }
+            Event::ThreadCreated { .. }
+            | Event::ThreadUpdated { .. }
+            | Event::ThreadDeleted { .. } => self.status.loaded_at = None,
             _ => {}
         }
     }
@@ -64,6 +145,34 @@ impl TelegramPage {
                     Err(e) => {
                         cx.toasts.error(trf("Teste do bot: {}", &[&e]));
                         self.last_test = None;
+                    }
+                }
+            }
+        }
+        if let Some(t) = &self.sync_task {
+            if let Some(r) = t.take() {
+                self.sync_task = None;
+                match r {
+                    Ok(v) => {
+                        let created = ui::i(&v, "created");
+                        let failed = ui::i(&v, "failed");
+                        if failed > 0 {
+                            cx.toasts.error(trf(
+                                "Sincronização: {} tópico(s) criado(s), {} falha(s)",
+                                &[&created, &failed],
+                            ));
+                        } else {
+                            cx.toasts.success(trf(
+                                "Sincronização: {} tópico(s) criado(s)",
+                                &[&created],
+                            ));
+                        }
+                        self.last_sync = Some(v);
+                        self.status.loaded_at = None;
+                    }
+                    Err(e) => {
+                        cx.toasts.error(trf("Sincronização falhou: {}", &[&e]));
+                        self.last_sync = None;
                     }
                 }
             }
@@ -141,6 +250,9 @@ impl TelegramPage {
                     .small(),
                 );
                 }
+
+                ui.add_space(8.0);
+                self.mirror_ui(ui, cx);
 
                 ui.add_space(8.0);
                 ui.horizontal(|ui| {
@@ -293,6 +405,14 @@ impl TelegramPage {
                     ui::optional_i64(ui, &mut t.default_topic_id, tr("opcional"));
                 });
             });
+                ui::field(ui, tr("Espelhar threads"), Some(tr("Thread criada, renomeada ou apagada no app faz o mesmo com um tópico no fórum abaixo (e tópico novo no Telegram vira thread aqui). Sem fórum válido, a thread vive só no app.")), |ui| {
+                ui::toggle(ui, &mut t.mirror_threads);
+            });
+                ui.add_enabled_ui(t.mirror_threads, |ui| {
+                    ui::field(ui, tr("Fórum do espelho"), Some(tr("Chat ID do supergrupo com Tópicos (precisa estar em Chats permitidos; o bot deve ser admin com \"Gerenciar tópicos\").")), |ui| {
+                    ui::optional_i64(ui, &mut t.forum_chat_id, tr("ex.: -1001234567890"));
+                });
+                });
                 ui::field(
                     ui,
                     tr("Anunciar no boot"),
@@ -333,7 +453,7 @@ impl TelegramPage {
                         );
                     },
                 );
-                ui::field(ui, tr("Resumo em áudio"), Some(tr("Respostas longas ganham uma versão falada (TTS da OpenAI; requer a API key da seção Voz).")), |ui| {
+                ui::field(ui, tr("Resumo em áudio"), Some(tr("Respostas longas ganham uma versão falada (TTS da OpenAI; requer a API key da seção Voz). Só para turnos iniciados pelo Telegram: quem fala pelo app lê na tela, sem gastar TTS.")), |ui| {
                 ui::toggle(ui, &mut t.audio_summary);
             });
                 ui.add_enabled_ui(t.audio_summary, |ui| {

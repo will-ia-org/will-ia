@@ -234,6 +234,14 @@ impl ThreadHost for Host {
                 return Ok(self.enrich(t));
             }
         }
+        // espelho app ↔ Telegram: thread do app nasce como tópico do fórum
+        // (se o módulo está no ar e o fórum validado); senão vive só no app.
+        let mirrored = if *origin == Origin::Ui {
+            self.mirror_create(title).await
+        } else {
+            None
+        };
+        let origin = mirrored.as_ref().unwrap_or(origin);
         let t = self
             .state
             .storage
@@ -348,6 +356,9 @@ impl ThreadHost for Host {
             match self.state.storage.rename_thread(thread, &title).await {
                 Ok(()) => {
                     tracing::debug!("thread intitulada pelo primeiro pedido");
+                    // só renomeia o tópico se ele ainda é "Nova thread" (não
+                    // sobrescreve o nome dado pelo usuário no Telegram)
+                    self.mirror_rename(&t.origin, &title, true).await;
                     emit_thread_updated(&self.state, thread).await;
                 }
                 Err(e) => tracing::warn!(error = %e, "não renomeou a thread pelo primeiro pedido"),
@@ -469,6 +480,9 @@ impl ThreadHost for Host {
                     }
                 }
             }
+        }
+        if let Some(t) = &t {
+            self.mirror_delete(&t.origin).await;
         }
         self.state
             .storage
@@ -617,6 +631,160 @@ impl BrainHost for UserBrain {
     }
     fn subscribe(&self) -> broadcast::Receiver<Event> {
         self.host.state.bus.subscribe()
+    }
+}
+
+// ---------- espelho app ↔ tópicos do Telegram ----------
+
+impl Host {
+    #[cfg(feature = "telegram")]
+    async fn telegram_mirror(&self) -> Option<Arc<will_telegram::TelegramModule>> {
+        let m = self.state.telegram.read().await.clone()?;
+        if m.settings_mirror_threads() {
+            Some(m)
+        } else {
+            None
+        }
+    }
+
+    /// Cria o tópico no fórum para uma thread nova do app; `None` = sem espelho
+    /// (módulo parado, fórum não configurado/validado ou API falhou).
+    async fn mirror_create(&self, title: Option<&str>) -> Option<Origin> {
+        #[cfg(feature = "telegram")]
+        {
+            let m = self.telegram_mirror().await?;
+            if !m.mirror_ready() {
+                return None;
+            }
+            match m.mirror_create(title).await {
+                Ok(o) => Some(o),
+                Err(e) => {
+                    tracing::warn!(error = %e, "espelho: tópico não criado; thread fica só no app");
+                    None
+                }
+            }
+        }
+        #[cfg(not(feature = "telegram"))]
+        {
+            let _ = title;
+            None
+        }
+    }
+
+    async fn mirror_rename(&self, origin: &Origin, title: &str, only_placeholder: bool) {
+        #[cfg(feature = "telegram")]
+        {
+            if let Some(m) = self.telegram_mirror().await {
+                if let Err(e) = m.mirror_rename(origin, title, only_placeholder).await {
+                    tracing::warn!(error = %e, "espelho: tópico não renomeado");
+                }
+            }
+        }
+        #[cfg(not(feature = "telegram"))]
+        {
+            let _ = (origin, title, only_placeholder);
+        }
+    }
+
+    async fn mirror_delete(&self, origin: &Origin) {
+        #[cfg(feature = "telegram")]
+        {
+            if let Some(m) = self.telegram_mirror().await {
+                if let Err(e) = m.mirror_delete(origin).await {
+                    tracing::warn!(error = %e, "espelho: tópico não apagado; apague na mão no Telegram");
+                }
+            }
+        }
+        #[cfg(not(feature = "telegram"))]
+        {
+            let _ = origin;
+        }
+    }
+
+    /// Renomeia a thread (banco + tópico do Telegram, se houver) e avisa a UI.
+    pub async fn rename_thread(&self, thread: ThreadId, title: &str) -> Result<(), String> {
+        let t = self
+            .state
+            .storage
+            .get_thread(thread)
+            .await
+            .map_err(|e| e.to_string())?;
+        self.state
+            .storage
+            .rename_thread(thread, title)
+            .await
+            .map_err(|e| e.to_string())?;
+        self.mirror_rename(&t.origin, title, false).await;
+        emit_thread_updated(&self.state, thread).await;
+        Ok(())
+    }
+
+    /// Botão "Sincronizar" das configurações do Telegram: cria um tópico no
+    /// fórum para cada thread do app (origem `ui`, não arquivada) e troca a
+    /// origem dela para o tópico. Devolve `{ created, failed, skipped }`.
+    pub async fn sync_threads_to_telegram(&self) -> Result<serde_json::Value, String> {
+        #[cfg(feature = "telegram")]
+        {
+            let m = self
+                .telegram_mirror()
+                .await
+                .ok_or("módulo Telegram parado ou espelho desligado")?;
+            let st = m.forum_state();
+            if !m.mirror_ready() {
+                return Err(st.error.unwrap_or_else(|| "fórum não validado".into()));
+            }
+            let all = self
+                .state
+                .storage
+                .list_threads(false)
+                .await
+                .map_err(|e| e.to_string())?;
+            let (mut created, mut failed, mut skipped) = (0u32, 0u32, 0u32);
+            let mut errors: Vec<String> = Vec::new();
+            for t in all {
+                if t.origin != Origin::Ui {
+                    skipped += 1;
+                    continue;
+                }
+                let title = t
+                    .title
+                    .clone()
+                    .filter(|x| !will_core::is_placeholder_title(Some(x)));
+                match m.mirror_create(title.as_deref()).await {
+                    Ok(origin) => {
+                        if let Err(e) = self.state.storage.set_thread_origin(t.id, &origin).await {
+                            tracing::warn!(thread_id = %t.id, error = %e, "sincronizar: origem não gravada");
+                            failed += 1;
+                            errors.push(format!("{}: {e}", t.id));
+                            continue;
+                        }
+                        created += 1;
+                        tracing::info!(thread_id = %t.id, origin = ?origin, "thread do app espelhada no Telegram");
+                        emit_thread_updated(&self.state, t.id).await;
+                    }
+                    Err(e) => {
+                        failed += 1;
+                        tracing::warn!(thread_id = %t.id, error = %e, "sincronizar: tópico não criado");
+                        errors.push(format!("{}: {e}", title.unwrap_or_else(|| t.id.to_string())));
+                        // flood control do Telegram: para na primeira falha de API
+                        if e.contains("Retry") || e.contains("Too Many") {
+                            break;
+                        }
+                    }
+                }
+            }
+            Ok(serde_json::json!({
+                "created": created,
+                "failed": failed,
+                "skipped": skipped,
+                "errors": errors,
+                "forum": st.chat_title,
+            }))
+        }
+        #[cfg(not(feature = "telegram"))]
+        {
+            Err("módulo Telegram não compilado".into())
+        }
     }
 }
 

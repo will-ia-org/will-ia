@@ -386,6 +386,12 @@ pub struct TelegramSettings {
     pub allowed_users: Vec<i64>,
     pub default_chat_id: Option<i64>,
     pub default_topic_id: Option<i64>,
+    /// Supergrupo com Tópicos onde as threads criadas no app/MCP viram tópicos
+    /// (espelho app ↔ Telegram). Precisa estar em `allowed_chats`.
+    pub forum_chat_id: Option<i64>,
+    /// Espelhar threads: criar/renomear/apagar a thread no app reflete no tópico
+    /// do fórum (e vice-versa). Só age com o módulo no ar e `forum_chat_id` válido.
+    pub mirror_threads: bool,
     pub announce_boot: bool,
     pub unauthorized_behavior: String, // ignore | reply
     pub reply_format: String,          // text | html
@@ -406,6 +412,8 @@ impl Default for TelegramSettings {
             allowed_users: vec![],
             default_chat_id: None,
             default_topic_id: None,
+            forum_chat_id: None,
+            mirror_threads: true,
             announce_boot: true,
             unauthorized_behavior: "ignore".into(),
             reply_format: "text".into(),
