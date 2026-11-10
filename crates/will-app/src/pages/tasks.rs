@@ -1,0 +1,1602 @@
+//! Tarefas: painel Gantt (lista à esquerda, linha do tempo à direita) com zoom,
+//! navegação por arraste, linha do "agora", cor por estado (futura cinza, em
+//! andamento azul, atrasada vermelha, concluída verde), botão de concluir ao
+//! passar o mouse na barra e formulário de criação/edição. Ver `docs/31`.
+
+use super::Cx;
+use crate::help;
+use crate::i18n::{tr, trf};
+use crate::service::{Loader, Task};
+use crate::ui::{self, Tone};
+use chrono::{DateTime, Datelike, NaiveDateTime, Timelike, Utc};
+use egui::{Align2, Color32, Pos2, Rect, Sense, Stroke, Vec2};
+use serde_json::{json, Value};
+use std::time::Duration;
+
+const ROW_H: f32 = 30.0;
+const HEADER_H: f32 = 44.0;
+/// Largura inicial da lista de títulos (ajustável pelo divisor arrastável).
+const LIST_W: f32 = 280.0;
+const LIST_W_MIN: f32 = 160.0;
+const LIST_W_MAX: f32 = 640.0;
+const MIN_DAYS_VISIBLE: f32 = 0.5;
+const MAX_DAYS_VISIBLE: f32 = 90.0;
+const OPEN_END_PX: f32 = 26.0;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum State {
+    Upcoming,
+    Running,
+    Overdue,
+    Done,
+}
+
+impl State {
+    fn label(self) -> &'static str {
+        match self {
+            State::Upcoming => tr("futura"),
+            State::Running => tr("em andamento"),
+            State::Overdue => tr("atrasada"),
+            State::Done => tr("concluída"),
+        }
+    }
+}
+
+#[derive(Debug, Clone)]
+struct Row {
+    id: String,
+    title: String,
+    description: String,
+    start: DateTime<Utc>,
+    end: Option<DateTime<Utc>>,
+    done: bool,
+    priority: u8,
+    start_local: String,
+    end_local: String,
+}
+
+impl Row {
+    fn from_json(v: &Value) -> Option<Row> {
+        let start = v
+            .get("start_at")
+            .and_then(|s| s.as_str())
+            .and_then(|s| DateTime::parse_from_rfc3339(s).ok())
+            .map(|d| d.with_timezone(&Utc))?;
+        let end = v
+            .get("end_at")
+            .and_then(|s| s.as_str())
+            .and_then(|s| DateTime::parse_from_rfc3339(s).ok())
+            .map(|d| d.with_timezone(&Utc));
+        Some(Row {
+            id: ui::s(v, "id"),
+            title: ui::s(v, "title"),
+            description: ui::s(v, "description"),
+            start,
+            end,
+            done: v.get("done_at").is_some_and(|d| !d.is_null()),
+            priority: ui::i(v, "priority_rank").clamp(1, 3) as u8,
+            start_local: ui::s(v, "start_local"),
+            end_local: ui::s(v, "end_local"),
+        })
+    }
+
+    fn state(&self, now: DateTime<Utc>) -> State {
+        if self.done {
+            State::Done
+        } else if now < self.start {
+            State::Upcoming
+        } else if self.end.is_some_and(|e| now >= e) {
+            State::Overdue
+        } else {
+            State::Running
+        }
+    }
+}
+
+/// Formulário de criação (`editing == None`) ou edição. Datas pelo
+/// calendário (`DatePickerButton`) e hora/minuto por seletores.
+struct Form {
+    editing: Option<String>,
+    title: String,
+    description: String,
+    start_date: jiff::civil::Date,
+    start_h: u32,
+    start_m: u32,
+    has_end: bool,
+    end_date: jiff::civil::Date,
+    end_h: u32,
+    end_m: u32,
+    priority: String,
+    done: bool,
+    save: Option<Task<Value>>,
+    error: Option<String>,
+    /// Aba Descrição: editor (true) ou Markdown renderizado (false).
+    desc_edit: bool,
+}
+
+/// Próximo quarto de hora a partir do relógio local.
+fn next_quarter(offset_minutes: i32) -> NaiveDateTime {
+    let now = local_naive(Utc::now(), offset_minutes);
+    let base = now.date().and_hms_opt(now.hour(), 0, 0).unwrap_or(now);
+    let q = (now.minute() / 15 + 1) as i64 * 15;
+    base + chrono::Duration::minutes(q)
+}
+
+fn jdate(n: chrono::NaiveDate) -> jiff::civil::Date {
+    jiff::civil::Date::new(n.year() as i16, n.month() as i8, n.day() as i8).unwrap_or_default()
+}
+
+fn ndate(d: jiff::civil::Date) -> chrono::NaiveDate {
+    chrono::NaiveDate::from_ymd_opt(i32::from(d.year()), d.month() as u32, d.day() as u32)
+        .unwrap_or_default()
+}
+
+/// `YYYY-MM-DDTHH:MM` (fuso configurado) → (data, hora, minuto).
+fn parse_local(s: &str) -> Option<(jiff::civil::Date, u32, u32)> {
+    let n = NaiveDateTime::parse_from_str(s.get(..16)?, "%Y-%m-%dT%H:%M").ok()?;
+    Some((jdate(n.date()), n.hour(), n.minute()))
+}
+
+fn fmt_local(d: jiff::civil::Date, h: u32, m: u32) -> String {
+    format!(
+        "{:04}-{:02}-{:02}T{:02}:{:02}",
+        d.year(),
+        d.month(),
+        d.day(),
+        h,
+        m
+    )
+}
+
+impl Form {
+    fn blank() -> Self {
+        let d = jiff::civil::Date::default();
+        Self {
+            editing: None,
+            title: String::new(),
+            description: String::new(),
+            start_date: d,
+            start_h: 9,
+            start_m: 0,
+            has_end: false,
+            end_date: d,
+            end_h: 10,
+            end_m: 0,
+            priority: "medium".into(),
+            done: false,
+            save: None,
+            error: None,
+            desc_edit: false,
+        }
+    }
+
+    fn new(offset_minutes: i32) -> Self {
+        let n = next_quarter(offset_minutes);
+        let mut f = Self::blank();
+        f.start_date = jdate(n.date());
+        f.start_h = n.hour();
+        f.start_m = n.minute();
+        f.set_end_from_start(1);
+        f.has_end = false;
+        f
+    }
+
+    fn from_row(r: &Row) -> Self {
+        let mut f = Self::blank();
+        f.editing = Some(r.id.clone());
+        f.title = r.title.clone();
+        f.description = r.description.clone();
+        if let Some((d, h, m)) = parse_local(&r.start_local) {
+            f.start_date = d;
+            f.start_h = h;
+            f.start_m = m;
+        }
+        match parse_local(&r.end_local) {
+            Some((d, h, m)) => {
+                f.has_end = true;
+                f.end_date = d;
+                f.end_h = h;
+                f.end_m = m;
+            }
+            None => {
+                f.set_end_from_start(1);
+                f.has_end = false;
+            }
+        }
+        f.priority = match r.priority {
+            1 => "high",
+            3 => "low",
+            _ => "medium",
+        }
+        .into();
+        f.done = r.done;
+        f
+    }
+
+    fn start_naive(&self) -> NaiveDateTime {
+        ndate(self.start_date)
+            .and_hms_opt(self.start_h, self.start_m, 0)
+            .unwrap_or_default()
+    }
+
+    /// Fim = início + `hours` (atalhos "+1h", "+1 dia"…).
+    fn set_end_from_start(&mut self, hours: i64) {
+        let e = self.start_naive() + chrono::Duration::hours(hours);
+        self.has_end = true;
+        self.end_date = jdate(e.date());
+        self.end_h = e.hour();
+        self.end_m = e.minute();
+    }
+
+    fn saving(&self) -> bool {
+        self.save.as_ref().is_some_and(|t| t.pending())
+    }
+
+    fn body(&self) -> Result<Value, String> {
+        if self.title.trim().is_empty() {
+            return Err(tr("Dê um título à tarefa.").into());
+        }
+        let start = fmt_local(self.start_date, self.start_h, self.start_m);
+        let end = if self.has_end {
+            let e = ndate(self.end_date)
+                .and_hms_opt(self.end_h, self.end_m, 0)
+                .unwrap_or_default();
+            if e <= self.start_naive() {
+                return Err(tr("O fim precisa ser depois do início.").into());
+            }
+            fmt_local(self.end_date, self.end_h, self.end_m)
+        } else {
+            String::new()
+        };
+        Ok(json!({
+            "title": self.title.trim(),
+            "description": self.description.trim(),
+            "start_at": start,
+            "end_at": end,
+            "priority": self.priority,
+        }))
+    }
+}
+
+/// Seletores de hora e minuto (minuto de 5 em 5, mais o valor atual).
+fn time_picker(ui: &mut egui::Ui, id: &str, h: &mut u32, m: &mut u32) {
+    egui::ComboBox::from_id_salt((id, "h"))
+        .width(58.0)
+        .selected_text(format!("{h:02}"))
+        .show_ui(ui, |ui| {
+            for x in 0..24u32 {
+                ui.selectable_value(h, x, format!("{x:02}"));
+            }
+        });
+    ui.label(":");
+    let mut mins: Vec<u32> = (0..60).step_by(5).collect();
+    if !mins.contains(m) {
+        mins.push(*m);
+        mins.sort_unstable();
+    }
+    egui::ComboBox::from_id_salt((id, "m"))
+        .width(58.0)
+        .selected_text(format!("{m:02}"))
+        .show_ui(ui, |ui| {
+            for x in mins {
+                ui.selectable_value(m, x, format!("{x:02}"));
+            }
+        });
+}
+
+fn date_picker<'a>(d: &'a mut jiff::civil::Date, id: &'a str) -> egui_extras::DatePickerButton<'a> {
+    egui_extras::DatePickerButton::new(d)
+        .id_salt(id)
+        .format("%d/%m/%Y")
+        .highlight_weekends(true)
+        .show_icon(true)
+}
+
+/// Corta o texto com "…" para caber em `max_w` pixels na fonte dada (mede de
+/// verdade, em vez de contar caracteres), para o título acompanhar a borda.
+fn fit_text(p: &egui::Painter, text: &str, font: egui::FontId, max_w: f32) -> String {
+    let width = |t: &str| {
+        p.layout_no_wrap(t.to_string(), font.clone(), Color32::WHITE)
+            .size()
+            .x
+    };
+    if width(text) <= max_w {
+        return text.to_string();
+    }
+    let chars: Vec<char> = text.chars().collect();
+    let (mut lo, mut hi) = (0usize, chars.len());
+    while lo < hi {
+        let mid = (lo + hi).div_ceil(2);
+        let candidate: String = chars[..mid].iter().collect::<String>() + "…";
+        if width(&candidate) <= max_w {
+            lo = mid;
+        } else {
+            hi = mid - 1;
+        }
+    }
+    let mut out: String = chars[..lo].iter().collect();
+    out = out.trim_end().to_string();
+    out.push('…');
+    out
+}
+
+/// Instante UTC → relógio local (fuso das configurações, pelo deslocamento).
+fn local_naive(dt: DateTime<Utc>, offset_minutes: i32) -> NaiveDateTime {
+    (dt + chrono::Duration::minutes(i64::from(offset_minutes))).naive_utc()
+}
+
+/// Horas locais desde a época (eixo x do Gantt).
+fn local_hours(dt: DateTime<Utc>, offset_minutes: i32) -> f64 {
+    dt.timestamp() as f64 / 3600.0 + f64::from(offset_minutes) / 60.0
+}
+
+fn weekday_pt(n: NaiveDateTime) -> &'static str {
+    match n.weekday() {
+        chrono::Weekday::Mon => tr("seg"),
+        chrono::Weekday::Tue => tr("ter"),
+        chrono::Weekday::Wed => tr("qua"),
+        chrono::Weekday::Thu => tr("qui"),
+        chrono::Weekday::Fri => tr("sex"),
+        chrono::Weekday::Sat => tr("sáb"),
+        chrono::Weekday::Sun => tr("dom"),
+    }
+}
+
+pub struct TasksPage {
+    list: Loader<Value>,
+    rows: Vec<Row>,
+    offset_minutes: i32,
+    show_done: bool,
+    /// `start` | `alpha` | `priority` (persistido em `settings.tasks.sort`).
+    sort: String,
+    sort_loaded: bool,
+    sort_save: Option<Task<Value>>,
+    form: Option<Form>,
+    actions: Vec<(String, Task<Value>)>,
+    /// Confirmação pendente na tela: (id, título, ação = delete|complete|reopen).
+    confirm: Option<(String, String, &'static str)>,
+    /// Zoom: pixels por hora. `None` = ajustar a 7 dias na primeira vez.
+    px_per_hour: Option<f32>,
+    /// Hora local (desde a época) na borda esquerda da linha do tempo.
+    view_start: Option<f64>,
+    hovered: Option<String>,
+    /// Ponteiro estava sobre as barras no quadro anterior: a roda do mouse vira
+    /// zoom e a rolagem vertical da lista fica desligada.
+    wheel_over_tl: bool,
+    /// Largura atual da lista de títulos (divisor arrastável).
+    list_w: f32,
+    /// Preferências locais (largura, zoom, posição, concluídas) carregadas?
+    prefs_loaded: bool,
+    last_saved: Option<crate::ui_prefs::GanttPrefs>,
+    dirty_since: Option<std::time::Instant>,
+    md_cache: egui_commonmark::CommonMarkCache,
+}
+
+impl Default for TasksPage {
+    fn default() -> Self {
+        Self {
+            list: Loader::default(),
+            rows: Vec::new(),
+            offset_minutes: -180,
+            show_done: false,
+            sort: "start".into(),
+            sort_loaded: false,
+            sort_save: None,
+            form: None,
+            actions: Vec::new(),
+            confirm: None,
+            px_per_hour: None,
+            view_start: None,
+            hovered: None,
+            wheel_over_tl: false,
+            list_w: LIST_W,
+            prefs_loaded: false,
+            last_saved: None,
+            dirty_since: None,
+            md_cache: egui_commonmark::CommonMarkCache::default(),
+        }
+    }
+}
+
+impl TasksPage {
+    pub fn on_event(&mut self, ev: &will_core::Event) {
+        if matches!(ev, will_core::Event::TasksChanged) {
+            self.list.loaded_at = None;
+        }
+    }
+
+    /// Carrega/atualiza a lista mesmo com a página fechada (badges do menu).
+    /// Chamado pelo app a cada quadro; pede a lista quando está velha (60 s)
+    /// ou quando `TasksChanged` zerou o carimbo.
+    pub fn poll_list(&mut self, svc: &std::sync::Arc<crate::service::Service>) {
+        self.load_prefs();
+        if self.list.stale(Duration::from_secs(60)) {
+            let filter = if self.show_done { "all" } else { "pending" };
+            self.list
+                .start(svc.call(move |c| async move { c.tasks(filter).await }));
+        }
+        if self.list.poll() {
+            if let Some(v) = &self.list.data {
+                self.offset_minutes = v
+                    .get("offset_minutes")
+                    .and_then(|o| o.as_i64())
+                    .unwrap_or(-180) as i32;
+                self.rows = v
+                    .get("tasks")
+                    .and_then(|t| t.as_array())
+                    .map(|a| a.iter().filter_map(Row::from_json).collect())
+                    .unwrap_or_default();
+            }
+        }
+    }
+
+    /// (atrasadas, em andamento) agora, pelo relógio.
+    pub fn counts(&self) -> (usize, usize) {
+        let now = Utc::now();
+        let mut overdue = 0;
+        let mut running = 0;
+        for r in &self.rows {
+            match r.state(now) {
+                State::Overdue => overdue += 1,
+                State::Running => running += 1,
+                _ => {}
+            }
+        }
+        (overdue, running)
+    }
+
+    fn load_prefs(&mut self) {
+        if !self.prefs_loaded {
+            self.prefs_loaded = true;
+            let g = crate::ui_prefs::load().gantt;
+            if let Some(w) = g.list_w {
+                self.list_w = w.clamp(LIST_W_MIN, LIST_W_MAX);
+            }
+            if let Some(z) = g.px_per_hour {
+                if z.is_finite() && z > 0.0 {
+                    self.px_per_hour = Some(z);
+                }
+            }
+            if let Some(v) = g.view_start {
+                if v.is_finite() {
+                    self.view_start = Some(v);
+                }
+            }
+            self.show_done = g.show_done;
+            self.last_saved = Some(g);
+        }
+    }
+
+    fn poll(&mut self, cx: &mut Cx) {
+        self.load_prefs();
+        if !self.sort_loaded {
+            self.sort = cx.snap.settings.tasks.sort.clone();
+            if !matches!(self.sort.as_str(), "start" | "alpha" | "priority") {
+                self.sort = "start".into();
+            }
+            self.sort_loaded = true;
+        }
+        self.poll_list(cx.svc);
+        let mut i = 0;
+        while i < self.actions.len() {
+            if let Some(r) = self.actions[i].1.take() {
+                let (msg, _) = self.actions.remove(i);
+                match r {
+                    Ok(_) => {
+                        cx.toasts.success(msg);
+                        self.list.loaded_at = None;
+                    }
+                    Err(e) => cx.toasts.error(trf("Tarefas: {}", &[&e])),
+                }
+            } else {
+                i += 1;
+            }
+        }
+        if let Some(t) = &self.sort_save {
+            if let Some(r) = t.take() {
+                self.sort_save = None;
+                if let Err(e) = r {
+                    cx.toasts.error(trf("Ordenação não salva: {}", &[&e]));
+                }
+            }
+        }
+        let mut close = false;
+        if let Some(f) = &mut self.form {
+            if let Some(t) = &f.save {
+                if let Some(r) = t.take() {
+                    f.save = None;
+                    match r {
+                        Ok(_) => {
+                            cx.toasts.success(if f.editing.is_some() {
+                                tr("Tarefa salva.")
+                            } else {
+                                tr("Tarefa criada.")
+                            });
+                            close = true;
+                            self.list.loaded_at = None;
+                        }
+                        Err(e) => f.error = Some(e),
+                    }
+                }
+            }
+        }
+        if close {
+            self.form = None;
+        }
+    }
+
+    fn act(&mut self, cx: &Cx, msg: &str, id: String, kind: &'static str) {
+        let t = cx.svc.call(move |c| async move {
+            match kind {
+                "complete" => c.complete_task(&id).await,
+                "reopen" => c.reopen_task(&id).await,
+                _ => c.delete_task(&id).await,
+            }
+        });
+        self.actions.push((msg.to_string(), t));
+    }
+
+    fn save_sort(&mut self, cx: &Cx) {
+        let mut tasks = cx.snap.settings.tasks.clone();
+        tasks.sort = self.sort.clone();
+        let value = serde_json::to_value(tasks).unwrap_or(Value::Null);
+        self.sort_save = Some(
+            cx.svc
+                .call(move |c| async move { c.put_settings("tasks", value).await }),
+        );
+    }
+
+    fn sorted_rows(&self, now: DateTime<Utc>) -> Vec<Row> {
+        let mut rows: Vec<Row> = self
+            .rows
+            .iter()
+            .filter(|r| self.show_done || !r.done)
+            .cloned()
+            .collect();
+        match self.sort.as_str() {
+            "alpha" => rows.sort_by_key(|r| (r.title.to_lowercase(), r.start)),
+            "priority" => rows.sort_by_key(|r| (r.priority, r.start)),
+            _ => rows.sort_by_key(|r| r.start),
+        }
+        let _ = now;
+        rows
+    }
+
+    fn color_for(state: State, pal: &ui::Palette, dark: bool) -> Color32 {
+        match state {
+            State::Upcoming => pal.text_weak.gamma_multiply(0.55),
+            State::Running => pal.accent,
+            State::Overdue => Tone::Danger.color(dark),
+            State::Done => Tone::Success.color(dark),
+        }
+    }
+
+    fn priority_color(p: u8, dark: bool) -> Color32 {
+        match p {
+            1 => Tone::Danger.color(dark),
+            3 => Tone::Success.color(dark),
+            _ => Tone::Warning.color(dark),
+        }
+    }
+
+    /// Bandeirinha de prioridade (mastro + triângulo).
+    fn paint_flag(p: &egui::Painter, at: Pos2, color: Color32) {
+        let pole = Stroke::new(1.4, color);
+        p.line_segment([at, Pos2::new(at.x, at.y + 11.0)], pole);
+        p.add(egui::Shape::convex_polygon(
+            vec![
+                at,
+                Pos2::new(at.x + 8.0, at.y + 2.5),
+                Pos2::new(at.x, at.y + 5.5),
+            ],
+            color,
+            Stroke::NONE,
+        ));
+    }
+
+    /// Círculo com ✓ (concluir) ou ↺ (reabrir), desenhado na barra ao passar o mouse.
+    fn paint_check(p: &egui::Painter, rect: Rect, bg: Color32, fg: Color32, reopen: bool) {
+        let c = rect.center();
+        let r = rect.width().min(rect.height()) / 2.0;
+        p.circle_filled(c, r, bg);
+        let st = Stroke::new(1.8, fg);
+        if reopen {
+            p.circle_stroke(c, r * 0.5, st);
+        } else {
+            p.line_segment(
+                [
+                    Pos2::new(c.x - r * 0.45, c.y),
+                    Pos2::new(c.x - r * 0.1, c.y + r * 0.4),
+                ],
+                st,
+            );
+            p.line_segment(
+                [
+                    Pos2::new(c.x - r * 0.1, c.y + r * 0.4),
+                    Pos2::new(c.x + r * 0.5, c.y - r * 0.4),
+                ],
+                st,
+            );
+        }
+    }
+
+    pub fn ui(&mut self, ui: &mut egui::Ui, cx: &mut Cx) {
+        self.poll(cx);
+        ui.ctx().request_repaint_after(Duration::from_secs(30));
+        let dark = ui.visuals().dark_mode;
+        let pal = ui::palette(dark);
+        let now = Utc::now();
+
+        // ---- barra superior ----
+        ui.horizontal(|ui| {
+            ui.label(egui::RichText::new(tr("Tarefas")).font(ui::semibold(18.0)));
+            ui::help_icon(ui, &help::TASKS);
+            ui.add_space(8.0);
+            if ui::primary_button(ui, tr("+ Nova tarefa")).clicked() {
+                let mut f = Form::new(self.offset_minutes);
+                f.desc_edit = true;
+                ui::select_tab(ui.ctx(), "task-form", "basic");
+                self.form = Some(f);
+            }
+            ui.add_space(10.0);
+            ui.label(egui::RichText::new(tr("Ordenar:")).weak().small());
+            let before = self.sort.clone();
+            ui::select(
+                ui,
+                "tasks-sort",
+                &mut self.sort,
+                &[
+                    ("start", tr("Data de início")),
+                    ("alpha", tr("Ordem alfabética")),
+                    ("priority", tr("Prioridade")),
+                ],
+            );
+            if before != self.sort {
+                self.save_sort(cx);
+            }
+            ui.add_space(10.0);
+            if ui::toggle(ui, &mut self.show_done).changed() {
+                self.list.loaded_at = None;
+            }
+            ui.label(egui::RichText::new(tr("mostrar concluídas")).small());
+            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                if ui::icon_button(ui, crate::icons::REFRESH, tr("Atualizar")).clicked() {
+                    self.list.loaded_at = None;
+                }
+                if self.list.loading() {
+                    ui.spinner();
+                }
+                if ui
+                    .button(tr("Hoje"))
+                    .on_hover_text(tr("Volta ao agora (atalho: barra de espaço)"))
+                    .clicked()
+                {
+                    self.view_start = None;
+                }
+                if ui
+                    .button("+")
+                    .on_hover_text(tr("Aproximar (roda do mouse sobre as barras)"))
+                    .clicked()
+                {
+                    if let Some(z) = self.px_per_hour.as_mut() {
+                        *z *= 1.5;
+                    }
+                }
+                if ui.button("−").on_hover_text(tr("Afastar")).clicked() {
+                    if let Some(z) = self.px_per_hour.as_mut() {
+                        *z /= 1.5;
+                    }
+                }
+                ui.label(egui::RichText::new(tr("Zoom:")).weak().small());
+            });
+        });
+        // legenda
+        ui.horizontal(|ui| {
+            for (st, label) in [
+                (State::Upcoming, tr("futura")),
+                (State::Running, tr("em andamento")),
+                (State::Overdue, tr("atrasada")),
+                (State::Done, tr("concluída")),
+            ] {
+                let (r, _) = ui.allocate_exact_size(Vec2::splat(10.0), Sense::hover());
+                ui.painter()
+                    .rect_filled(r.shrink(1.0), 2.0, Self::color_for(st, pal, dark));
+                ui.label(egui::RichText::new(label).small().weak());
+                ui.add_space(6.0);
+            }
+            ui.label(
+                egui::RichText::new(tr(
+                    "· roda do mouse sobre as barras = zoom · arraste para navegar · clique na barra para editar",
+                ))
+                .small()
+                .weak(),
+            );
+        });
+        if let Some(e) = &self.list.error {
+            ui::error_text(ui, e);
+        }
+        ui.add_space(4.0);
+
+        // barra de espaço = "Hoje" (fora de campos de texto e com o formulário fechado)
+        if self.form.is_none()
+            && self.confirm.is_none()
+            && ui.ctx().memory(|m| m.focused().is_none())
+            && ui.input(|i| i.key_pressed(egui::Key::Space))
+        {
+            self.view_start = None;
+        }
+        let rows = self.sorted_rows(now);
+        let avail = ui.available_rect_before_wrap();
+        let list_w = self
+            .list_w
+            .clamp(LIST_W_MIN, (avail.width() - 240.0).max(LIST_W_MIN));
+        self.list_w = list_w;
+        let tl_w = (avail.width() - list_w).max(200.0);
+        let zoom = *self.px_per_hour.get_or_insert(tl_w / (7.0 * 24.0));
+        let min_zoom = tl_w / (MAX_DAYS_VISIBLE * 24.0);
+        let max_zoom = tl_w / (MIN_DAYS_VISIBLE * 24.0);
+        let zoom = zoom.clamp(min_zoom, max_zoom);
+        self.px_per_hour = Some(zoom);
+        let now_h = local_hours(now, self.offset_minutes);
+        let view_start = *self.view_start.get_or_insert_with(|| {
+            // "agora" a 30% da largura, alinhado à meia-noite local do dia
+            let hours_left = (tl_w * 0.3) / zoom;
+            let day_start = (now_h / 24.0).floor() * 24.0;
+            let candidate = now_h - f64::from(hours_left);
+            candidate.min(day_start)
+        });
+
+        // ---- cabeçalho (fixo) ----
+        let (header, _) =
+            ui.allocate_exact_size(Vec2::new(avail.width(), HEADER_H), Sense::hover());
+        let tl_header =
+            Rect::from_min_max(Pos2::new(header.left() + list_w, header.top()), header.max);
+        let x_of = |h: f64| -> f32 { tl_header.left() + ((h - view_start) as f32) * zoom };
+        {
+            let p = ui.painter_at(header);
+            p.rect_filled(header, 0.0, pal.panel);
+            p.text(
+                Pos2::new(header.left() + 8.0, header.center().y),
+                Align2::LEFT_CENTER,
+                trf("{} tarefa(s)", &[&rows.len()]),
+                ui::medium(12.0),
+                pal.text_weak,
+            );
+            self.paint_time_axis(&p, tl_header, view_start, zoom, now_h, pal, dark, true);
+        }
+
+        // ---- linhas (rolagem vertical) ----
+        let body_h = ui.available_height().max(100.0);
+        let content_h = (rows.len() as f32 * ROW_H).max(body_h);
+        let mut open_form: Option<Form> = None;
+        let mut ask: Option<(String, String, &'static str)> = None;
+        let mut hovered_now: Option<String> = None;
+        let mut pan_delta = 0.0f32;
+        let mut wheel_now = false;
+        let mut zoom_at: Option<(f32, f32)> = None;
+        egui::ScrollArea::vertical()
+            .id_salt("tasks-gantt")
+            .scroll_source(egui::scroll_area::ScrollSource {
+                mouse_wheel: !self.wheel_over_tl,
+                ..Default::default()
+            })
+            .auto_shrink([false, false])
+            .max_height(body_h)
+            .show(ui, |ui| {
+                let (area, _) = ui.allocate_exact_size(
+                    Vec2::new(avail.width(), content_h),
+                    Sense::hover(),
+                );
+                let tl = Rect::from_min_max(Pos2::new(area.left() + list_w, area.top()), area.max);
+                let p = ui.painter_at(area);
+                p.rect_filled(area, 0.0, pal.window);
+                self.paint_time_axis(&p, tl, view_start, zoom, now_h, pal, dark, false);
+
+                // fundo da linha do tempo: arrastar navega; Ctrl+rolagem dá zoom
+                let bg = ui.interact(tl, ui.scope_id().with("tl-bg"), Sense::drag());
+                if bg.dragged() {
+                    pan_delta = bg.drag_delta().x;
+                }
+                let hover_pos = ui.input(|i| i.pointer.hover_pos());
+                let over_tl = hover_pos.is_some_and(|hp| tl.contains(hp));
+                let over_header = hover_pos.is_some_and(|hp| tl_header.contains(hp));
+                wheel_now = over_tl;
+                if over_tl || over_header {
+                    let (zd, sd) = ui.input(|i| (i.zoom_delta(), i.smooth_scroll_delta));
+                    let mx = hover_pos.map(|h| h.x).unwrap_or(tl.left());
+                    if (zd - 1.0).abs() > 0.001 {
+                        // pinça no trackpad
+                        zoom_at = Some((mx, zd));
+                    } else if sd.y.abs() > 0.0 {
+                        // roda do mouse sobre as barras: para cima aproxima,
+                        // para baixo afasta (convenção de mapas/linhas do tempo),
+                        // ancorado no ponteiro
+                        let f = (1.0 + sd.y * 0.004).clamp(0.7, 1.4);
+                        zoom_at = Some((mx, f));
+                    }
+                    if sd.x.abs() > 0.0 {
+                        pan_delta += sd.x;
+                    }
+                }
+
+                let x_of = |h: f64| -> f32 { tl.left() + ((h - view_start) as f32) * zoom };
+                let font = ui::medium(12.5);
+                let small = egui::FontId::proportional(11.0);
+                for (i, r) in rows.iter().enumerate() {
+                    let y = area.top() + i as f32 * ROW_H;
+                    let row_rect = Rect::from_min_size(Pos2::new(area.left(), y), Vec2::new(area.width(), ROW_H));
+                    let list_rect = Rect::from_min_size(Pos2::new(area.left(), y), Vec2::new(list_w, ROW_H));
+                    let state = r.state(now);
+                    let color = Self::color_for(state, pal, dark);
+                    let is_hover = self.hovered.as_deref() == Some(r.id.as_str());
+                    if is_hover {
+                        p.rect_filled(row_rect, 0.0, pal.card_alt.gamma_multiply(0.7));
+                    }
+                    p.line_segment(
+                        [Pos2::new(area.left(), y + ROW_H), Pos2::new(area.right(), y + ROW_H)],
+                        Stroke::new(1.0, pal.border.gamma_multiply(0.6)),
+                    );
+                    // lista: bandeira, título, estado
+                    Self::paint_flag(
+                        &p,
+                        Pos2::new(area.left() + 10.0, y + 9.0),
+                        Self::priority_color(r.priority, dark),
+                    );
+                    p.circle_filled(Pos2::new(area.left() + 30.0, y + ROW_H / 2.0), 3.5, color);
+                    let title_color = if r.done { pal.text_weak } else { pal.text };
+                    // título cortado só quando encosta na borda da lista (acompanha o divisor)
+                    let title_max_w = (list_w - 40.0 - 10.0).max(20.0);
+                    let title = fit_text(&p, &r.title, font.clone(), title_max_w);
+                    let title_color = if r.done {
+                        pal.text_weak.gamma_multiply(0.75)
+                    } else {
+                        title_color
+                    };
+                    let tr_rect = p.with_clip_rect(list_rect).text(
+                        Pos2::new(area.left() + 40.0, y + ROW_H / 2.0),
+                        Align2::LEFT_CENTER,
+                        title,
+                        font.clone(),
+                        title_color,
+                    );
+                    if r.done {
+                        // concluída: apagada e riscada
+                        p.with_clip_rect(list_rect).line_segment(
+                            [
+                                Pos2::new(tr_rect.left(), tr_rect.center().y),
+                                Pos2::new(tr_rect.right(), tr_rect.center().y),
+                            ],
+                            Stroke::new(1.2, title_color),
+                        );
+                    }
+                    let list_resp = ui.interact(list_rect, ui.scope_id().with(("task-row", &r.id)), Sense::click());
+                    if list_resp.hovered() {
+                        hovered_now = Some(r.id.clone());
+                    }
+                    if list_resp.clicked() {
+                        open_form = Some(Form::from_row(r));
+                    }
+
+                    // barra
+                    let sh = local_hours(r.start, self.offset_minutes);
+                    let x0 = x_of(sh);
+                    let (x1, open_end) = match r.end {
+                        Some(e) => (x_of(local_hours(e, self.offset_minutes)), false),
+                        None => {
+                            let until = if r.done || now < r.start { r.start } else { now };
+                            (x_of(local_hours(until, self.offset_minutes)) + OPEN_END_PX, true)
+                        }
+                    };
+                    let x1 = x1.max(x0 + 6.0);
+                    let bar = Rect::from_min_max(
+                        Pos2::new(x0.max(tl.left() - 2.0), y + 6.0),
+                        Pos2::new(x1.min(tl.right() + 2.0), y + ROW_H - 6.0),
+                    );
+                    if x1 < tl.left() || x0 > tl.right() {
+                        // fora da janela: só uma seta na borda
+                        let (ax, dir) = if x1 < tl.left() { (tl.left() + 6.0, -1.0) } else { (tl.right() - 6.0, 1.0) };
+                        let cy = y + ROW_H / 2.0;
+                        p.add(egui::Shape::convex_polygon(
+                            vec![
+                                Pos2::new(ax + 5.0 * dir, cy),
+                                Pos2::new(ax - 3.0 * dir, cy - 5.0),
+                                Pos2::new(ax - 3.0 * dir, cy + 5.0),
+                            ],
+                            color,
+                            Stroke::NONE,
+                        ));
+                        continue;
+                    }
+                    let fill = if is_hover { color.gamma_multiply(1.15) } else { color };
+                    p.rect_filled(bar, 4.0, fill);
+                    if open_end {
+                        // extremidade aberta: degradê simples (barra sem fim)
+                        let fade = Rect::from_min_max(Pos2::new(bar.right() - OPEN_END_PX, bar.top()), bar.max);
+                        p.rect_filled(fade, 4.0, pal.window.gamma_multiply(0.55));
+                    }
+                    if bar.width() > 60.0 {
+                        let text = fit_text(&p, &r.title, small.clone(), bar.width() - 34.0);
+                        p.text(
+                            Pos2::new(bar.left() + 8.0, bar.center().y),
+                            Align2::LEFT_CENTER,
+                            text,
+                            small.clone(),
+                            if state == State::Upcoming { pal.text } else { Color32::WHITE },
+                        );
+                    }
+                    let bar_resp = ui.interact(bar, ui.scope_id().with(("task-bar", &r.id)), Sense::click());
+                    if bar_resp.hovered() {
+                        hovered_now = Some(r.id.clone());
+                    }
+                    let mut tip = format!(
+                        "{}\n{} {}",
+                        r.title,
+                        tr("início"),
+                        local_naive(r.start, self.offset_minutes).format("%d/%m %H:%M")
+                    );
+                    if let Some(e) = r.end {
+                        tip.push_str(&format!(
+                            " · {} {}",
+                            tr("fim"),
+                            local_naive(e, self.offset_minutes).format("%d/%m %H:%M")
+                        ));
+                    }
+                    tip.push_str(&format!("\n{} · {} {}", state.label(), tr("prioridade"), match r.priority { 1 => tr("alta"), 3 => tr("baixa"), _ => tr("média") }));
+                    if !r.description.trim().is_empty() {
+                        tip.push_str("\n\n");
+                        tip.push_str(&ui::ellipsize(r.description.trim(), 240));
+                    }
+                    let bar_resp = bar_resp.on_hover_text(tip);
+                    // mouse na barra (não na linha): início à esquerda e fim à direita
+                    if bar_resp.hovered() {
+                        let sl = local_naive(r.start, self.offset_minutes);
+                        let start_txt = sl.format("%d/%m %H:%M").to_string();
+                        let end_txt = match r.end {
+                            Some(e) => {
+                                let el = local_naive(e, self.offset_minutes);
+                                if el.date() == sl.date() {
+                                    el.format("%H:%M").to_string()
+                                } else {
+                                    el.format("%d/%m %H:%M").to_string()
+                                }
+                            }
+                            None => tr("sem fim").to_string(),
+                        };
+                        let lp = p.with_clip_rect(tl);
+                        let lab = |text: &str, anchor_x: f32, left_of: bool| {
+                            let g = lp.layout_no_wrap(text.to_string(), small.clone(), pal.text);
+                            let w = g.size().x + 10.0;
+                            let h = g.size().y + 6.0;
+                            let mut x0 = if left_of { anchor_x - 4.0 - w } else { anchor_x + 4.0 };
+                            // se não couber fora da barra, encosta por dentro
+                            if left_of && x0 < tl.left() {
+                                x0 = anchor_x + 4.0;
+                            }
+                            if !left_of && x0 + w > tl.right() {
+                                x0 = anchor_x - 4.0 - w;
+                            }
+                            let rr = Rect::from_min_size(
+                                Pos2::new(x0, bar.center().y - h / 2.0),
+                                Vec2::new(w, h),
+                            );
+                            lp.rect(rr, 4.0, pal.card, Stroke::new(1.0, pal.border), egui::StrokeKind::Inside);
+                            lp.galley(Pos2::new(rr.left() + 5.0, rr.top() + 3.0), g, pal.text);
+                        };
+                        lab(&start_txt, bar.left(), true);
+                        lab(&end_txt, bar.right(), false);
+                    }
+                    // botão ✓ (concluir) / ↺ (reabrir), sempre visível na ponta da
+                    // barra; registrado depois da barra para ficar por cima no hit-test
+                    if bar.width() > 28.0 {
+                        let btn = Rect::from_center_size(
+                            Pos2::new(bar.right() - 11.0, bar.center().y),
+                            Vec2::splat(16.0),
+                        );
+                        let btn_resp = ui
+                            .interact(btn, ui.scope_id().with(("task-done", &r.id)), Sense::click())
+                            .on_hover_text(if r.done { tr("Reabrir") } else { tr("Concluir") });
+                        if btn_resp.hovered() {
+                            hovered_now = Some(r.id.clone());
+                        }
+                        let bg = if btn_resp.hovered() {
+                            Color32::WHITE
+                        } else {
+                            Color32::WHITE.gamma_multiply(if is_hover { 0.95 } else { 0.75 })
+                        };
+                        Self::paint_check(&p, btn, bg, fill, r.done);
+                        if btn_resp.clicked() {
+                            ask = Some((
+                                r.id.clone(),
+                                r.title.clone(),
+                                if r.done { "reopen" } else { "complete" },
+                            ));
+                            continue;
+                        }
+                    }
+                    if bar_resp.clicked() {
+                        open_form = Some(Form::from_row(r));
+                    }
+                }
+                if rows.is_empty() {
+                    p.text(
+                        Pos2::new(area.left() + 12.0, area.top() + 16.0),
+                        Align2::LEFT_CENTER,
+                        if self.show_done { tr("Nenhuma tarefa ainda. Clique em + Nova tarefa ou peça ao agente (tasks_create).") } else { tr("Nada pendente. Ligue \"mostrar concluídas\" para ver o histórico.") },
+                        font,
+                        pal.text_weak,
+                    );
+                }
+            });
+        // divisor lista | linha do tempo: arrastar muda a largura da lista
+        {
+            let x = header.left() + list_w;
+            let grip = Rect::from_min_max(
+                Pos2::new(x - 4.0, header.top()),
+                Pos2::new(x + 4.0, header.top() + HEADER_H + body_h),
+            );
+            let grip_resp = ui.interact(
+                grip,
+                ui.scope_id().with("tasks-splitter"),
+                Sense::click_and_drag(),
+            );
+            if grip_resp.hovered() || grip_resp.dragged() {
+                ui.ctx().set_cursor_icon(egui::CursorIcon::ResizeHorizontal);
+            }
+            if grip_resp.dragged() {
+                self.list_w =
+                    (self.list_w + grip_resp.drag_delta().x).clamp(LIST_W_MIN, LIST_W_MAX);
+            }
+            if grip_resp.double_clicked() {
+                self.list_w = LIST_W;
+            }
+            let color = if grip_resp.hovered() || grip_resp.dragged() {
+                pal.accent
+            } else {
+                pal.border
+            };
+            ui.painter().line_segment(
+                [Pos2::new(x, grip.top()), Pos2::new(x, grip.bottom())],
+                Stroke::new(if grip_resp.dragged() { 2.0 } else { 1.0 }, color),
+            );
+        }
+        self.wheel_over_tl = wheel_now;
+        if pan_delta != 0.0 {
+            self.view_start = Some(view_start - f64::from(pan_delta / zoom));
+        }
+        if let Some((mx, f)) = zoom_at {
+            let h_at_mouse = view_start + f64::from((mx - tl_header.left()) / zoom);
+            let new_zoom = (zoom * f).clamp(min_zoom, max_zoom);
+            self.px_per_hour = Some(new_zoom);
+            self.view_start = Some(h_at_mouse - f64::from((mx - tl_header.left()) / new_zoom));
+        }
+        self.hovered = hovered_now;
+        let _ = x_of;
+        if let Some(a) = ask {
+            self.confirm = Some(a);
+        }
+        if let Some(mut f) = open_form {
+            f.desc_edit = f.description.trim().is_empty();
+            ui::select_tab(ui.ctx(), "task-form", "basic");
+            self.form = Some(f);
+        }
+        self.form_ui(ui, cx);
+        self.confirm_ui(ui, cx);
+        self.persist_prefs(ui.ctx());
+    }
+
+    /// Eixo do tempo: faixas por dia, linhas de dia/hora e a linha do agora.
+    /// `labels` = desenhar os rótulos (cabeçalho).
+    #[allow(clippy::too_many_arguments)]
+    fn paint_time_axis(
+        &self,
+        p: &egui::Painter,
+        tl: Rect,
+        view_start: f64,
+        zoom: f32,
+        now_h: f64,
+        pal: &ui::Palette,
+        dark: bool,
+        labels: bool,
+    ) {
+        // tudo do eixo fica recortado à linha do tempo (nada vaza para a lista)
+        let p = &p.with_clip_rect(tl);
+        let hours_visible = f64::from(tl.width() / zoom);
+        let first_day = (view_start / 24.0).floor() * 24.0;
+        let x_of = |h: f64| -> f32 { tl.left() + ((h - view_start) as f32) * zoom };
+        // passo dos ticks de hora conforme o zoom
+        let hour_step = if zoom >= 40.0 {
+            1
+        } else if zoom >= 18.0 {
+            3
+        } else if zoom >= 8.0 {
+            6
+        } else if zoom >= 4.0 {
+            12
+        } else {
+            0
+        };
+        let mut day = first_day;
+        let mut k = 0;
+        while day < view_start + hours_visible {
+            let x0 = x_of(day);
+            let x1 = x_of(day + 24.0);
+            let band = Rect::from_min_max(
+                Pos2::new(x0.max(tl.left()), tl.top()),
+                Pos2::new(x1.min(tl.right()), tl.bottom()),
+            );
+            let n = DateTime::from_timestamp((day * 3600.0) as i64, 0).map(|d| d.naive_utc());
+            let weekend = n.is_some_and(|n| {
+                matches!(n.weekday(), chrono::Weekday::Sat | chrono::Weekday::Sun)
+            });
+            if band.width() > 0.0 {
+                let shade = if weekend {
+                    pal.card_alt.gamma_multiply(if dark { 0.9 } else { 1.0 })
+                } else if k % 2 == 0 {
+                    pal.card
+                } else {
+                    pal.panel
+                };
+                p.rect_filled(band, 0.0, shade);
+            }
+            p.line_segment(
+                [Pos2::new(x0, tl.top()), Pos2::new(x0, tl.bottom())],
+                Stroke::new(1.0, pal.border),
+            );
+            if hour_step > 0 {
+                let mut h = hour_step;
+                while h < 24 {
+                    let x = x_of(day + f64::from(h));
+                    if x > tl.left() && x < tl.right() {
+                        p.line_segment(
+                            [
+                                Pos2::new(x, if labels { tl.bottom() - 10.0 } else { tl.top() }),
+                                Pos2::new(x, tl.bottom()),
+                            ],
+                            Stroke::new(1.0, pal.border.gamma_multiply(0.5)),
+                        );
+                        if labels && zoom >= 8.0 {
+                            p.text(
+                                Pos2::new(x + 2.0, tl.bottom() - 11.0),
+                                Align2::LEFT_BOTTOM,
+                                format!("{h:02}h"),
+                                egui::FontId::proportional(9.5),
+                                pal.text_weak,
+                            );
+                        }
+                    }
+                    h += hour_step;
+                }
+            }
+            if labels {
+                if let Some(n) = n {
+                    let text = if zoom * 24.0 > 90.0 {
+                        format!("{} {}", weekday_pt(n), n.format("%d/%m"))
+                    } else {
+                        n.format("%d/%m").to_string()
+                    };
+                    let is_today = (now_h / 24.0).floor() * 24.0 == day;
+                    let lx = (x0 + 6.0).max(tl.left() + 6.0);
+                    if x1 - lx > 24.0 {
+                        p.text(
+                            Pos2::new(lx, tl.top() + 6.0),
+                            Align2::LEFT_TOP,
+                            text,
+                            if is_today {
+                                ui::semibold(12.0)
+                            } else {
+                                ui::medium(12.0)
+                            },
+                            if is_today { pal.accent } else { pal.text_weak },
+                        );
+                    }
+                }
+            }
+            day += 24.0;
+            k += 1;
+        }
+        // linha do agora
+        let nx = x_of(now_h);
+        if nx >= tl.left() && nx <= tl.right() {
+            p.line_segment(
+                [Pos2::new(nx, tl.top()), Pos2::new(nx, tl.bottom())],
+                Stroke::new(2.0, pal.accent),
+            );
+            if labels {
+                let n = local_naive(Utc::now(), self.offset_minutes);
+                let r = p.text(
+                    Pos2::new(nx + 4.0, tl.bottom() - 2.0),
+                    Align2::LEFT_BOTTOM,
+                    trf("agora {}", &[&n.format("%H:%M")]),
+                    egui::FontId::proportional(10.0),
+                    Color32::WHITE,
+                );
+                p.rect_filled(r.expand(2.0), 3.0, pal.accent);
+                p.text(
+                    Pos2::new(nx + 4.0, tl.bottom() - 2.0),
+                    Align2::LEFT_BOTTOM,
+                    trf("agora {}", &[&n.format("%H:%M")]),
+                    egui::FontId::proportional(10.0),
+                    Color32::WHITE,
+                );
+            }
+        }
+    }
+
+    /// Guarda largura, zoom, posição e o toggle de concluídas em `ui-prefs.json`
+    /// (com debounce de ~0,8 s, para não escrever a cada quadro de arraste).
+    fn persist_prefs(&mut self, ctx: &egui::Context) {
+        let cur = crate::ui_prefs::GanttPrefs {
+            list_w: Some(self.list_w),
+            px_per_hour: self.px_per_hour,
+            view_start: self.view_start,
+            show_done: self.show_done,
+        };
+        if self.last_saved.as_ref() == Some(&cur) {
+            self.dirty_since = None;
+            return;
+        }
+        let since = *self.dirty_since.get_or_insert_with(std::time::Instant::now);
+        if since.elapsed() >= Duration::from_millis(800) {
+            if let Err(e) = crate::ui_prefs::save_gantt(&cur) {
+                tracing::warn!(error = %e, "preferências do Gantt não salvas");
+            }
+            self.last_saved = Some(cur);
+            self.dirty_since = None;
+        } else {
+            ctx.request_repaint_after(Duration::from_millis(850));
+        }
+    }
+
+    fn form_ui(&mut self, ui: &mut egui::Ui, cx: &mut Cx) {
+        let offset = self.offset_minutes;
+        let mut md_cache = std::mem::take(&mut self.md_cache);
+        let Some(f) = &mut self.form else {
+            self.md_cache = md_cache;
+            return;
+        };
+        let mut close = false;
+        let mut ask: Option<(String, String, &'static str)> = None;
+        let title = if f.editing.is_some() {
+            tr("Editar tarefa")
+        } else {
+            tr("Nova tarefa")
+        };
+        let dark = ui.visuals().dark_mode;
+        let pal = ui::palette(dark);
+        let frame = egui::Frame::window(ui.style())
+            .inner_margin(egui::Margin::symmetric(28, 22))
+            .corner_radius(12.0);
+        egui::Window::new(title)
+            .id(egui::Id::unique("task-form"))
+            .title_bar(false)
+            .frame(frame)
+            .collapsible(false)
+            .resizable(false)
+            .anchor(Align2::CENTER_CENTER, [0.0, 0.0])
+            .show(ui.ctx(), |ui| {
+                ui.set_width(880.0);
+                ui.spacing_mut().item_spacing.y = 12.0;
+                // cabeçalho: título do modal + estado (na edição)
+                ui.horizontal(|ui| {
+                    ui.label(egui::RichText::new(title).font(ui::semibold(18.0)));
+                    if f.editing.is_some() {
+                        ui.add_space(8.0);
+                        if f.done {
+                            ui::badge(ui, tr("concluída"), Tone::Success);
+                        }
+                    }
+                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                        if ui::icon_button(ui, crate::icons::CLOSE, tr("Fechar")).clicked() {
+                            close = true;
+                        }
+                    });
+                });
+                let tab = ui::tabs(
+                    ui,
+                    "task-form",
+                    &[
+                        ui::Tab::new("basic", tr("Básico")),
+                        ui::Tab::new("details", tr("Detalhes")),
+                    ],
+                );
+                ui.add_space(8.0);
+                // altura fixa para as abas não mudarem o tamanho do modal
+                let (_, body_rect) = ui.allocate_space(Vec2::new(ui.available_width(), 0.0));
+                let body_h = 430.0;
+                let body =
+                    Rect::from_min_size(body_rect.min, Vec2::new(ui.available_width(), body_h));
+                let mut child = ui.new_child(
+                    egui::UiBuilder::new()
+                        .max_rect(body)
+                        .layout(egui::Layout::top_down(egui::Align::Min)),
+                );
+                child.spacing_mut().item_spacing.y = 12.0;
+                if tab == "basic" {
+                    let ui = &mut child;
+                    ui::field(ui, tr("Título"), None, |ui| {
+                        ui::text_input(ui, &mut f.title, tr("ex.: Enviar proposta"));
+                    });
+                    ui.horizontal(|ui| {
+                        ui.label(
+                            egui::RichText::new(tr(
+                                "O que a tarefa envolve; o agente lê e escreve em Markdown.",
+                            ))
+                            .weak()
+                            .small(),
+                        );
+                        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                            let label = if f.desc_edit {
+                                tr("Visualizar")
+                            } else {
+                                tr("Editar")
+                            };
+                            let ic = if f.desc_edit {
+                                crate::icons::VISIBILITY
+                            } else {
+                                crate::icons::EDIT
+                            };
+                            if ui
+                                .add(egui::Button::new(ui::icon_text(ui, ic, label, Some(13.0))))
+                                .clicked()
+                            {
+                                f.desc_edit = !f.desc_edit;
+                            }
+                        });
+                    });
+                    let area_h = body_h - 96.0;
+                    if f.desc_edit {
+                        egui::ScrollArea::vertical()
+                            .id_salt("task-desc-edit")
+                            .max_height(area_h)
+                            .auto_shrink([false, false])
+                            .show(ui, |ui| {
+                                ui.add_sized(
+                                    [ui.available_width(), area_h - 4.0],
+                                    egui::TextEdit::multiline(&mut f.description)
+                                        .hint_text(tr("Escreva em Markdown…"))
+                                        .font(egui::TextStyle::Monospace),
+                                );
+                            });
+                    } else {
+                        egui::Frame::new()
+                            .fill(pal.card)
+                            .stroke(Stroke::new(1.0, pal.border))
+                            .corner_radius(8.0)
+                            .inner_margin(14.0)
+                            .show(ui, |ui| {
+                                ui.set_min_height(area_h - 30.0);
+                                ui.set_width(ui.available_width());
+                                egui::ScrollArea::vertical()
+                                    .id_salt("task-desc-view")
+                                    .max_height(area_h - 30.0)
+                                    .auto_shrink([false, false])
+                                    .show(ui, |ui| {
+                                        if f.description.trim().is_empty() {
+                                            ui.label(
+                                                egui::RichText::new(tr(
+                                                    "Sem descrição. Clique em Editar.",
+                                                ))
+                                                .weak(),
+                                            );
+                                        } else {
+                                            let text = ui::clean_emoji(&f.description);
+                                            egui_commonmark::CommonMarkViewer::new().show(
+                                                ui,
+                                                &mut md_cache,
+                                                &text,
+                                            );
+                                        }
+                                    });
+                            });
+                    }
+                } else {
+                    let ui = &mut child;
+                    ui::field(
+                        ui,
+                        tr("Início"),
+                        Some(tr("Data e hora obrigatórias, no fuso das configurações.")),
+                        |ui| {
+                            ui.horizontal(|ui| {
+                                ui.add(date_picker(&mut f.start_date, "task-start-date"));
+                                ui.add_space(6.0);
+                                time_picker(ui, "task-start-time", &mut f.start_h, &mut f.start_m);
+                                ui.add_space(6.0);
+                                if ui.small_button(tr("agora")).clicked() {
+                                    let n = next_quarter(offset);
+                                    f.start_date = jdate(n.date());
+                                    f.start_h = n.hour();
+                                    f.start_m = n.minute();
+                                }
+                            });
+                        },
+                    );
+                    ui::field(
+                        ui,
+                        tr("Fim"),
+                        Some(tr(
+                            "Opcional. Depois dele, sem concluir, a tarefa fica atrasada.",
+                        )),
+                        |ui| {
+                            ui.horizontal(|ui| {
+                                if ui::toggle(ui, &mut f.has_end).changed() && f.has_end {
+                                    f.set_end_from_start(1);
+                                }
+                                ui.label(
+                                    egui::RichText::new(if f.has_end {
+                                        tr("com fim")
+                                    } else {
+                                        tr("sem fim (nunca atrasa)")
+                                    })
+                                    .small(),
+                                );
+                            });
+                            if f.has_end {
+                                ui.horizontal(|ui| {
+                                    ui.add(date_picker(&mut f.end_date, "task-end-date"));
+                                    ui.add_space(6.0);
+                                    time_picker(ui, "task-end-time", &mut f.end_h, &mut f.end_m);
+                                    ui.add_space(6.0);
+                                    if ui.small_button("+1h").clicked() {
+                                        f.set_end_from_start(1);
+                                    }
+                                    if ui.small_button("+4h").clicked() {
+                                        f.set_end_from_start(4);
+                                    }
+                                    if ui.small_button(tr("+1 dia")).clicked() {
+                                        f.set_end_from_start(24);
+                                    }
+                                    if ui.small_button(tr("+1 semana")).clicked() {
+                                        f.set_end_from_start(24 * 7);
+                                    }
+                                });
+                            }
+                        },
+                    );
+                    ui::field(ui, tr("Prioridade"), None, |ui| {
+                        ui::select(
+                            ui,
+                            "task-priority",
+                            &mut f.priority,
+                            &[
+                                ("high", tr("Alta")),
+                                ("medium", tr("Média")),
+                                ("low", tr("Baixa")),
+                            ],
+                        );
+                    });
+                }
+                ui.advance_cursor_after_rect(body);
+                if let Some(e) = &f.error {
+                    ui::error_text(ui, e);
+                }
+                ui.add_space(6.0);
+                ui.painter().line_segment(
+                    [
+                        Pos2::new(ui.min_rect().left(), ui.cursor().top()),
+                        Pos2::new(ui.min_rect().right(), ui.cursor().top()),
+                    ],
+                    Stroke::new(1.0, pal.border),
+                );
+                ui.add_space(10.0);
+                ui.horizontal(|ui| {
+                    let saving = f.saving();
+                    // esquerda: ações secundárias/destrutivas (só na edição)
+                    if let Some(id) = f.editing.clone() {
+                        if ui::danger_button(ui, tr("Excluir")).clicked() {
+                            ask = Some((id.clone(), f.title.clone(), "delete"));
+                        }
+                        ui.add_space(6.0);
+                        let label = if f.done {
+                            tr("Reabrir")
+                        } else {
+                            tr("Concluir")
+                        };
+                        if ui.button(label).clicked() {
+                            ask = Some((
+                                id,
+                                f.title.clone(),
+                                if f.done { "reopen" } else { "complete" },
+                            ));
+                        }
+                    }
+                    // direita: Cancelar e a ação primária (Salvar) na ponta
+                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                        let save = ui.add_enabled(
+                            !saving,
+                            egui::Button::new(
+                                egui::RichText::new(if f.editing.is_some() {
+                                    tr("Salvar")
+                                } else {
+                                    tr("Criar tarefa")
+                                })
+                                .color(Color32::WHITE),
+                            )
+                            .fill(pal.accent)
+                            .min_size(Vec2::new(120.0, 32.0)),
+                        );
+                        if save.clicked() {
+                            match f.body() {
+                                Ok(body) => {
+                                    f.error = None;
+                                    let editing = f.editing.clone();
+                                    f.save = Some(cx.svc.call(move |c| async move {
+                                        match editing {
+                                            Some(id) => c.update_task(&id, body).await,
+                                            None => c.create_task(body).await,
+                                        }
+                                    }));
+                                }
+                                Err(e) => f.error = Some(e),
+                            }
+                        }
+                        if saving {
+                            ui.spinner();
+                        }
+                    });
+                });
+            });
+        // Esc fecha o formulário (sem salvar), como o X do cabeçalho
+        if self.confirm.is_none() && ui.input(|i| i.key_pressed(egui::Key::Escape)) {
+            close = true;
+        }
+        if close {
+            self.form = None;
+        }
+        if let Some(a) = ask {
+            self.confirm = Some(a);
+        }
+        self.md_cache = md_cache;
+    }
+
+    fn confirm_ui(&mut self, ui: &mut egui::Ui, cx: &mut Cx) {
+        let Some((id, title, kind)) = self.confirm.clone() else {
+            return;
+        };
+        let (mtitle, body, label, danger, done_msg) = match kind {
+            "delete" => (
+                tr("Excluir tarefa?"),
+                trf(
+                    "\"{}\" será removida definitivamente. Para encerrar sem apagar, use Concluir.",
+                    &[&title],
+                ),
+                tr("Excluir"),
+                true,
+                tr("Tarefa excluída."),
+            ),
+            "reopen" => (
+                tr("Reabrir tarefa?"),
+                trf(
+                    "\"{}\" volta a pendente e o estado passa a seguir o relógio.",
+                    &[&title],
+                ),
+                tr("Reabrir"),
+                false,
+                tr("Tarefa reaberta."),
+            ),
+            _ => (
+                tr("Concluir tarefa?"),
+                trf(
+                    "\"{}\" fica verde e some do painel (ligue \"mostrar concluídas\" para ver).",
+                    &[&title],
+                ),
+                tr("Concluir"),
+                false,
+                tr("Tarefa concluída."),
+            ),
+        };
+        let c = ui::Confirm {
+            title: mtitle.into(),
+            body,
+            confirm_label: label.into(),
+            danger,
+            tag: format!("task-{kind}-{id}"),
+        };
+        if let Some(ok) = ui::confirm_modal(ui.ctx(), &c) {
+            self.confirm = None;
+            if ok {
+                self.form = None;
+                self.act(cx, done_msg, id, kind);
+            }
+        }
+    }
+}

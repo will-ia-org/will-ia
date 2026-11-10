@@ -10,6 +10,7 @@ pub mod kb;
 pub mod mcp;
 pub mod network;
 pub mod scheduler;
+pub mod tasks;
 pub mod telegram;
 pub mod telemetry;
 pub mod voice;
@@ -221,6 +222,7 @@ fn section_label(s: &str) -> &str {
         "browser" => tr("Browser CDP"),
         "network" => tr("Rede"),
         "telemetry" => tr("Telemetria"),
+        "tasks" => tr("Tarefas"),
         other => other,
     }
 }
@@ -245,6 +247,7 @@ pub struct SettingsPages {
     pub scheduler: scheduler::SchedulerPage,
     pub browser: browser::BrowserPage,
     pub network: network::NetworkPage,
+    pub tasks: tasks::TasksSettingsPage,
 }
 
 impl SettingsPages {
@@ -309,6 +312,7 @@ impl SettingsPages {
             SettingsSection::Scheduler => self.scheduler.ui(ui, cx, st),
             SettingsSection::Browser => self.browser.ui(ui, cx, st),
             SettingsSection::Network => self.network.ui(ui, cx, st),
+            SettingsSection::Tasks => self.tasks.ui(ui, cx, st),
         }
     }
 }

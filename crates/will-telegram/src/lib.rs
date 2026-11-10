@@ -90,7 +90,8 @@ pub struct TelegramModule {
     /// Fórum do espelho app ↔ tópicos (validado na subida).
     pub(crate) forum: Mutex<mirror::ForumState>,
     /// Turnos iniciados (ou alimentados) por mensagens vindas do Telegram.
-    /// Só esses ganham o resumo em áudio: quem fala pelo app lê na tela.
+    /// Só esses voltam para o tópico (narração, resposta, erro e áudio): a
+    /// interação pelo app fica no app. O vínculo tópico ↔ thread segue valendo.
     pub(crate) tg_turns: Mutex<HashSet<TurnId>>,
     offset: AtomicI64,
 }

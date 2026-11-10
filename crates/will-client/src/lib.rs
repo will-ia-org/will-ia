@@ -648,6 +648,28 @@ impl Client {
     pub async fn delete_schedule(&self, id: &str) -> ApiResult {
         self.delete(&format!("schedules/{id}")).await
     }
+
+    // ----- tarefas (docs/31) -----
+
+    /// `filter`: pending | running | overdue | upcoming | done | all.
+    pub async fn tasks(&self, filter: &str) -> ApiResult {
+        self.get(&format!("tasks?filter={filter}")).await
+    }
+    pub async fn create_task(&self, body: Value) -> ApiResult {
+        self.post("tasks", Some(body)).await
+    }
+    pub async fn update_task(&self, id: &str, body: Value) -> ApiResult {
+        self.put(&format!("tasks/{id}"), body).await
+    }
+    pub async fn delete_task(&self, id: &str) -> ApiResult {
+        self.delete(&format!("tasks/{id}")).await
+    }
+    pub async fn complete_task(&self, id: &str) -> ApiResult {
+        self.post(&format!("tasks/{id}/complete"), None).await
+    }
+    pub async fn reopen_task(&self, id: &str) -> ApiResult {
+        self.post(&format!("tasks/{id}/reopen"), None).await
+    }
     // ----- triggers -----
     pub async fn triggers(&self) -> ApiResult {
         self.get("triggers").await

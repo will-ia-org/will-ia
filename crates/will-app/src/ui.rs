@@ -381,6 +381,35 @@ pub fn nav_item(
     resp
 }
 
+/// Pílulas numéricas à direita de um item do menu (ex.: tarefas atrasadas em
+/// vermelho e em andamento em azul). Contagens zero não aparecem.
+pub fn nav_badges(ui: &mut Ui, rect: egui::Rect, badges: &[(usize, Color32)]) {
+    let p = ui.painter();
+    let font = egui::FontId::proportional(11.0);
+    let mut x = rect.right() - 10.0;
+    for (n, color) in badges.iter().rev() {
+        if *n == 0 {
+            continue;
+        }
+        let text = n.to_string();
+        let galley = p.layout_no_wrap(text.clone(), font.clone(), Color32::WHITE);
+        let w = (galley.size().x + 12.0).max(20.0);
+        let r = egui::Rect::from_min_max(
+            egui::pos2(x - w, rect.center().y - 9.0),
+            egui::pos2(x, rect.center().y + 9.0),
+        );
+        p.rect_filled(r, 9.0, *color);
+        p.text(
+            r.center(),
+            egui::Align2::CENTER_CENTER,
+            text,
+            font.clone(),
+            Color32::WHITE,
+        );
+        x = r.left() - 4.0;
+    }
+}
+
 // ---------- cores / tons ----------
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -452,6 +481,7 @@ pub fn module_name(m: will_core::Module) -> &'static str {
         M::Scheduler => tr("Agendamentos"),
         M::Triggers => tr("Triggers"),
         M::Browser => tr("Browser CDP"),
+        M::Tasks => tr("Tarefas"),
     }
 }
 

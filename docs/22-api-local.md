@@ -128,6 +128,14 @@ Códigos: **401** `token de sessão ausente` / `token de sessão inválido` (tam
 | GET | `/api/telegram/status` | threads por key + `mirror` (estado do fórum do espelho) |
 | POST | `/api/telegram/sync-threads` | espelha cada thread do app num tópico do fórum → `{created, failed, skipped, errors}` |
 
+### Tarefas (`docs/31`)
+| Método | Rota | Descrição |
+|---|---|---|
+| GET | `/api/tasks?filter=pending\|running\|overdue\|upcoming\|done\|all` | `{tasks: TaskView[], enabled, timezone, offset_minutes, now}` |
+| POST | `/api/tasks` | `TaskInput` (`title`, `start_at` obrig.; `description`, `end_at`, `priority`) |
+| GET / PUT / DELETE | `/api/tasks/{id}` | detalhar / alterar (só campos enviados; `end_at: ""` limpa) / remover |
+| POST | `/api/tasks/{id}/complete` · `/api/tasks/{id}/reopen` | concluir / reabrir |
+
 ### Triggers (`docs/30`)
 | Método | Rota | Descrição |
 |---|---|---|

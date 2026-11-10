@@ -28,6 +28,7 @@ pub struct Settings {
     pub drive: DriveSettings,
     pub scheduler: SchedulerSettings,
     pub triggers: TriggersSettings,
+    pub tasks: TasksSettings,
     pub browser: BrowserSettings,
     pub network: NetworkSettings,
     pub telemetry: TelemetrySettings,
@@ -638,6 +639,35 @@ impl Default for SchedulerSettings {
             timezone: None,
             max_schedules: 100,
             min_interval_minutes: 5,
+        }
+    }
+}
+
+/// Tarefas (`docs/31`): Gantt no app + ferramentas `tasks_*` + avisos no Telegram.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct TasksSettings {
+    pub enabled: bool,
+    /// Fuso IANA das datas digitadas sem fuso e da exibição (`America/Sao_Paulo`).
+    pub timezone: String,
+    /// Avisar no Telegram (destino padrão) quando uma tarefa entra em andamento.
+    pub notify_start: bool,
+    /// Avisar no Telegram quando uma tarefa passa do fim sem ser concluída.
+    pub notify_overdue: bool,
+    /// Notificação nativa do sistema nas duas transições (padrão ligada).
+    pub notify_native: bool,
+    /// Ordenação do Gantt guardada: `start` | `alpha` | `priority`.
+    pub sort: String,
+}
+impl Default for TasksSettings {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            timezone: "America/Sao_Paulo".into(),
+            notify_start: false,
+            notify_overdue: false,
+            notify_native: true,
+            sort: "start".into(),
         }
     }
 }

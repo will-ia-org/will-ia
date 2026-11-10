@@ -193,6 +193,17 @@ Ações: **Testar bot** (`getMe`), **Descobrir IDs** (instrução `/start`), **S
 
 Detalhes em [24](24-scheduler.md). A página **Agendamentos** (fora de Configurações) lista e edita os agendamentos.
 
+### Tarefas (`tasks`; `docs/31`)
+
+| Campo | Tipo | Padrão |
+|---|---|---|
+| Habilitar | bool | true |
+| Fuso horário (`timezone`) | nome IANA | `America/Sao_Paulo` |
+| Notificação do sistema (`notify_native`) | bool | true |
+| Avisar no Telegram ao entrar em andamento (`notify_start`) | bool | false |
+| Avisar no Telegram ao entrar em atraso (`notify_overdue`) | bool | false |
+| Ordenação do Gantt (`sort`) | `start` \| `alpha` \| `priority` | `start` (salva pelo seletor da página) |
+
 ### Rede (`network`, só admin; vale no próximo início do servidor)
 | Campo | Tipo | Padrão |
 |---|---|---|
@@ -308,6 +319,9 @@ pub struct Settings {
 Assistente em 3 passos: (1) token do Claude + teste; (2) pasta da KB + criar estrutura; (3) opcional: Telegram e Voz. Ao final, abre uma thread de exemplo na UI.
 
 ## Interface
+
+**Menu lateral (desde 2026-11-10):** só as páginas do dia a dia, nesta ordem — Tarefas, Threads, Aprovações, Triggers, Browser CDP, Logs, Custos, Usuários (admin). As seções de configuração **não ficam mais no menu**: a engrenagem do rodapé abre `Nav::SettingsHome` (`--nav settings`), uma grade de cartões (nome, estado do módulo, uma linha) que leva a cada seção; dentro da seção há a trilha "← Configurações". O rodapé é uma linha de ícones (ligar/desligar voz, engrenagem, sair do perfil) e uma linha de status `perfil · usuário · vX.Y.Z`.
+
 
 egui/eframe em `crates/will-app` (ADR-0016, ADR-0019). Modo imediato: cada página lê um snapshot montado por `GET /api/status`, `/api/settings` e `/api/approvals` e mantido pelo WS `/api/events` (reconexão com backoff; banner "desconectado"), e dispara ações no runtime tokio via `will-client`; respostas chegam por canais e `request_repaint` dirigido pelos eventos. Formulários validam espelhando o backend (erros por campo). Sem lógica de negócio na UI. Diálogos nativos só para o que é do app: escolher arquivos a anexar (`rfd`; em loopback também a pasta da KB), QR do WhatsApp desenhado na própria janela. Com servidor remoto, a pasta da KB é escolhida por um modal que navega o disco do servidor (`GET /api/kb/browse`), anexos sobem por `POST /api/uploads` e miniaturas vêm de `GET /api/files`; "Abrir pasta" só aparece quando o servidor é esta máquina.
 

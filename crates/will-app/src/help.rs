@@ -370,6 +370,29 @@ pub const GOOGLE_GMAIL: Help = Help {
 
 // ---------- Agendamentos ----------
 
+// ---------- Tarefas ----------
+
+pub const TASKS: Help = Help {
+    title: "Tarefas no Gantt",
+    intro: "Cada tarefa tem título, descrição, início com hora (obrigatório), fim opcional e prioridade. O painel mostra as barras na linha do tempo com a linha vertical do agora; a cor é o estado: cinza = ainda não começou, azul = em andamento, vermelho = passou do fim sem concluir, verde = concluída. O agente cria e altera tarefas pelas ferramentas tasks_* (sem pedir confirmação).",
+    steps: &[
+        ("Criar", "Clique em + Nova tarefa (ou peça ao agente: \"cria a tarefa X amanhã às 14h\"). Data e hora de início são obrigatórias; o fim é opcional."),
+        ("Navegar", "Arraste a linha do tempo para os lados; a roda do mouse sobre as barras dá zoom (para cima aproxima, para baixo afasta; de meio dia a 90 dias), os botões − e + também; Hoje (ou a barra de espaço) volta ao presente. Sobre a lista de títulos a roda rola as linhas; a borda entre lista e barras é arrastável (duplo clique restaura)."),
+        ("Concluir", "Passe o mouse na barra e clique no círculo com ✓ no fim dela. A tarefa fica verde e some do painel; ligue \"mostrar concluídas\" para vê-la e reabrir."),
+        ("Editar", "Clique na barra ou na linha da lista: abre o formulário (título, descrição, início, fim, prioridade, Concluir/Reabrir, Excluir)."),
+        ("Ordenar", "Data de início (padrão; atrasadas aparecem primeiro), ordem alfabética ou prioridade (alta → média → baixa, empate pela data). A escolha fica salva."),
+        ("Avisos no Telegram", "Em Configurações › Tarefas, ligue os avisos de \"entrou em andamento\" e \"entrou em atraso\". Vão para o chat padrão do Telegram; cada transição avisa uma vez."),
+    ],
+    notes: &[
+        ("Sem fim = nunca atrasa", "Tarefa sem data de fim fica azul desde o início até você concluir. Só tarefa com fim pode ficar vermelha."),
+        ("Prioridade ≠ atraso", "A bandeira (🔴 alta, 🟡 média, 🟢 baixa) é independente do estado: uma tarefa atrasada pode ser de prioridade baixa."),
+        ("Fuso", "Datas sem fuso usam o fuso de Configurações › Tarefas (padrão America/Sao_Paulo); a exibição também."),
+        ("Ferramentas do agente", "tasks_create, tasks_list (pending/running/overdue/upcoming/done/all), tasks_get, tasks_update, tasks_delete, tasks_complete, tasks_reopen. Política padrão: automático."),
+    ],
+    code: "",
+    links: &[],
+};
+
 pub const TRIGGERS: Help = Help {
     title: "Triggers: acordar uma thread por evento",
     intro: "Uma trigger é uma regra: fonte de evento + filtro + thread e prompt. Quando o evento casa com o filtro, o serviço entrega na thread o seu prompt mais todo o contexto do evento (quem mandou, chat ou assunto, hora, corpo…) e segue em frente — ninguém espera a resposta; se o processo do Claude estiver dormindo, ele sobe para processar. Fontes: WhatsApp (mensagem recebida), e-mail (Gmail, por varredura) e tempo (aba Agendamentos).",

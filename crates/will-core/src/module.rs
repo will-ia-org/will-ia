@@ -15,6 +15,7 @@ pub enum Module {
     Scheduler,
     Triggers,
     Browser,
+    Tasks,
 }
 
 impl Module {
@@ -32,6 +33,7 @@ impl Module {
             Module::Scheduler => "scheduler",
             Module::Triggers => "triggers",
             Module::Browser => "browser",
+            Module::Tasks => "tasks",
         }
     }
     pub fn all() -> &'static [Module] {
@@ -48,6 +50,7 @@ impl Module {
             Module::Scheduler,
             Module::Triggers,
             Module::Browser,
+            Module::Tasks,
         ]
     }
 }

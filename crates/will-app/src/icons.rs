@@ -37,6 +37,10 @@ pub const EXTENSION: MaterialIcon = m::ICON_EXTENSION;
 pub const PSYCHOLOGY: MaterialIcon = m::ICON_PSYCHOLOGY;
 pub const CHAT_BUBBLE: MaterialIcon = m::ICON_CHAT_BUBBLE;
 pub const SCHEDULE: MaterialIcon = m::ICON_SCHEDULE;
+pub const SETTINGS: MaterialIcon = m::ICON_SETTINGS;
+pub const LOGOUT: MaterialIcon = m::ICON_LOGOUT;
+pub const MIC_OFF: MaterialIcon = m::ICON_MIC_OFF;
+pub const ARROW_BACK: MaterialIcon = m::ICON_ARROW_BACK;
 
 /// Todos os ícones nomeados (o teste garante que a fonte tem cada glifo).
 #[cfg(test)]
@@ -68,6 +72,10 @@ pub const ALL: &[(&str, MaterialIcon)] = &[
     ("PSYCHOLOGY", PSYCHOLOGY),
     ("CHAT_BUBBLE", CHAT_BUBBLE),
     ("SCHEDULE", SCHEDULE),
+    ("SETTINGS", SETTINGS),
+    ("LOGOUT", LOGOUT),
+    ("MIC_OFF", MIC_OFF),
+    ("ARROW_BACK", ARROW_BACK),
 ];
 
 #[cfg(test)]

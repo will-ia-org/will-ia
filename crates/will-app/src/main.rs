@@ -25,6 +25,7 @@ mod profiles;
 mod service;
 mod speak_cache;
 mod ui;
+mod ui_prefs;
 mod voice;
 
 use clap::{Parser, Subcommand};

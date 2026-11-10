@@ -26,6 +26,7 @@ pub async fn start_all(state: &Arc<AppState>) {
     #[cfg(feature = "whatsapp")]
     start_whatsapp(state).await;
     start_triggers(state);
+    start_tasks(state);
     recompute_engine_status(state);
     tracing::info!("módulos no ar");
 }
@@ -297,6 +298,9 @@ pub async fn stop_all(state: &Arc<AppState>) {
     if let Some(sch) = state.scheduler.read().clone() {
         sch.stop();
     }
+    if let Some(t) = state.tasks.read().clone() {
+        t.stop();
+    }
     let browser = state.browser.read().clone();
     if let Some(b) = browser {
         b.stop().await;
@@ -528,6 +532,71 @@ pub fn start_scheduler(state: &Arc<AppState>) {
                     m.clone(),
                 )));
             m.start();
+        }
+    }
+}
+
+/// Tarefas (`docs/31`): laço de 30 s que nota início/atraso e avisa no Telegram.
+pub fn start_tasks(state: &Arc<AppState>) {
+    let cfg = state.settings().tasks;
+    tracing::debug!(enabled = cfg.enabled, timezone = %cfg.timezone, "aplicando configuração de tarefas");
+    let existing = state.tasks.read().clone();
+    match existing {
+        Some(m) => m.update_config(cfg),
+        None => {
+            let m = will_tasks::TasksModule::new(
+                will_tasks::TasksDeps {
+                    storage: state.storage.clone(),
+                    bus: state.bus.clone(),
+                    notifier: Arc::new(TelegramTaskNotifier {
+                        state: Arc::downgrade(state),
+                    }),
+                },
+                cfg,
+            );
+            *state.tasks.write() = Some(m.clone());
+            state
+                .registry
+                .add_provider(Arc::new(will_tasks::tools::TasksProvider::new(m.clone())));
+            m.start();
+        }
+    }
+}
+
+/// Avisos de tarefa → Telegram, no destino padrão (`default_chat_id`/tópico ou
+/// o primeiro chat da allowlist). Sem módulo no ar, devolve erro (vai pro log).
+struct TelegramTaskNotifier {
+    state: std::sync::Weak<AppState>,
+}
+
+#[async_trait::async_trait]
+impl will_tasks::TaskNotifier for TelegramTaskNotifier {
+    async fn notify(&self, text: &str) -> Result<(), String> {
+        let state = self.state.upgrade().ok_or("servidor encerrando")?;
+        #[cfg(feature = "telegram")]
+        {
+            let m = state
+                .telegram
+                .read()
+                .await
+                .clone()
+                .ok_or("módulo Telegram parado")?;
+            if !m.status().is_running() {
+                return Err("módulo Telegram não está no ar".into());
+            }
+            let sender = m.sender();
+            let (chat_id, topic_id) = sender
+                .default_destination()
+                .ok_or("Telegram sem destino padrão (chat padrão ou allowlist)")?;
+            sender
+                .send_text(chat_id, topic_id, None, text, true, None)
+                .await
+                .map(|_| ())
+        }
+        #[cfg(not(feature = "telegram"))]
+        {
+            let _ = (state, text);
+            Err("módulo Telegram não compilado".into())
         }
     }
 }
@@ -826,6 +895,7 @@ pub async fn apply_section(state: &Arc<AppState>, section: &str) {
         "realtime" => start_realtime(state).await,
         "scheduler" => start_scheduler(state),
         "triggers" => start_triggers(state),
+        "tasks" => start_tasks(state),
         "network" => {
             tracing::warn!(
                 target: "will_network",

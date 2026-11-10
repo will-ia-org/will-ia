@@ -30,6 +30,7 @@ clap.workspace = true
 eframe.workspace = true
 egui.workspace = true
 egui_extras.workspace = true
+jiff.workspace = true
 egui_commonmark.workspace = true
 # Ícones Material Symbols (fonte embutida, ~1,8 MB) — ver src/icons.rs.
 egui_material_icons = "0.9"

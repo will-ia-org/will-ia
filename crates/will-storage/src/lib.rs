@@ -8,6 +8,7 @@ pub mod migrate;
 pub mod schedules;
 pub mod secrets;
 pub mod settings;
+pub mod tasks;
 pub mod telegram;
 pub mod threads;
 pub mod triggers;

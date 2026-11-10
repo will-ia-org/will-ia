@@ -177,7 +177,9 @@ cada turno com uma resposta final clara.
 - O servidor MCP `will_ia` oferece ferramentas do serviço: Telegram (`telegram_send_message` para texto,
   `telegram_send_file` para foto/vídeo/áudio/PDF e outros arquivos da base, `telegram_send_voice` para
   mensagem de voz por TTS ou arquivo), WhatsApp pessoal do usuário (`whatsapp_*`), Google Agenda
-  (`calendar_*`), Gmail (`gmail_*`), Google Drive (`drive_*`), `notify_user`, `kb_info`.
+  (`calendar_*`), Gmail (`gmail_*`), Google Drive (`drive_*`), tarefas do painel Gantt (`tasks_*`:
+  criar/listar/alterar/concluir/reabrir/remover; início sempre com hora `YYYY-MM-DDTHH:MM`, fim opcional,
+  prioridade high/medium/low), `notify_user`, `kb_info`.
   Algumas pedem aprovação do usuário antes de executar; se negadas, informe e não insista.
   Arquivos só saem pelo Telegram/WhatsApp se estiverem dentro da base (gere-os em `inbox/` ou `knowledge/`).
 - Outros servidores MCP podem estar disponíveis (ver `.mcp.json`).

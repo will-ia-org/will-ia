@@ -525,7 +525,7 @@ impl WillApp {
             self.toasts
                 .info(tr("Primeiro acesso: defina uma nova senha para continuar."));
         }
-        if !admin && matches!(self.nav, Nav::Settings(_) | Nav::Users) {
+        if !admin && matches!(self.nav, Nav::Settings(_) | Nav::SettingsHome | Nav::Users) {
             self.nav = Nav::Threads;
         }
     }
@@ -661,65 +661,87 @@ impl WillApp {
     fn nav_panel(&mut self, ui: &mut egui::Ui) {
         let voice_active = self.voice.session_active;
         let pending = self.snap.pending_approvals.len();
-        // Rodapé fixo: voz, ocultar/sair, versão.
+        let dark = ui.visuals().dark_mode;
+        let pal = ui::palette(dark);
+        // Rodapé compacto (2026-11-10): uma linha de ícones — voz, configurações
+        // (engrenagem, só admin) e sair do perfil — e uma linha de status com
+        // perfil · usuário · versão. As seções de configuração saíram do menu.
         egui::Panel::bottom("nav-bottom")
             .show_separator_line(false)
             .show(ui, |ui| {
-                ui.add_space(6.0);
-                let (label, tone) = if voice_active {
-                    (tr("Desligar voz"), Tone::Danger)
+                ui.add_space(4.0);
+                // Três colunas iguais na largura do menu: voz · configurações · sair.
+                let admin = self.snap.is_admin();
+                let can_voice = !self.voice.busy() && self.snap.settings.realtime.enabled;
+                let (ic, tone, tip) = if voice_active {
+                    (crate::icons::MIC_OFF, Tone::Danger, tr("Desligar voz"))
                 } else {
-                    (tr("Ligar voz"), Tone::Success)
+                    (crate::icons::MIC, Tone::Success, tr("Ligar voz"))
                 };
-                let btn = egui::Button::new(egui::RichText::new(label).color(egui::Color32::WHITE))
-                    .fill(tone.color(ui.visuals().dark_mode))
-                    .min_size(egui::vec2(ui.available_width(), 34.0));
-                if ui
-                    .add_enabled(
-                        !self.voice.busy() && self.snap.settings.realtime.enabled,
-                        btn,
+                let settings_on = matches!(self.nav, Nav::SettingsHome | Nav::Settings(_));
+                let footer_btn = |ui: &mut egui::Ui,
+                                  ic: crate::icons::MaterialIcon,
+                                  color: egui::Color32,
+                                  tip: &str|
+                 -> egui::Response {
+                    ui.add_sized(
+                        [ui.available_width(), 34.0],
+                        egui::Button::new(ic.rich_text().size(20.0).color(color))
+                            .frame(false),
                     )
-                    .clicked()
-                {
+                    .on_hover_text(tip)
+                };
+                let n = if admin { 3 } else { 2 };
+                let mut toggle_voice = false;
+                let mut open_settings = false;
+                let mut leave = false;
+                ui.columns(n, |cols| {
+                    let r = cols[0]
+                        .add_enabled_ui(can_voice, |ui| footer_btn(ui, ic, tone.color(dark), tip))
+                        .inner;
+                    toggle_voice = r.clicked();
+                    let mut i = 1;
+                    if admin {
+                        let color = if settings_on { pal.accent } else { pal.text };
+                        open_settings = footer_btn(
+                            &mut cols[i],
+                            crate::icons::SETTINGS,
+                            color,
+                            tr("Configurações"),
+                        )
+                        .clicked();
+                        i += 1;
+                    }
+                    leave = footer_btn(
+                        &mut cols[i],
+                        crate::icons::LOGOUT,
+                        pal.text_weak,
+                        tr("Sair do perfil: encerra a sessão no servidor e apaga o token deste perfil."),
+                    )
+                    .clicked();
+                });
+                if toggle_voice {
                     self.voice.toggle(&self.svc);
                 }
-                if self.voice.session_active {
-                    let (label, color) = crate::voice::overlay::label_for(&self.voice.state);
-                    ui.label(egui::RichText::new(label).color(color).small());
+                if open_settings {
+                    self.nav = Nav::SettingsHome;
                 }
-                ui.add_space(6.0);
-                // Perfil/conta em uso (o servidor e quem está logado).
-                {
-                    let p = self.svc.profile();
-                    let who = match &self.snap.principal {
-                        Some(pr) if pr.user_id.is_some() => format!("{} · {}", p.name, pr.username),
-                        _ => p.name.clone(),
-                    };
-                    ui.add(egui::Label::new(egui::RichText::new(who).small().weak()).truncate())
-                        .on_hover_text(&p.url);
-                }
-                // Sair do perfil: encerra a sessão da conta, esquece o token do
-                // perfil e volta à tela de entrada (o servidor continua no ar).
-                if ui
-                    .add_sized(
-                        [ui.available_width(), 30.0],
-                        egui::Button::new(tr("Sair do perfil")),
-                    )
-                    .on_hover_text(tr(
-                        "Encerra a sessão no servidor e apaga o token deste perfil.",
-                    ))
-                    .clicked()
-                {
+                if leave {
                     self.pending_leave = true;
                 }
-                ui.add_space(4.0);
-                // Sem botões Ocultar/Sair: o serviço é residente (bandeja). Fechar a
-                // janela só oculta; encerrar é só por kill forçado (docs/13).
-                let mut info = format!("v{}", env!("CARGO_PKG_VERSION"));
+                ui.add_space(2.0);
+                // perfil · usuário · versão (uma linha, truncada)
+                let p = self.svc.profile();
+                let mut info = match &self.snap.principal {
+                    Some(pr) if pr.user_id.is_some() => format!("{} · {}", p.name, pr.username),
+                    _ => p.name.clone(),
+                };
+                info.push_str(&format!(" · v{}", env!("CARGO_PKG_VERSION")));
                 if self.snap.portable_root.is_some() {
                     info.push_str(tr(" · portátil"));
                 }
-                ui.label(egui::RichText::new(info).small().weak());
+                ui.add(egui::Label::new(egui::RichText::new(info).small().weak()).truncate())
+                    .on_hover_text(&p.url);
                 ui.add_space(4.0);
             });
         ui.add_space(10.0);
@@ -733,10 +755,10 @@ impl WillApp {
             .auto_shrink([false, false])
             .max_height((ui.available_height() - 12.0).max(80.0))
             .show(ui, |ui| {
+                // Ordem pedida (2026-11-10): Tarefas, Threads, Aprovações e o resto.
                 let mut items: Vec<(Nav, String)> = vec![
+                    (Nav::Tasks, tr("Tarefas").into()),
                     (Nav::Threads, tr("Threads").into()),
-                    (Nav::Schedules, tr("Triggers").into()),
-                    (Nav::Browser, tr("Browser CDP").into()),
                     (
                         Nav::Approvals,
                         if pending > 0 {
@@ -745,6 +767,8 @@ impl WillApp {
                             tr("Aprovações").into()
                         },
                     ),
+                    (Nav::Schedules, tr("Triggers").into()),
+                    (Nav::Browser, tr("Browser CDP").into()),
                     (Nav::Logs, tr("Logs").into()),
                     (Nav::Costs, tr("Custos").into()),
                 ];
@@ -752,36 +776,29 @@ impl WillApp {
                 if self.snap.principal.as_ref().is_some_and(|p| p.is_admin()) {
                     items.push((Nav::Users, tr("Usuários").into()));
                 }
+                // Badges de Tarefas (atrasadas em vermelho, em andamento em azul):
+                // a página carrega a lista em segundo plano mesmo fechada.
+                self.pages.tasks.poll_list(&self.svc);
+                let (overdue, running) = self.pages.tasks.counts();
+                // Threads processando (amarelo): a lista é mantida por eventos e
+                // recarregada em segundo plano mesmo com a página fechada.
+                self.pages.threads.poll_list(&self.svc);
+                let processing = self.pages.threads.processing_count();
+                ui.ctx().request_repaint_after(Duration::from_secs(60));
                 for (n, label) in items {
-                    if ui::nav_item(ui, self.nav == n, &label, None).clicked() {
-                        self.nav = n;
+                    let resp = ui::nav_item(ui, self.nav == n, &label, None);
+                    if n == Nav::Tasks {
+                        ui::nav_badges(
+                            ui,
+                            resp.rect,
+                            &[(overdue, Tone::Danger.color(dark)), (running, pal.accent)],
+                        );
                     }
-                }
-                // Configurações: rotas exigem administrador (`docs/26`). Sem
-                // `principal` carregado ainda, mostra como antes.
-                if !self.snap.is_admin() {
-                    return;
-                }
-                ui.add_space(14.0);
-                ui.label(egui::RichText::new(tr("CONFIGURAÇÕES")).small().weak());
-                ui.add_space(2.0);
-                for (sec, label) in SettingsSection::ALL.iter().map(|s| (*s, s.label())) {
-                    let selected = self.nav == Nav::Settings(sec);
-                    let status: Option<(Module, Option<&will_core::ModuleStatus>)> =
-                        sec.module().map(|m| (m, self.snap.modules.get(&m)));
-                    let dot_tone =
-                        status.map(|(_, st)| st.map(ui::tone_for_module).unwrap_or(Tone::Neutral));
-                    let mut resp = ui::nav_item(ui, selected, label, dot_tone);
-                    if let Some((m, st)) = status {
-                        // A bolinha explica a cor ao passar o mouse.
-                        let text = match st {
-                            Some(st) => ui::module_label(st),
-                            None => tr("sem estado ainda").to_string(),
-                        };
-                        resp = resp.on_hover_text(format!("{}: {text}", ui::module_name(m)));
+                    if n == Nav::Threads {
+                        ui::nav_badges(ui, resp.rect, &[(processing, Tone::Warning.color(dark))]);
                     }
                     if resp.clicked() {
-                        self.nav = Nav::Settings(sec);
+                        self.nav = n;
                     }
                 }
             });
@@ -847,10 +864,10 @@ impl eframe::App for WillApp {
 
         let mut requested_nav: Option<Nav> = None;
         egui::CentralPanel::default().show(ui, |ui| {
-            if matches!(self.nav, Nav::Threads | Nav::Logs) {
-                // Threads e Logs ocupam a janela exatamente (cabeçalho, caixa de
-                // entrada e barra de filtros fixos); só o histórico do chat ou o
-                // painel de log rola, dentro da página.
+            if matches!(self.nav, Nav::Threads | Nav::Logs | Nav::Tasks) {
+                // Threads, Logs e Tarefas ocupam a janela exatamente (cabeçalho,
+                // caixa de entrada e barra de filtros fixos); só o histórico do
+                // chat, o painel de log ou as linhas do Gantt rolam, dentro da página.
                 ui.set_clip_rect(ui.max_rect());
                 ui.add_space(4.0);
                 let mut cx = Cx {

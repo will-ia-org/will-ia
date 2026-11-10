@@ -15,6 +15,7 @@ pub mod paths;
 pub mod process;
 pub mod schedule;
 pub mod settings;
+pub mod task;
 pub mod thread;
 pub mod tools;
 pub mod trigger;
@@ -23,11 +24,12 @@ pub use approvals::{ApprovalDecision, ApprovalManager, ApprovalRequest};
 pub use auth::{Principal, Role};
 pub use bus::EventBus;
 pub use host::{BrainHost, BrainTask, ClaudeTokenInfo, SharedThreadHost, ThreadHost};
-pub use ids::{ApprovalId, MessageId, ScheduleId, ThreadId, TriggerId, TurnId};
+pub use ids::{ApprovalId, MessageId, ScheduleId, TaskId, ThreadId, TriggerId, TurnId};
 pub use module::{Module, ModuleStatus};
 pub use paths::AppPaths;
 pub use schedule::{Schedule, ScheduleRun, ScheduleTrigger};
 pub use settings::Settings;
+pub use task::{Task, TaskPriority, TaskState};
 pub use thread::{
     attachment_note, derive_title, is_placeholder_title, split_attachment_notes, Attachment,
     Origin, OriginKind, ThreadStatus, ThreadSummary,
@@ -134,6 +136,9 @@ pub enum Event {
     },
     /// Lista de agendamentos mudou (criado/editado/removido/pausado); a UI recarrega.
     SchedulesChanged,
+    /// Tarefas mudaram (criada/editada/removida/concluída, ou o laço notou que
+    /// uma entrou em andamento/atraso); a UI recarrega o Gantt.
+    TasksChanged,
     /// Mensagem do WhatsApp indexada (entrada das triggers; `text` pode ser
     /// vazio em mídia). Vai no WS de eventos como os demais.
     WhatsAppMessage {

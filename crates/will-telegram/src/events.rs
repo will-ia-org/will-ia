@@ -57,9 +57,15 @@ impl TelegramModule {
             }
             Event::TurnDelta {
                 thread_id,
+                turn_id,
                 delta: EngineDelta::Narration { text },
-                ..
             } => {
+                // só turnos abertos pelo Telegram narram no tópico; interação
+                // pelo app fica só no app (fonte da verdade local)
+                let from_telegram = turn_id.is_some_and(|t| self.tg_turns.lock().contains(&t));
+                if !from_telegram {
+                    return;
+                }
                 if let Some(conv) = self.bound_conv(thread_id).await {
                     conv.push_assistant(&text).await;
                 }
@@ -69,18 +75,24 @@ impl TelegramModule {
                 turn_id,
                 result,
             } => {
-                // áudio só para turnos que vieram do Telegram; pelo app o
-                // usuário lê na tela (economiza TTS)
+                // Espelho unidirecional (2026-11-10): só turnos abertos a
+                // partir do Telegram voltam para o tópico (texto e áudio).
+                // Turno iniciado no app, pelo scheduler ou pelo MCP fica só
+                // no app; o vínculo continua valendo para a próxima mensagem
+                // vinda do Telegram.
                 let from_telegram = self.tg_turns.lock().remove(&turn_id);
+                if !from_telegram {
+                    if self.key_of(thread_id).is_some() {
+                        tracing::debug!(channel = "telegram", %thread_id, %turn_id, "turno não veio do Telegram; nada enviado ao tópico");
+                    }
+                    return;
+                }
                 if let Some(conv) = self.bound_conv(thread_id).await {
-                    tracing::debug!(channel = "telegram", %thread_id, key = %conv.key, is_error = result.is_error, from_telegram, text_len = result.text.chars().count(), "turno terminou; finalizando no Telegram");
+                    tracing::debug!(channel = "telegram", %thread_id, key = %conv.key, is_error = result.is_error, text_len = result.text.chars().count(), "turno terminou; finalizando no Telegram");
                     let me = self.clone();
                     tokio::spawn(
-                        async move {
-                            me.finalize(conv, result.text, result.is_error, from_telegram)
-                                .await
-                        }
-                        .instrument(tracing::Span::current()),
+                        async move { me.finalize(conv, result.text, result.is_error, true).await }
+                            .instrument(tracing::Span::current()),
                     );
                 }
             }
@@ -90,8 +102,9 @@ impl TelegramModule {
                 error,
                 ..
             } => {
-                if let Some(t) = turn_id {
-                    self.tg_turns.lock().remove(&t);
+                let from_telegram = turn_id.is_some_and(|t| self.tg_turns.lock().remove(&t));
+                if !from_telegram {
+                    return;
                 }
                 if let Some(conv) = self.bound_conv(thread_id).await {
                     tracing::warn!(channel = "telegram", %thread_id, key = %conv.key, error = %error, "turno falhou; avisando no Telegram");

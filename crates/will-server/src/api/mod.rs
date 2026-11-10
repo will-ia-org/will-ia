@@ -11,6 +11,7 @@ pub mod kb;
 pub mod mcp;
 pub mod schedules;
 pub mod system;
+pub mod tasks;
 pub mod telemetry;
 pub mod threads;
 pub mod triggers;
@@ -260,6 +261,13 @@ pub fn router(state: App) -> Router {
                 .delete(schedules::delete),
         )
         .route("/schedules/{id}/run", post(schedules::run_now))
+        .route("/tasks", get(tasks::list).post(tasks::create))
+        .route(
+            "/tasks/{id}",
+            get(tasks::get_one).put(tasks::update).delete(tasks::delete),
+        )
+        .route("/tasks/{id}/complete", post(tasks::complete))
+        .route("/tasks/{id}/reopen", post(tasks::reopen))
         .route("/triggers", get(triggers::list).post(triggers::create))
         .route("/triggers/gmail/poll", post(triggers::gmail_poll))
         .route(

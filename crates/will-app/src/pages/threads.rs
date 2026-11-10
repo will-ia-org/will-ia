@@ -744,9 +744,35 @@ impl ThreadsPage {
             .unwrap_or(0)
     }
 
-    fn reload_list(&mut self, cx: &Cx) {
-        self.list
-            .start(cx.svc.call(|c| async move { c.threads().await }));
+    /// Carrega/atualiza a lista mesmo com a página fechada (badge do menu):
+    /// a cada 30 s ou quando um evento zerou o carimbo.
+    pub fn poll_list(&mut self, svc: &std::sync::Arc<crate::service::Service>) {
+        if self.list.stale(std::time::Duration::from_secs(30)) {
+            self.list
+                .start(svc.call(|c| async move { c.threads().await }));
+        }
+        if self.list.poll() {
+            if let Some(v) = &self.list.data {
+                if let Ok(list) = serde_json::from_value::<Vec<ThreadSummary>>(v.clone()) {
+                    self.threads = list;
+                }
+            }
+        }
+    }
+
+    /// Threads processando agora (turno vivo, fila pendente ou status
+    /// `running`), para o badge amarelo do menu.
+    pub fn processing_count(&self) -> usize {
+        self.threads
+            .iter()
+            .filter(|t| t.status != ThreadStatus::Archived)
+            .filter(|t| {
+                self.live.contains_key(&t.id)
+                    || t.pending > 0
+                    || t.status == ThreadStatus::Running
+                    || self.background_tasks(&t.id) > 0
+            })
+            .count()
     }
 
     fn reload_turns(&mut self, cx: &Cx, id: ThreadId) {
@@ -1063,16 +1089,7 @@ impl ThreadsPage {
                 }
             }
         }
-        if self.list.stale(std::time::Duration::from_secs(30)) {
-            self.reload_list(cx);
-        }
-        if self.list.poll() {
-            if let Some(v) = &self.list.data {
-                if let Ok(list) = serde_json::from_value::<Vec<ThreadSummary>>(v.clone()) {
-                    self.threads = list;
-                }
-            }
-        }
+        self.poll_list(cx.svc);
         if let Some(id) = self.selected {
             if self.turns_for != Some(id) || (self.turns.loaded_at.is_none() && !self.turns.busy())
             {

@@ -71,6 +71,7 @@ pub struct AppState {
     pub voice_key: RwLock<Option<secrecy::SecretString>>,
     pub scheduler: RwLock<Option<Arc<will_scheduler::SchedulerModule>>>,
     pub triggers: RwLock<Option<Arc<will_triggers::TriggersModule>>>,
+    pub tasks: RwLock<Option<Arc<will_tasks::TasksModule>>>,
     pub browser: RwLock<Option<Arc<will_browser::BrowserModule>>>,
     pub login_limiter: crate::auth::LoginLimiter,
     /// `http` ou `https` (depois da subida).
@@ -222,6 +223,7 @@ pub async fn start(opts: RunOptions) -> anyhow::Result<ServerHandle> {
         voice_key: RwLock::new(None),
         scheduler: RwLock::new(None),
         triggers: RwLock::new(None),
+        tasks: RwLock::new(None),
         browser: RwLock::new(None),
         login_limiter: crate::auth::LoginLimiter::default(),
         scheme: RwLock::new("http".into()),

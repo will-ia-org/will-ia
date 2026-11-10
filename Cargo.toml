@@ -13,6 +13,7 @@ members = [
   "crates/will-platform",
   "crates/will-scheduler",
   "crates/will-triggers",
+  "crates/will-tasks",
   "crates/will-browser",
   "crates/will-client",
   "crates/will-server",
@@ -33,6 +34,7 @@ default-members = [
   "crates/will-platform",
   "crates/will-scheduler",
   "crates/will-triggers",
+  "crates/will-tasks",
   "crates/will-browser",
   "crates/will-client",
   "crates/will-server",
@@ -43,7 +45,7 @@ default-members = [
 ]
 
 [workspace.package]
-version = "0.1.17"
+version = "0.1.18"
 edition = "2021"
 license = "MIT"
 repository = "https://github.com/will-ia-org/will-ia"
@@ -62,6 +64,7 @@ will-realtime = { path = "crates/will-realtime" }
 will-platform = { path = "crates/will-platform" }
 will-scheduler = { path = "crates/will-scheduler" }
 will-triggers = { path = "crates/will-triggers" }
+will-tasks = { path = "crates/will-tasks" }
 will-browser = { path = "crates/will-browser" }
 will-client = { path = "crates/will-client" }
 will-server = { path = "crates/will-server", default-features = false }
@@ -129,7 +132,8 @@ prost = "0.14"
 mime_guess = "2"
 eframe = { version = "0.37", default-features = false, features = ["glow", "x11", "wayland", "default_fonts", "persistence", "clipboard", "links", "accesskit"] }
 egui = "0.37"
-egui_extras = { version = "0.37", features = ["image", "svg", "file"] }
+egui_extras = { version = "0.37", features = ["image", "svg", "file", "datepicker", "serde"] }
+jiff = "0.2"
 egui_commonmark = "0.26"
 cpal = { version = "0.18", features = ["pulseaudio"] }
 rfd = { version = "0.17", default-features = false, features = ["xdg-portal"] }

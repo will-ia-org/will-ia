@@ -197,6 +197,18 @@ Convenção de identificação: `RF-<módulo>-<nº>`. Prioridade: **M** (Must, M
 | RF-SCH-08 | API local: `GET/POST /api/schedules`, `GET /api/schedules/preview`, `GET/PUT/DELETE /api/schedules/{id}`, `POST /api/schedules/{id}/run`. Cada disparo registra um `ScheduleRun` (últimos 50) e emite `ScheduleFired`/`SchedulesChanged`. | S |
 | RF-SCH-09 | Ao disparar em thread de origem UI/voz, notificação nativa (`notify_on_fire`, padrão ligado); em thread do Telegram não, pois a resposta já vai para o tópico. | S |
 
+## RF-TSK — Tarefas (painel Gantt, `docs/31`)
+
+| ID | Requisito | Prio |
+|---|---|---|
+| RF-TSK-01 | Tarefa com título (≤ 120), descrição (≤ 8000), **início obrigatório com hora** (só a data é recusada), fim opcional (depois do início) e prioridade alta/média/baixa (padrão média). Datas sem fuso usam `tasks.timezone` (padrão `America/Sao_Paulo`). | S |
+| RF-TSK-02 | Estado **derivado do relógio**, nunca gravado: `upcoming` antes do início, `running` do início até o fim (ou para sempre sem fim), `overdue` após o fim sem conclusão, `done` quando concluída. | S |
+| RF-TSK-03 | Página **Tarefas** (primeiro item do menu): Gantt com lista à esquerda e linha do tempo à direita, linha vertical do agora, zoom (Ctrl + rolagem, botões), navegação por arraste, cabeçalho de dias/horas; cor por estado (cinza/azul/vermelho/verde); tooltip; botão ✓ ao passar o mouse na barra; clicar abre o formulário. | S |
+| RF-TSK-04 | Concluídas **somem por padrão**; toggle "mostrar concluídas". Ordenação por data de início (padrão), ordem alfabética ou prioridade (empate pela data), **persistida** em `settings.tasks.sort`. | S |
+| RF-TSK-05 | Ferramentas `tasks_create`, `tasks_list` (filtros pending/running/overdue/upcoming/done/all), `tasks_get`, `tasks_update`, `tasks_delete`, `tasks_complete`, `tasks_reopen`, família `tasks`, política padrão **auto**. | S |
+| RF-TSK-06 | Laço de 30 s nota as transições **entrou em andamento** e **entrou em atraso**: notificação nativa (`notify_native`, padrão ligado) e, com `notify_start`/`notify_overdue` (padrão desligados), aviso no Telegram (destino padrão); uma vez por transição (`notified_*`). | S |
+| RF-TSK-07 | API local `GET/POST /api/tasks`, `GET/PUT/DELETE /api/tasks/{id}`, `POST /api/tasks/{id}/complete|reopen`; evento `TasksChanged` recarrega a UI. Seção Configurações › Tarefas: habilitar, fuso, os dois avisos. | S |
+
 ## RF-BRW — Browser CDP (proxy para o agent-browser; não é canal)
 
 | ID | Requisito | Prio |
