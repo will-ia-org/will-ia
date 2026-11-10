@@ -759,14 +759,7 @@ impl WillApp {
                 let mut items: Vec<(Nav, String)> = vec![
                     (Nav::Tasks, tr("Tarefas").into()),
                     (Nav::Threads, tr("Threads").into()),
-                    (
-                        Nav::Approvals,
-                        if pending > 0 {
-                            trf("Aprovações ({})", &[&pending])
-                        } else {
-                            tr("Aprovações").into()
-                        },
-                    ),
+                    (Nav::Approvals, tr("Aprovações").into()),
                     (Nav::Schedules, tr("Triggers").into()),
                     (Nav::Browser, tr("Browser CDP").into()),
                     (Nav::Logs, tr("Logs").into()),
@@ -796,6 +789,9 @@ impl WillApp {
                     }
                     if n == Nav::Threads {
                         ui::nav_badges(ui, resp.rect, &[(processing, Tone::Warning.color(dark))]);
+                    }
+                    if n == Nav::Approvals {
+                        ui::nav_badges(ui, resp.rect, &[(pending, Tone::Warning.color(dark))]);
                     }
                     if resp.clicked() {
                         self.nav = n;

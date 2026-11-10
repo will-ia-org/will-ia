@@ -28,7 +28,8 @@ will-telegram = { workspace = true, optional = true }
 will-google = { workspace = true, optional = true }
 will-whatsapp = { workspace = true, optional = true }
 tokio.workspace = true
-tokio-util.workspace = true
+tokio-util = { workspace = true, features = ["io"] }
+gethostname.workspace = true
 tokio-stream.workspace = true
 serde.workspace = true
 serde_json.workspace = true
@@ -59,6 +60,10 @@ reqwest.workspace = true
 axum-server.workspace = true
 rcgen.workspace = true
 dashmap.workspace = true
+zip = { version = "9.5.0", default-features = false, features = ["deflate"] }
 
 [lints]
 workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true

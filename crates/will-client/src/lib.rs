@@ -649,6 +649,58 @@ impl Client {
         self.delete(&format!("schedules/{id}")).await
     }
 
+    // ----- backup / restore (docs/10) -----
+
+    pub async fn backup_info(&self) -> ApiResult {
+        self.get("backup/info").await
+    }
+    /// Baixa o `.zip` do backup: `(nome sugerido, bytes)`.
+    pub async fn backup_bytes(&self, include_browser: bool) -> Result<(String, Vec<u8>), String> {
+        let url = format!(
+            "{}{}",
+            self.url("backup"),
+            query_string(&[("browser", include_browser.to_string())])
+        );
+        let resp = self
+            .http
+            .get(url)
+            .bearer_auth(&self.token)
+            .send()
+            .await
+            .map_err(|e| transport_error(&e))?;
+        let status = resp.status();
+        let name = resp
+            .headers()
+            .get("x-backup-name")
+            .and_then(|v| v.to_str().ok())
+            .unwrap_or("will-ia-backup.zip")
+            .to_string();
+        let bytes = resp.bytes().await.map_err(|e| e.to_string())?;
+        if !status.is_success() {
+            let text = String::from_utf8_lossy(&bytes).to_string();
+            let msg = serde_json::from_str::<Value>(&text)
+                .ok()
+                .and_then(|v| v.get("error").and_then(|e| e.as_str()).map(str::to_string))
+                .unwrap_or_else(|| format!("HTTP {status}"));
+            return Err(msg);
+        }
+        Ok((name, bytes.to_vec()))
+    }
+    /// Sobe um `.zip` de backup; o serviço valida, agenda e reinicia.
+    pub async fn restore(&self, bytes: Vec<u8>) -> ApiResult {
+        Self::finish(
+            self.http
+                .post(self.url("restore"))
+                .bearer_auth(&self.token)
+                .header("content-type", "application/zip")
+                .timeout(std::time::Duration::from_secs(600))
+                .body(bytes)
+                .send()
+                .await,
+        )
+        .await
+    }
+
     // ----- tarefas (docs/31) -----
 
     /// `filter`: pending | running | overdue | upcoming | done | all.

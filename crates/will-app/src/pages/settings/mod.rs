@@ -1,6 +1,7 @@
 //! Configurações: estado compartilhado (rascunho × salvo, segredos presentes,
 //! salvamento por seção) e despacho para cada seção.
 
+pub mod backup;
 pub mod browser;
 pub mod engine;
 pub mod external;
@@ -236,6 +237,8 @@ pub struct SettingsPages {
     pub status: crate::pages::dashboard::DashboardPage,
     /// Aba "Telemetria" de Geral: envio opcional dos logs ao Axiom.
     pub telemetry: telemetry::TelemetryPage,
+    /// Aba "Backup / Restore" de Geral: zip da pasta de dados e restauração.
+    pub backup: backup::BackupPage,
     pub engine: engine::EnginePage,
     pub kb: kb::KbPage,
     pub voice: voice::VoicePage,
@@ -293,11 +296,13 @@ impl SettingsPages {
                         ui::Tab::new("settings", tr("Aplicativo")),
                         ui::Tab::new("status", tr("Status do serviço")),
                         ui::Tab::new("telemetry", tr("Telemetria")),
+                        ui::Tab::new("backup", tr("Backup / Restore")),
                     ],
                 );
                 match tab {
                     "status" => self.status.ui(ui, cx),
                     "telemetry" => self.telemetry.ui(ui, cx, st),
+                    "backup" => self.backup.ui(ui, cx),
                     _ => self.general.ui(ui, cx, st),
                 }
             }

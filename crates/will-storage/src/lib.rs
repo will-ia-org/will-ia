@@ -46,6 +46,16 @@ pub struct Storage {
 }
 
 impl Storage {
+    /// Snapshot consistente do banco (inclui o WAL) em `dest` (`VACUUM INTO`).
+    pub async fn snapshot_to(&self, dest: &Path) -> Result<()> {
+        let _ = std::fs::remove_file(dest);
+        sqlx::query("VACUUM INTO ?")
+            .bind(dest.to_string_lossy().to_string())
+            .execute(&self.pool)
+            .await?;
+        Ok(())
+    }
+
     pub async fn open(path: &Path) -> Result<Self> {
         if let Some(parent) = path.parent() {
             std::fs::create_dir_all(parent)?;

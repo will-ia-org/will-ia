@@ -334,3 +334,97 @@ fn ui_cmd(state: App, cmd: &str) -> ApiResult<Value> {
         )),
     }
 }
+
+// ---------- Backup / Restore (docs/10) ----------
+
+#[derive(serde::Deserialize, Default)]
+pub struct BackupQuery {
+    /// Incluir o perfil do navegador (grande).
+    pub browser: Option<bool>,
+}
+
+/// O que entra no backup e quanto pesa o perfil do navegador.
+pub async fn backup_info(State(state): State<App>) -> ApiResult<Value> {
+    let browser = state.paths.data_dir.join(crate::backup::BROWSER_DIR);
+    let browser_bytes = if browser.is_dir() {
+        crate::backup::dir_size(&browser)
+    } else {
+        0
+    };
+    let db_bytes = std::fs::metadata(state.paths.db_path())
+        .map(|m| m.len())
+        .unwrap_or(0);
+    let pending = state.paths.data_dir.join(crate::backup::PENDING).is_file();
+    Ok(Json(json!({
+        "data_dir": state.paths.data_dir,
+        "db_bytes": db_bytes,
+        "browser_bytes": browser_bytes,
+        "suggested_name": crate::backup::suggested_name(),
+        "restore_pending": pending,
+    })))
+}
+
+/// Gera e devolve o `.zip` (streaming).
+pub async fn backup(
+    State(state): State<App>,
+    Query(q): Query<BackupQuery>,
+) -> Result<axum::response::Response, ApiError> {
+    let include_browser = q.browser.unwrap_or(false);
+    let (path, manifest) = crate::backup::build(&state, include_browser)
+        .await
+        .map_err(super::internal)?;
+    let file = tokio::fs::File::open(&path)
+        .await
+        .map_err(|e| super::internal(e.to_string()))?;
+    let len = file.metadata().await.map(|m| m.len()).ok();
+    let stream = tokio_util::io::ReaderStream::new(file);
+    let name = crate::backup::suggested_name();
+    let mut resp = axum::response::Response::builder()
+        .status(axum::http::StatusCode::OK)
+        .header("content-type", "application/zip")
+        .header(
+            "content-disposition",
+            format!("attachment; filename=\"{name}\""),
+        )
+        .header("x-backup-files", manifest.files.to_string())
+        .header("x-backup-name", name);
+    if let Some(l) = len {
+        resp = resp.header("content-length", l.to_string());
+    }
+    resp.body(axum::body::Body::from_stream(stream))
+        .map_err(|e| super::internal(e.to_string()))
+}
+
+/// Recebe o `.zip`, valida, agenda a restauração e reinicia o serviço.
+pub async fn restore(State(state): State<App>, body: axum::body::Bytes) -> ApiResult<Value> {
+    if body.is_empty() {
+        return Err(bad("arquivo vazio"));
+    }
+    let paths = state.paths.clone();
+    let bytes = body.to_vec();
+    let m = tokio::task::spawn_blocking(move || crate::backup::stage(&paths, &bytes))
+        .await
+        .map_err(|e| super::internal(e.to_string()))?
+        .map_err(bad)?;
+    state.bus.log(
+        "warn",
+        "server",
+        format!(
+            "restauração agendada (backup de {} em {}); reiniciando o serviço",
+            m.hostname, m.created_at
+        ),
+    );
+    // encerra depois de responder; o LaunchAgent/systemd sobe de novo e
+    // `backup::apply_pending` troca os dados antes de abrir o banco
+    let cancel = state.cancel.clone();
+    tokio::spawn(async move {
+        tokio::time::sleep(std::time::Duration::from_millis(1500)).await;
+        tracing::warn!("reiniciando para aplicar a restauração do backup");
+        cancel.cancel();
+    });
+    Ok(Json(json!({
+        "ok": true,
+        "restart": true,
+        "manifest": m,
+    })))
+}

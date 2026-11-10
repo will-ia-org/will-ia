@@ -5,6 +5,7 @@ pub mod api;
 pub mod api_trace;
 pub mod app;
 pub mod auth;
+pub mod backup;
 pub mod engine_cfg;
 pub mod kb;
 pub mod kb_profile;

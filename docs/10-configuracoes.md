@@ -15,6 +15,10 @@ Janela nativa (egui/eframe, crate `will-app`, binário `will-ia-app`, cliente do
 
 Geral tem três abas: **Aplicativo** (`settings`, a tabela acima), **Status do serviço** (`status`, ver adiante) e **Telemetria** (`telemetry`).
 
+### Backup / Restore (aba de Geral; `--nav general/backup`; RF-CFG-11)
+
+Leva a **pasta de dados da instância** (não o workspace/KB) para outra máquina. **Backup** (`GET /api/backup?browser=0|1`): zip com snapshot consistente do banco (`Storage::snapshot_to`, `VACUUM INTO`), `secrets.enc` + `secrets.key` (ou `secrets.json`), `whatsapp/`, `telemetry-defaults.json`, `instance-id`, `app.ron`, opcionalmente `browser-profile/`, mais `backup-manifest.json` (formato, versão, data, host, instância, contagem). Fora: KB, `logs/`, `old/`, `cache/`, `signing/`, `api-port`, `instance.lock`, `install-manifest.json`, `ui-session.token`, `*.db-wal/-shm` e cópias antigas do banco. O app pede o destino num diálogo (padrão `~/Downloads/will-ia-backup-<data>.zip`). **Restore** (`POST /api/restore`, corpo = o zip, até 2 GB): o servidor valida (manifesto + `will-ia.db`), grava `restore-pending.zip` na pasta de dados, responde e se encerra 1,5 s depois; o LaunchAgent/systemd (`KeepAlive`) sobe de novo e `backup::apply_pending` move os dados atuais para `old/restore-<data>/` e extrai o zip **antes** de abrir o banco (falha → `restore-failed-<data>.zip`, dados atuais mantidos). Só admin. `GET /api/backup/info` dá tamanhos e se há restauração pendente.
+
 ### Telemetria (`telemetry`, aba de Geral; `--nav general/telemetry`)
 Envio **opcional e desligado por padrão** de logs, spans e métricas de uso por **OTLP/HTTP (Protobuf)** — o protocolo padrão do OpenTelemetry — para o **Axiom** (preset) ou qualquer outro backend OTLP (`docs/29`). Cards: **Destino (OTLP)** (interruptor, provedor, dataset ou cabeçalhos, token, endpoint), **O que enviar** (nível, rótulo, traces, logs do app, relatórios de falha, nota de privacidade) e **Status** (`GET /api/telemetry/status`: enviados/falhas/fila, `instance_id`, último envio/erro, "Enviar evento de teste").
 
@@ -341,7 +345,7 @@ Página com **duas ou mais seções independentes** não empilha cartões numa r
 | Configurações › Rede | `network` | `listen` Escuta · `cert` Certificado em uso |
 | Browser CDP (página) | `browser` | `status` Status · `install` Instalação · `tests` Testes · `traffic` Tráfego CDP (ao vivo) |
 
-Ficam sem abas as páginas curtas de uma seção (Agendamentos, Browser CDP em Configurações) e as de lista + formulário (MCPs externos, Agendamentos, Usuários, Custos); Geral tem as abas Aplicativo · Status do serviço · Telemetria. Em **Custos**, o filtro "Fonte" lista todas as fontes gravadas em `ai_costs` (`voice`, `voice_stt`, `voice_tts`, `voice_summary`, `claude`, `thread_summary`, `telegram_*`) mais qualquer valor novo visto nos dados (rótulo = valor bruto), e vale para o resumo e para os registros. Aprovações usa abas (`pending` · `history`).
+Ficam sem abas as páginas curtas de uma seção (Agendamentos, Browser CDP em Configurações) e as de lista + formulário (MCPs externos, Agendamentos, Usuários, Custos); Geral tem as abas Aplicativo · Status do serviço · Telemetria · Backup / Restore. Em **Custos**, o filtro "Fonte" lista todas as fontes gravadas em `ai_costs` (`voice`, `voice_stt`, `voice_tts`, `voice_summary`, `claude`, `thread_summary`, `telegram_*`) mais qualquer valor novo visto nos dados (rótulo = valor bruto), e vale para o resumo e para os registros. Aprovações usa abas (`pending` · `history`).
 
 ### Ícones
 

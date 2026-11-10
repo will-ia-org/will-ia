@@ -154,6 +154,8 @@ pub fn is_admin_path(method: &axum::http::Method, path: &str) -> bool {
         || p == "/kb/open"
         || p == "/kb/browse"
         || p == "/diagnostics"
+        || p.starts_with("/backup")
+        || p == "/restore"
         || p == "/browser/launch"
         || p == "/browser/close"
         || p == "/network/cert"
@@ -199,6 +201,13 @@ pub fn router(state: App) -> Router {
         .route("/costs", get(system::costs))
         .route("/costs/summary", get(system::costs_summary))
         .route("/diagnostics", get(system::diagnostics))
+        .route("/backup", get(system::backup))
+        .route("/backup/info", get(system::backup_info))
+        .route(
+            "/restore",
+            post(system::restore)
+                .layer(axum::extract::DefaultBodyLimit::max(2 * 1024 * 1024 * 1024)),
+        )
         .route("/ui/show", post(system::ui_show))
         .route("/ui/screenshot", post(system::ui_screenshot))
         .route("/events", get(ws::events_ws))

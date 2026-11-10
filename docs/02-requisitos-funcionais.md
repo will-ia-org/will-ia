@@ -33,6 +33,7 @@ Convenção de identificação: `RF-<módulo>-<nº>`. Prioridade: **M** (Must, M
 | RF-CFG-08 | Toda alteração deve ser validada antes de salvar; tokens são testados com um botão "Testar conexão". | S |
 | RF-CFG-09 | Segredos (tokens, API keys) devem ser exibidos mascarados, com botão revelar. | M |
 | RF-CFG-10 | Alterações em módulos (Telegram, Realtime, MCP) devem ser aplicadas a quente, reiniciando apenas o módulo afetado. | S |
+| RF-CFG-11 | **Backup / Restore** da pasta de dados (aba de Geral): zip com snapshot do banco, cofre de segredos, sessão do WhatsApp, telemetria embutida, identidade da instância e, opcionalmente, perfil do navegador (nunca a KB, logs, caches ou arquivos da máquina). Restaurar valida o zip, guarda os dados atuais em `old/restore-<data>/`, aplica na subida seguinte e reinicia o serviço sozinho. Só admin. | S |
 
 ## RF-THR — Threads (sessões do cérebro)
 

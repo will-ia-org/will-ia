@@ -164,6 +164,15 @@ pub async fn start(opts: RunOptions) -> anyhow::Result<ServerHandle> {
     let bus = EventBus::new(2048);
     crate::logging::init(&paths, bus.clone());
     tracing::info!(data_dir = %paths.data_dir.display(), "will-ia iniciando");
+    // Restauração de backup agendada (`POST /api/restore`): troca os dados
+    // antes de abrir o banco; falha mantém os dados atuais (docs/10).
+    if let Some(Err(e)) = crate::backup::apply_pending(&paths) {
+        bus.log(
+            "error",
+            "server",
+            format!("restauração do backup falhou: {e}"),
+        );
+    }
 
     let storage = Storage::open(&paths.db_path()).await?;
     storage.reset_running_threads().await?;

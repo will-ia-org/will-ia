@@ -57,6 +57,9 @@ Códigos: **401** `token de sessão ausente` / `token de sessão inválido` (tam
 | GET | `/api/costs/summary?source` | totais por período (hoje, 7 d, 30 d, total) e por fonte |
 | POST | `/api/ui/screenshot?nav=` | pede uma captura da janela do **app**: o servidor roda `will-ia-app screenshot --nav <pagina>` (binário ao lado do `will-ia` ou no PATH), que grava `<config>/will-ia-app/screenshot.png`. Diagnóstico/iteração de layout |
 | GET | `/api/diagnostics` | zip (segredos redigidos) |
+| GET | `/api/backup/info` | tamanhos (banco, perfil do navegador), nome sugerido, `restore_pending` (admin) |
+| GET | `/api/backup?browser=0\|1` | zip da pasta de dados (streaming; cabeçalho `x-backup-name`) (admin) |
+| POST | `/api/restore` | corpo = zip do backup (≤ 2 GB); valida, agenda `restore-pending.zip` e reinicia o serviço (admin) |
 | WS | `/api/events?token=` | stream de `Event` (JSON por mensagem) |
 | POST | `/api/ui/show` | **lança (ou traz para frente) o app** `will-ia-app`: o servidor executa o binário ao lado do seu ou no PATH; se o app já está aberto, ele mesmo só mostra a janela (ipc do app, `docs/13`). Responde `{ "ok": true }` quando há o gancho (hoje em `will-ia` e `will-ia serve`); sem app instalado o erro fica só no log. Em servidor sem desktop é inútil, mas inofensivo |
 
