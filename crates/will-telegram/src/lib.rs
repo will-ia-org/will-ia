@@ -232,8 +232,11 @@ impl TelegramModule {
                 }
                 Some(e) => {
                     tracing::warn!(chat_id = ?forum.chat_id, error = %e, "espelho de threads indisponível");
-                    self.bus
-                        .log("warn", "telegram", format!("espelho de threads indisponível: {e}"));
+                    self.bus.log(
+                        "warn",
+                        "telegram",
+                        format!("espelho de threads indisponível: {e}"),
+                    );
                 }
             }
         }

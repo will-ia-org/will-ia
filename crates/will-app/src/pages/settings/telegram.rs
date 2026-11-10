@@ -74,11 +74,15 @@ impl TelegramPage {
                 .on_hover_text(tr(
                     "Cria um tópico no fórum para cada thread do app que ainda não tem um.",
                 ))
-                .on_disabled_hover_text(tr("Precisa do espelho pronto (módulo no ar e fórum válido)."))
+                .on_disabled_hover_text(tr(
+                    "Precisa do espelho pronto (módulo no ar e fórum válido).",
+                ))
                 .clicked()
             {
-                self.sync_task =
-                    Some(cx.svc.call(|c| async move { c.telegram_sync_threads().await }));
+                self.sync_task = Some(
+                    cx.svc
+                        .call(|c| async move { c.telegram_sync_threads().await }),
+                );
             }
             if syncing {
                 ui.spinner();
@@ -87,7 +91,11 @@ impl TelegramPage {
                 ui.label(
                     egui::RichText::new(trf(
                         "{} criado(s) · {} falha(s) · {} já espelhada(s)",
-                        &[&ui::i(v, "created"), &ui::i(v, "failed"), &ui::i(v, "skipped")],
+                        &[
+                            &ui::i(v, "created"),
+                            &ui::i(v, "failed"),
+                            &ui::i(v, "skipped"),
+                        ],
                     ))
                     .weak()
                     .small(),
@@ -162,10 +170,8 @@ impl TelegramPage {
                                 &[&created, &failed],
                             ));
                         } else {
-                            cx.toasts.success(trf(
-                                "Sincronização: {} tópico(s) criado(s)",
-                                &[&created],
-                            ));
+                            cx.toasts
+                                .success(trf("Sincronização: {} tópico(s) criado(s)", &[&created]));
                         }
                         self.last_sync = Some(v);
                         self.status.loaded_at = None;

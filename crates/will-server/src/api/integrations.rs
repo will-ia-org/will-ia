@@ -76,11 +76,7 @@ pub async fn telegram_status(State(state): State<App>) -> ApiResult<Value> {
 
 /// Botão "Sincronizar threads": cada thread do app vira um tópico no fórum.
 pub async fn telegram_sync_threads(State(state): State<App>) -> ApiResult<Value> {
-    let v = state
-        .host()
-        .sync_threads_to_telegram()
-        .await
-        .map_err(bad)?;
+    let v = state.host().sync_threads_to_telegram().await.map_err(bad)?;
     tracing::info!(
         created = v.get("created").and_then(|c| c.as_u64()).unwrap_or(0),
         failed = v.get("failed").and_then(|c| c.as_u64()).unwrap_or(0),

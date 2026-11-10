@@ -89,8 +89,9 @@ impl TelegramModule {
                 ChatMemberKind::Owner(_) => {}
                 ChatMemberKind::Administrator(a) if a.can_manage_topics => {}
                 ChatMemberKind::Administrator(_) => {
-                    st.error =
-                        Some("o bot é administrador, mas sem a permissão \"Gerenciar tópicos\"".into());
+                    st.error = Some(
+                        "o bot é administrador, mas sem a permissão \"Gerenciar tópicos\"".into(),
+                    );
                     return st;
                 }
                 _ => {

@@ -765,7 +765,10 @@ impl Host {
                     Err(e) => {
                         failed += 1;
                         tracing::warn!(thread_id = %t.id, error = %e, "sincronizar: tópico não criado");
-                        errors.push(format!("{}: {e}", title.unwrap_or_else(|| t.id.to_string())));
+                        errors.push(format!(
+                            "{}: {e}",
+                            title.unwrap_or_else(|| t.id.to_string())
+                        ));
                         // flood control do Telegram: para na primeira falha de API
                         if e.contains("Retry") || e.contains("Too Many") {
                             break;
