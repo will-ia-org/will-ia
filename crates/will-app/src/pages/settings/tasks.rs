@@ -281,6 +281,17 @@ impl TasksSettingsPage {
                 .weak()
                 .small(),
             );
+            let kept = ui::i(v, "kept_local");
+            if kept > 0 {
+                ui.label(
+                    egui::RichText::new(trf(
+                        "🔒 {} edição(ões) ficaram só aqui: evento especial do Google (aniversário, Gmail, fora do escritório, foco) não aceita alteração",
+                        &[&kept],
+                    ))
+                    .weak()
+                    .small(),
+                );
+            }
             if let Some(w) = v.get("warnings").and_then(|w| w.as_array()) {
                 for e in w.iter().take(6) {
                     ui::error_text(ui, e.as_str().unwrap_or(""));
@@ -300,7 +311,7 @@ impl TasksSettingsPage {
         ui.add_space(4.0);
         ui.label(
             egui::RichText::new(tr(
-                "Como funciona: a tarefa guarda o id do evento e o evento guarda o id da tarefa, então repetir a sincronização nunca duplica. Concluída vira \"✓ título\" na agenda. Apagar de um lado apaga do outro. Evento de dia inteiro vira tarefa 00:00 → 23:59; recorrente entra uma ocorrência por vez.",
+                "Como funciona: a tarefa guarda o id do evento e o evento guarda o id da tarefa, então repetir a sincronização nunca duplica. Concluída vira \"✓ título\" na agenda. Apagar de um lado apaga do outro. Evento de dia inteiro vira tarefa 00:00 → 23:59; recorrente entra uma ocorrência por vez. Eventos especiais do Google (aniversário, Gmail, fora do escritório, foco) só entram: editar ou apagar a tarefa não mexe neles.",
             ))
             .weak()
             .small(),

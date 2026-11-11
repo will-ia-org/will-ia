@@ -964,8 +964,12 @@ impl BrowserPage {
                         ui::badge(ui, tr("rodando"), Tone::Info);
                     } else {
                         match j.get("ok").and_then(|o| o.as_bool()) {
-                            Some(true) => ui::badge(ui, tr("ok"), Tone::Success),
-                            Some(false) => ui::badge(ui, tr("falhou"), Tone::Danger),
+                            Some(true) => {
+                                ui::badge(ui, tr("ok"), Tone::Success);
+                            }
+                            Some(false) => {
+                                ui::badge(ui, tr("falhou"), Tone::Danger);
+                            }
                             None => {}
                         }
                     }

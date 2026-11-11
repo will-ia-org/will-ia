@@ -548,7 +548,9 @@ impl ExternalPage {
                             .on_hover_text(names.join("\n"));
                     }
                 }
-                None => ui::badge(ui, tr("não testado"), Tone::Neutral),
+                None => {
+                    ui::badge(ui, tr("não testado"), Tone::Neutral);
+                }
             });
             ui.add_space(4.0);
             ui.horizontal(|ui| {

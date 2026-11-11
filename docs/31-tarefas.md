@@ -19,6 +19,7 @@ página `pages/tasks.rs`, seção Configurações › Tarefas.
 | `skipped` | bool | com `done_at`: fechada como **não realizada** (faltou/desistiu) — some da tela como a concluída, mas não conta como feita |
 | `notified_start_at`, `notified_overdue_at` | instantes | marcas do laço (um aviso por transição) |
 | `calendar_id`, `event_id`, `synced_at`, `remote_updated_at` | vínculo opcional | evento espelhado no Google Calendar (ver "Sincronizar") |
+| `event_read_only` | bool | o evento espelhado é especial do Google (aniversário, Gmail, fora do escritório, foco): só recebe, nunca é escrito |
 
 **Estado derivado do relógio** (`Task::state_at(now)`), nunca gravado:
 
@@ -130,14 +131,15 @@ sem política de ferramenta — é o usuário clicando). Decisões de 2026-11-10
 | Sem fim | o Google exige fim: envia início + 1 h com `will_open_end = "1"`; na volta, fim igual a início + 1 h com a marca ⇒ sem fim. Se você mudar o fim no Google, ele passa a valer. |
 | Dia inteiro | evento `date` ⇒ tarefa 00:00 → 23:59 (fuso das tarefas); tarefa 00:00 → 23:59 ⇒ evento de dia inteiro. |
 | Recorrência | `singleEvents=true`: cada ocorrência da janela vira uma tarefa (id `série_AAAAMMDDTHHMMSSZ`); editar a tarefa altera só aquela ocorrência. |
-| Ignorados | cancelados, convites que **eu recusei**, eventos cujo `will_task_id` aponta para tarefa que ainda existe (em outra agenda/fora da janela). |
+| Ignorados | cancelados, convites que **eu recusei**, eventos cujo `will_task_id` aponta para tarefa que ainda existe (em outra agenda/fora da janela), local de trabalho (`eventType = workingLocation`). |
+| Eventos especiais (só leitura) | `eventType` ≠ `default` (`birthday` de contato, `fromGmail`, `outOfOffice`, `focusTime`): a API recusa escrita (até as propriedades privadas — "'birthday' event type must not have private extended properties"). Entram como tarefa com `event_read_only`; edição local **fica só aqui** (relatório `kept_local`, sem aviso; `synced_at` avança para não insistir) e apagar a tarefa **não apaga** o evento (sem lápide; a próxima rodada reimporta). Edição no Google ainda desce. Pílula "Google Agenda · só leitura" no formulário. |
 
 Algoritmo (`TasksModule::sync_calendar`, uma rodada por vez): 1) lápides → `delete` no Google;
 2) lista as ocorrências da janela; 3) tarefas locais = vinculadas a esta agenda ∪ soltas com início na
 janela: solta → `insert` + vínculo; vinculada sem evento (nem por `get`) → apaga a tarefa; par
 → regra de conflito (`patch` ou `apply_remote_task`); 4) eventos sem par → `insert_task` já vinculada
 (`created_by = calendar`, `created_at = updated_at = synced_at`). Relatório `SyncReport` (criadas /
-atualizadas / removidas em cada sentido, sem alteração, ignorados, avisos) mostrado na UI e no log.
+atualizadas / removidas em cada sentido, sem alteração, ignorados, `kept_local`, avisos) mostrado na UI e no log.
 
 Rotas: `POST /api/tasks/sync-calendar` `{from, to (YYYY-MM-DD), calendar_id}` (todos opcionais; janela
 máxima 400 dias). App: `settings/tasks.rs`, aba **Google Calendar** (ao lado de Configuração) — estado da Agenda, seletor de agenda (habilitadas e

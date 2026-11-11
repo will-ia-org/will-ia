@@ -128,6 +128,11 @@ pub struct Task {
     pub synced_at: Option<DateTime<Utc>>,
     #[serde(default)]
     pub remote_updated_at: Option<DateTime<Utc>>,
+    /// O evento espelhado é **especial** do Google (aniversário de contato,
+    /// vindo do Gmail, fora do escritório, foco): a API não aceita gravar
+    /// nele, então a tarefa só **recebe** — edição e exclusão ficam só aqui.
+    #[serde(default)]
+    pub event_read_only: bool,
     /// Etiquetas livres, sempre normalizadas ([`normalize_tag`]): minúsculas,
     /// sem acento, espaço vira `-`. Sem duplicatas, na ordem em que entraram.
     #[serde(default)]
@@ -263,6 +268,7 @@ mod tests {
             tags: vec![],
             synced_at: None,
             remote_updated_at: None,
+            event_read_only: false,
         }
     }
 

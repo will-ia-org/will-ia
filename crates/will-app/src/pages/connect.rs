@@ -627,9 +627,11 @@ impl ConnectPage {
                         ui::mono(ui, fp);
                         match &local_fp {
                             Some(l) if norm_fp(l) == norm_fp(fp) => {
-                                ui::badge(ui, tr("bate com o PEM colado"), Tone::Success)
+                                ui::badge(ui, tr("bate com o PEM colado"), Tone::Success);
                             }
-                            Some(_) => ui::badge(ui, tr("não bate com o PEM colado"), Tone::Danger),
+                            Some(_) => {
+                                ui::badge(ui, tr("não bate com o PEM colado"), Tone::Danger);
+                            }
                             None => {
                                 ui.add(
                                     egui::Label::new(

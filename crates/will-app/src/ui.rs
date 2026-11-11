@@ -487,7 +487,8 @@ pub fn module_name(m: will_core::Module) -> &'static str {
 
 // ---------- pequenos widgets ----------
 
-pub fn badge(ui: &mut Ui, text: &str, tone: Tone) {
+/// Devolve a resposta do chip (para tooltip com `on_hover_text`).
+pub fn badge(ui: &mut Ui, text: &str, tone: Tone) -> egui::Response {
     let dark = ui.visuals().dark_mode;
     let color = tone.color(dark);
     let fill = color.linear_multiply(if dark { 0.25 } else { 0.15 });
@@ -502,7 +503,8 @@ pub fn badge(ui: &mut Ui, text: &str, tone: Tone) {
                 egui::Label::new(RichText::new(text).color(color).small())
                     .wrap_mode(egui::TextWrapMode::Extend),
             );
-        });
+        })
+        .response
 }
 
 /// Chip de dois tons: rótulo forte + detalhe fraco ("Gmail · ler, enviar").

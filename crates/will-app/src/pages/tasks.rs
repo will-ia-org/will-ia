@@ -60,6 +60,8 @@ struct Row {
     end_local: String,
     /// Espelhada num evento do Google Calendar.
     linked: bool,
+    /// O evento é especial do Google (aniversário, Gmail…): não aceita escrita.
+    read_only: bool,
     /// Etiquetas normalizadas.
     tags: Vec<String>,
 }
@@ -88,6 +90,7 @@ impl Row {
             start_local: ui::s(v, "start_local"),
             end_local: ui::s(v, "end_local"),
             linked: v.get("event_id").is_some_and(|e| e.is_string()),
+            read_only: ui::b(v, "event_read_only"),
             tags: v
                 .get("tags")
                 .and_then(|t| t.as_array())
@@ -139,6 +142,7 @@ struct Form {
     skipped: bool,
     /// Espelhada no Google Calendar (só informativo no cabeçalho).
     linked: bool,
+    read_only: bool,
     save: Option<Task<Value>>,
     error: Option<String>,
     /// Aba Descrição: editor (true) ou Markdown renderizado (false).
@@ -199,6 +203,7 @@ impl Form {
             done: false,
             skipped: false,
             linked: false,
+            read_only: false,
             save: None,
             error: None,
             desc_edit: false,
@@ -222,6 +227,7 @@ impl Form {
         f.title = r.title.clone();
         f.description = r.description.clone();
         f.linked = r.linked;
+        f.read_only = r.read_only;
         if let Some((d, h, m)) = parse_local(&r.start_local) {
             f.start_date = d;
             f.start_h = h;
@@ -1753,7 +1759,11 @@ impl TasksPage {
                         } else if f.done {
                             ui::badge(ui, tr("concluída"), Tone::Success);
                         }
-                        if f.linked {
+                        if f.linked && f.read_only {
+                            ui::badge(ui, tr("Google Agenda · só leitura"), Tone::Info).on_hover_text(tr(
+                                "Evento especial do Google (aniversário, Gmail, fora do escritório, foco): a agenda não aceita alteração, então editar ou apagar esta tarefa não mexe nele.",
+                            ));
+                        } else if f.linked {
                             ui::badge(ui, tr("Google Agenda"), Tone::Info);
                         }
                     }

@@ -15,6 +15,13 @@
 //! (+ `will_done_at`). Prioridade e "sem fim" vão em propriedades privadas.
 //! Evento de dia inteiro vira tarefa 00:00 → 23:59; tarefa 00:00 → 23:59 volta
 //! como dia inteiro. Ocorrências de evento recorrente entram uma a uma.
+//!
+//! Eventos **especiais** do Google (`eventType` ≠ `default`: aniversário de
+//! contato, vindo do Gmail, fora do escritório, foco) não aceitam escrita pela
+//! API (nem as propriedades privadas do vínculo): entram como tarefa marcada
+//! `event_read_only`, que só **recebe** — edição local fica só aqui (contada em
+//! `kept_local`) e apagar a tarefa não apaga o evento. Local de trabalho
+//! (`workingLocation`) não é compromisso: ignorado.
 
 use crate::{TasksModule, Zone};
 use async_trait::async_trait;
@@ -122,6 +129,9 @@ pub struct SyncReport {
     pub pushed_deleted: usize,
     pub unchanged: usize,
     pub skipped: usize,
+    /// Edições locais que **não sobem**: o evento é especial do Google
+    /// (aniversário, Gmail, fora do escritório, foco) e não aceita escrita.
+    pub kept_local: usize,
     pub warnings: Vec<String>,
     pub duration_ms: u64,
 }
@@ -142,6 +152,19 @@ pub(crate) struct RemoteEvent {
     pub cancelled: bool,
     /// Eu recusei o convite: não vira tarefa.
     pub declined: bool,
+    /// Evento especial do Google: a API não aceita escrita nele.
+    pub read_only: bool,
+}
+
+/// `eventType` do evento: `default` (ou ausente) é o evento comum, que aceita
+/// escrita; `workingLocation` não é compromisso (`None` = ignorar); os demais
+/// (`birthday`, `fromGmail`, `outOfOffice`, `focusTime`…) são só de leitura.
+fn read_only_kind(ev: &Value) -> Option<bool> {
+    match ev.get("eventType").and_then(|t| t.as_str()) {
+        None | Some("default") => Some(false),
+        Some("workingLocation") => None,
+        Some(_) => Some(true),
+    }
 }
 
 fn prop<'a>(ev: &'a Value, key: &str) -> Option<&'a str> {
@@ -177,6 +200,7 @@ fn when(v: Option<&Value>, zone: Zone, end_of_all_day: bool) -> Option<DateTime<
 impl RemoteEvent {
     pub(crate) fn parse(ev: &Value, zone: Zone) -> Option<RemoteEvent> {
         let id = ev.get("id")?.as_str()?.to_string();
+        let read_only = read_only_kind(ev)?;
         let cancelled = ev.get("status").and_then(|s| s.as_str()) == Some("cancelled");
         let raw_title = ev
             .get("summary")
@@ -244,6 +268,7 @@ impl RemoteEvent {
             task_id: prop(ev, PROP_TASK_ID).and_then(|s| TaskId::parse(s).ok()),
             cancelled,
             declined,
+            read_only,
         })
     }
 
@@ -335,12 +360,18 @@ fn remote_updated(ev: &Value) -> DateTime<Utc> {
         .trunc_subsecs(3)
 }
 
-fn link(cal_id: &str, event_id: &str, remote_updated_at: DateTime<Utc>) -> TaskLink {
+fn link(
+    cal_id: &str,
+    event_id: &str,
+    remote_updated_at: DateTime<Utc>,
+    read_only: bool,
+) -> TaskLink {
     TaskLink {
         calendar_id: cal_id.to_string(),
         event_id: event_id.to_string(),
         synced_at: Utc::now(),
         remote_updated_at,
+        read_only,
     }
 }
 
@@ -455,7 +486,7 @@ impl TasksModule {
                                 .push(format!("evento de \"{}\" criado sem id", t.title));
                             continue;
                         };
-                        let link = link(&cal_id, new_id, remote_updated(&created));
+                        let link = link(&cal_id, new_id, remote_updated(&created), false);
                         if let Err(e) = storage.set_task_link(t.id, &link).await {
                             rep.warnings
                                 .push(format!("vínculo de \"{}\": {e}", t.title));
@@ -496,6 +527,14 @@ impl TasksModule {
             let remote_changed = remote_seen.is_none_or(|r| ev.updated != r);
             let push = match (local_changed, remote_changed) {
                 (false, false) => {
+                    if t.event_read_only != ev.read_only {
+                        // tarefa de antes da marca (ou evento que mudou de tipo)
+                        let link = link(&cal_id, &eid, ev.updated, ev.read_only);
+                        if let Err(e) = storage.set_task_link(t.id, &link).await {
+                            rep.warnings
+                                .push(format!("vínculo de \"{}\": {e}", t.title));
+                        }
+                    }
                     rep.unchanged += 1;
                     continue;
                 }
@@ -503,13 +542,25 @@ impl TasksModule {
                 (false, true) => false,
                 (true, true) => t.updated_at >= ev.updated,
             };
+            if push && ev.read_only {
+                // o Google não aceita escrita: a edição fica só aqui e a
+                // tarefa passa a contar como sincronizada (não insiste)
+                let link = link(&cal_id, &eid, ev.updated, true);
+                match storage.set_task_link(t.id, &link).await {
+                    Ok(()) => rep.kept_local += 1,
+                    Err(e) => rep
+                        .warnings
+                        .push(format!("vínculo de \"{}\": {e}", t.title)),
+                }
+                continue;
+            }
             if push {
                 match bridge
                     .patch_event(&cal_id, &eid, &event_body(&t, zone))
                     .await
                 {
                     Ok(updated) => {
-                        let link = link(&cal_id, &eid, remote_updated(&updated));
+                        let link = link(&cal_id, &eid, remote_updated(&updated), false);
                         if let Err(e) = storage.set_task_link(t.id, &link).await {
                             rep.warnings
                                 .push(format!("vínculo de \"{}\": {e}", t.title));
@@ -521,7 +572,7 @@ impl TasksModule {
                         .push(format!("atualizar evento de \"{}\": {e}", t.title)),
                 }
             } else {
-                let link = link(&cal_id, &eid, ev.updated);
+                let link = link(&cal_id, &eid, ev.updated, ev.read_only);
                 match storage
                     .apply_remote_task(t.id, &ev.to_remote_task(link))
                     .await
@@ -557,7 +608,7 @@ impl TasksModule {
                 rep.skipped += 1;
                 continue;
             }
-            let link = link(&cal_id, &r.id, r.updated);
+            let link = link(&cal_id, &r.id, r.updated, r.read_only);
             let new = NewTask {
                 title: will_core::tools::truncate(&r.title, crate::TITLE_MAX),
                 description: will_core::tools::truncate(&r.description, crate::DESCRIPTION_MAX),
@@ -587,6 +638,7 @@ impl TasksModule {
             pushed_deleted = rep.pushed_deleted,
             unchanged = rep.unchanged,
             skipped = rep.skipped,
+            kept_local = rep.kept_local,
             warnings = rep.warnings.len(),
             duration_ms = rep.duration_ms,
             "sincronização de tarefas concluída"
@@ -606,6 +658,10 @@ impl TasksModule {
         let (Some(cal), Some(eid)) = (&t.calendar_id, &t.event_id) else {
             return;
         };
+        if t.event_read_only {
+            tracing::info!(task_id = %t.id, event_id = %eid, "evento especial do Google fica na agenda (só leitura)");
+            return;
+        }
         match self.deps.calendar.delete_event(cal, eid).await {
             Ok(()) => {
                 tracing::info!(task_id = %t.id, event_id = %eid, "evento da tarefa apagado no Google")
@@ -653,6 +709,7 @@ mod tests {
             event_id: None,
             synced_at: None,
             remote_updated_at: None,
+            event_read_only: false,
             tags: vec![],
         }
     }
@@ -839,6 +896,9 @@ mod e2e {
         async fn patch_event(&self, _: &str, id: &str, body: &Value) -> Result<Value, String> {
             let mut all = self.events.lock();
             let ev = all.get_mut(id).ok_or("404")?;
+            if ev["eventType"] == "birthday" {
+                return Err("Google API 400: 'birthday' event type must not have private extended properties".into());
+            }
             for (k, v) in body.as_object().unwrap() {
                 ev[k] = v.clone();
             }
@@ -846,7 +906,11 @@ mod e2e {
             Ok(ev.clone())
         }
         async fn delete_event(&self, _: &str, id: &str) -> Result<(), String> {
-            self.events.lock().remove(id);
+            let mut all = self.events.lock();
+            if all.get(id).is_some_and(|e| e["eventType"] == "birthday") {
+                return Err("Google API 403: cannot delete birthday event".into());
+            }
+            all.remove(id);
             Ok(())
         }
     }
@@ -1029,5 +1093,63 @@ mod e2e {
             .await
             .unwrap()
             .is_empty());
+    }
+
+    #[tokio::test]
+    async fn special_events_are_read_only_mirrors() {
+        let fake = Arc::new(Fake::default());
+        let m = module(fake.clone()).await;
+        let t0 = Utc.with_ymd_and_hms(2026, 11, 1, 0, 0, 0).unwrap();
+        fake.put(
+            "T",
+            json!({"summary": "Tamara", "eventType": "birthday",
+                   "start": {"date": "2026-11-20"}, "end": {"date": "2026-11-21"}}),
+            t0,
+        );
+        fake.put(
+            "W",
+            json!({"summary": "Escritório", "eventType": "workingLocation",
+                   "start": {"date": "2026-11-12"}, "end": {"date": "2026-11-13"}}),
+            t0,
+        );
+        // aniversário entra marcado; local de trabalho é ignorado
+        let r = m.sync_calendar(req()).await.unwrap();
+        assert_eq!((r.pulled_created, r.skipped), (1, 1), "{r:?}");
+        let t = m.list("all").await.unwrap().remove(0);
+        assert_eq!(t.task.title, "Tamara");
+        assert!(t.task.event_read_only);
+
+        // edição local não sobe (o Google recusaria), mas não vira aviso
+        // nem fica insistindo nas rodadas seguintes
+        tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+        m.update(
+            t.task.id,
+            TaskInput {
+                tags: Some(vec!["familia".into()]),
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
+        let r = m.sync_calendar(req()).await.unwrap();
+        assert_eq!((r.kept_local, r.pushed_updated), (1, 0), "{r:?}");
+        assert!(r.warnings.is_empty(), "{r:?}");
+        assert_eq!(fake.summary("T"), "Tamara");
+        let r = m.sync_calendar(req()).await.unwrap();
+        assert_eq!((r.unchanged, r.kept_local), (1, 0), "{r:?}");
+
+        // apagar a tarefa deixa o aniversário na agenda, sem lápide
+        m.delete(t.task.id).await.unwrap();
+        assert!(fake.events.lock().contains_key("T"));
+        assert!(m
+            .deps
+            .storage
+            .list_task_tombstones("cal1")
+            .await
+            .unwrap()
+            .is_empty());
+        // e a próxima rodada o importa de novo (sem vínculo local, é novo)
+        let r = m.sync_calendar(req()).await.unwrap();
+        assert_eq!(r.pulled_created, 1, "{r:?}");
     }
 }

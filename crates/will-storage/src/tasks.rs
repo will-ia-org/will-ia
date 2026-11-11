@@ -30,6 +30,9 @@ pub struct TaskLink {
     pub synced_at: DateTime<Utc>,
     /// `updated` do evento no Google nesse momento.
     pub remote_updated_at: DateTime<Utc>,
+    /// Evento especial do Google (aniversário, Gmail, fora do escritório,
+    /// foco): nunca recebe escrita; ver `Task::event_read_only`.
+    pub read_only: bool,
 }
 
 /// Conteúdo vindo do evento do Google (aplicado inteiro, `updated_at = synced_at`).
@@ -89,6 +92,7 @@ fn row_to_task(r: &sqlx::sqlite::SqliteRow) -> Option<Task> {
         event_id: r.get::<Option<String>, _>("event_id"),
         synced_at: opt_dt(r, "synced_at"),
         remote_updated_at: opt_dt(r, "remote_updated_at"),
+        event_read_only: r.get::<i64, _>("event_read_only") != 0,
         tags: parse_tags(&r.get::<String, _>("tags")),
     })
 }
@@ -104,8 +108,8 @@ impl Storage {
         let marks = n.done_at.map(|_| fmt(ts));
         sqlx::query(
             "INSERT INTO tasks (id, title, description, start_at, end_at, done_at, skipped, priority, created_by, created_at, updated_at, \
-             notified_start_at, notified_overdue_at, calendar_id, event_id, synced_at, remote_updated_at, tags) \
-             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+             notified_start_at, notified_overdue_at, calendar_id, event_id, synced_at, remote_updated_at, event_read_only, tags) \
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
         )
         .bind(id.to_string())
         .bind(&n.title)
@@ -124,6 +128,7 @@ impl Storage {
         .bind(n.link.as_ref().map(|l| l.event_id.clone()))
         .bind(n.link.as_ref().map(|l| fmt(l.synced_at)))
         .bind(n.link.as_ref().map(|l| fmt(l.remote_updated_at)))
+        .bind(n.link.as_ref().is_some_and(|l| l.read_only))
         .bind(tags_json(&n.tags))
         .execute(&self.pool)
         .await?;
@@ -162,12 +167,13 @@ impl Storage {
     /// Grava (ou renova) o vínculo com o evento; não mexe em `updated_at`.
     pub async fn set_task_link(&self, id: TaskId, link: &TaskLink) -> Result<()> {
         sqlx::query(
-            "UPDATE tasks SET calendar_id = ?, event_id = ?, synced_at = ?, remote_updated_at = ? WHERE id = ?",
+            "UPDATE tasks SET calendar_id = ?, event_id = ?, synced_at = ?, remote_updated_at = ?, event_read_only = ? WHERE id = ?",
         )
         .bind(&link.calendar_id)
         .bind(&link.event_id)
         .bind(fmt(link.synced_at))
         .bind(fmt(link.remote_updated_at))
+        .bind(link.read_only)
         .bind(id.to_string())
         .execute(&self.pool)
         .await?;
@@ -184,7 +190,7 @@ impl Storage {
         let ts = fmt(r.link.synced_at);
         sqlx::query(
             "UPDATE tasks SET title = ?, description = ?, start_at = ?, end_at = ?, done_at = ?, skipped = ?, priority = ?, \
-             updated_at = ?, calendar_id = ?, event_id = ?, synced_at = ?, remote_updated_at = ?, \
+             updated_at = ?, calendar_id = ?, event_id = ?, synced_at = ?, remote_updated_at = ?, event_read_only = ?, \
              notified_start_at = CASE WHEN ? THEN NULL WHEN ? THEN COALESCE(notified_start_at, ?) ELSE notified_start_at END, \
              notified_overdue_at = CASE WHEN ? THEN NULL WHEN ? THEN COALESCE(notified_overdue_at, ?) ELSE notified_overdue_at END \
              WHERE id = ?",
@@ -201,6 +207,7 @@ impl Storage {
         .bind(&r.link.event_id)
         .bind(&ts)
         .bind(fmt(r.link.remote_updated_at))
+        .bind(r.link.read_only)
         .bind(period_changed && r.done_at.is_none())
         .bind(r.done_at.is_some())
         .bind(&ts)
