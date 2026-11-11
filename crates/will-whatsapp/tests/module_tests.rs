@@ -913,6 +913,59 @@ async fn name_resolution() {
 }
 
 #[tokio::test]
+async fn approval_summary_shows_name_and_phone_of_target() {
+    let h = connected_harness(settings()).await;
+    let ana = "5511911111111@s.whatsapp.net";
+    let lid = "123456789012345@lid";
+    let grp = "120363000000000000@g.us";
+    // contato por telefone, contato por LID (telefone vem no evento) e grupo
+    h.b()
+        .push(BackendEvent::Message(msg("m1", ana, ana, "oi", false, 5)))
+        .await;
+    let mut from_lid = msg("m2", lid, lid, "e aí", false, 4);
+    from_lid.sender_name = Some("Pedro".into());
+    from_lid.sender_phone = Some("5511988887777".into());
+    h.b().push(BackendEvent::Message(from_lid)).await;
+    h.b()
+        .push(BackendEvent::Message(msg("m3", grp, ana, "bora", false, 3)))
+        .await;
+    wait_indexed(&h, 3).await;
+
+    let tool = h
+        .module
+        .tools()
+        .into_iter()
+        .find(|t| t.spec().name == "whatsapp_send_message")
+        .unwrap();
+    let s = tool.approval_summary(&json!({"chat_id": ana, "text": "ok"}));
+    assert!(
+        s.ends_with(&format!(
+            "para Contato 5511 (+55 (11) 91111-1111) · {ana}: ok"
+        )),
+        "{s}"
+    );
+    let s = tool.approval_summary(&json!({"chat_id": lid, "text": "ok"}));
+    assert!(
+        s.ends_with(&format!("para Pedro (+55 (11) 98888-7777) · {lid}: ok")),
+        "{s}"
+    );
+    let s = tool.approval_summary(&json!({"chat_id": grp, "text": "ok"}));
+    assert!(
+        s.ends_with(&format!("para grupo \"Família\" · {grp}: ok")),
+        "{s}"
+    );
+    // desconhecido: só o JID (e o telefone, se o próprio JID o carrega)
+    let s =
+        tool.approval_summary(&json!({"chat_id": "5521999990000@s.whatsapp.net", "text": "ok"}));
+    assert!(
+        s.contains("para +55 (21) 99999-0000 · 5521999990000@s.whatsapp.net: ok"),
+        "{s}"
+    );
+    let s = tool.approval_summary(&json!({"chat_id": "999@lid", "text": "ok"}));
+    assert!(s.contains("para 999@lid: ok"), "{s}");
+}
+
+#[tokio::test]
 async fn approval_summaries() {
     let h = harness_with(settings(), false).await;
     let tool = h
@@ -929,9 +982,9 @@ async fn approval_summaries() {
     );
     assert!(s.chars().count() < 260);
     let s = tool.approval_summary(&json!({"phone": "5511", "text": "oi"}));
-    assert_eq!(s, "Enviar WhatsApp (conta Conta 1) para 5511: oi");
+    assert_eq!(s, "Enviar WhatsApp (conta Conta 1) para +5511: oi");
     let s = tool.approval_summary(&json!({"account": "acc1", "phone": "5511", "text": "oi"}));
-    assert_eq!(s, "Enviar WhatsApp (conta Conta 1) para 5511: oi");
+    assert_eq!(s, "Enviar WhatsApp (conta Conta 1) para +5511: oi");
     let tool = h
         .module
         .tools()
@@ -951,11 +1004,11 @@ async fn approval_summaries() {
         .unwrap();
     assert_eq!(
         tool.approval_summary(&json!({"phone": "5511", "text": "oi"})),
-        "Enviar WhatsApp para 5511: oi"
+        "Enviar WhatsApp para +5511: oi"
     );
     assert_eq!(
         tool.approval_summary(&json!({"account": "trabalho", "phone": "5511", "text": "oi"})),
-        "Enviar WhatsApp (conta Trabalho) para 5511: oi"
+        "Enviar WhatsApp (conta Trabalho) para +5511: oi"
     );
 }
 

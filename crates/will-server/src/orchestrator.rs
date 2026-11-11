@@ -396,6 +396,17 @@ impl ThreadHost for Host {
         title: Option<&str>,
         claude_session_id: Option<&str>,
     ) -> Result<ThreadSummary, String> {
+        // Thread nova "do app" (trigger/agendamento sem thread dona) nasce como
+        // tópico do fórum, igual à criada pela UI; a origem do Telegram/voz é
+        // reaproveitada como veio. As mensagens entregues nela continuam sem
+        // eco no tópico (espelho unidirecional): o tópico existe para o agente
+        // poder responder lá quando o prompt mandar.
+        let mirrored = if *origin == Origin::Ui {
+            self.mirror_create(title).await
+        } else {
+            None
+        };
+        let origin = mirrored.as_ref().unwrap_or(origin);
         let t = self
             .state
             .storage

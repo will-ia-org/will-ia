@@ -185,6 +185,24 @@ pub fn phone_digits(phone: &str) -> Option<String> {
     (digits.len() >= 8 && digits.len() <= 15).then_some(digits)
 }
 
+/// Telefone legível a partir dos dígitos: `+55 (11) 99999-9999` para números
+/// brasileiros (DDI 55 + DDD + 8/9 dígitos); os demais só ganham o `+`.
+pub fn format_phone(digits: &str) -> String {
+    let d: String = digits.chars().filter(|c| c.is_ascii_digit()).collect();
+    if let Some(rest) = d.strip_prefix("55") {
+        if rest.len() == 10 || rest.len() == 11 {
+            let (ddd, num) = rest.split_at(2);
+            let (a, b) = num.split_at(num.len() - 4);
+            return format!("+55 ({ddd}) {a}-{b}");
+        }
+    }
+    if d.is_empty() {
+        digits.to_string()
+    } else {
+        format!("+{d}")
+    }
+}
+
 pub fn jid_from_phone(digits: &str) -> String {
     format!("{digits}@{USER_SERVER}")
 }
@@ -294,6 +312,10 @@ mod tests {
         );
         assert_eq!(phone_digits("123"), None);
         assert_eq!(jid_from_phone("5511"), "5511@s.whatsapp.net");
+        assert_eq!(format_phone("5511999998888"), "+55 (11) 99999-8888");
+        assert_eq!(format_phone("551133334444"), "+55 (11) 3333-4444");
+        assert_eq!(format_phone("+1 415 555 0100"), "+14155550100");
+        assert_eq!(format_phone(""), "");
         assert_eq!(ext_for_mime("image/jpeg"), "jpg");
         assert_eq!(media_class(mime_for_path(Path::new("a.PDF"))), "document");
     }

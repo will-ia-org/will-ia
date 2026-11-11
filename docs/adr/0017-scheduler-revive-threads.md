@@ -40,4 +40,5 @@ Alternativas avaliadas:
 - (−) Quem precisa de disparo com o app fechado não é atendido: é uma decisão consciente (app de sessão). Mitigação: `warn` nos logs, `paused_reason` na lista, autostart do app.
 - (−) Thread recriada pode perder o contexto se a sessão também expirou; por isso a orientação de escrever `message` como instrução completa.
 - (−) Uma exceção documentada à regra "só canais criam threads"; qualquer outro módulo que precise criar threads deve passar por nova ADR.
+- (2026-11-11) Origem `ui` na recriação (e na thread nova de trigger, `docs/30`) passa pelo espelho app ↔ Telegram: nasce como tópico do fórum quando o espelho está pronto. A mensagem do disparo leva o bloco "Onde você está" (`will_core::thread::whereabouts`) com thread, canal e `chat_id`/`topic_id`, para o prompt poder mandar responder no tópico.
 - Em threads do Telegram, a recriação reaproveita o `<chat_id>:<topic_id>`; o módulo Telegram volta a encontrar a thread pela origem (`ensure_thread`). Se o tópico foi apagado no Telegram, o envio da resposta falha como em qualquer thread órfã.

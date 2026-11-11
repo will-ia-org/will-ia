@@ -13,7 +13,7 @@
 //! histórico, UI) é compartilhado.
 
 use crate::ids::{ThreadId, TriggerId};
-use crate::thread::Origin;
+use crate::thread::{Origin, ThreadSummary};
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 
@@ -289,14 +289,28 @@ impl TriggerFilter {
 /// Mensagem entregue à thread: cabeçalho (gerado pelo serviço, para o agente
 /// saber que é um disparo), o **prompt configurado** e o **contexto inteiro**
 /// do evento (todos os campos + corpo), para o agente localizar e agir.
-pub fn fired_message(t: &Trigger, ev: &TriggerEvent, fired_at_local: &str) -> String {
+/// `thread` = thread que recebe a mensagem; com ela entra o bloco
+/// [`whereabouts`](crate::thread::whereabouts) (canal, chat/tópico do
+/// Telegram) para o prompt poder mandar "responda neste tópico".
+pub fn fired_message(
+    t: &Trigger,
+    ev: &TriggerEvent,
+    fired_at_local: &str,
+    thread: Option<&ThreadSummary>,
+) -> String {
     let source = t.source.label();
     let mut out = format!(
-        "[Trigger \"{}\" ({source}) disparada em {fired_at_local}; id {}. Esta mensagem foi gerada por uma regra configurada previamente, não pelo usuário ao vivo: execute o que o prompt pede usando o contexto abaixo. Para ajustar a regra, use a página Triggers do app.]\n\n## Prompt da trigger\n{}\n\n## Contexto do evento\n",
-        t.name,
-        t.id,
-        t.prompt.trim()
+        "[Trigger \"{}\" ({source}) disparada em {fired_at_local}; id {}. Esta mensagem foi gerada por uma regra configurada previamente, não pelo usuário ao vivo: execute o que o prompt pede usando o contexto abaixo. Para ajustar a regra, use a página Triggers do app.]\n\n",
+        t.name, t.id
     );
+    if let Some(th) = thread {
+        out.push_str(&crate::thread::whereabouts(th));
+        out.push('\n');
+    }
+    out.push_str(&format!(
+        "## Prompt da trigger\n{}\n\n## Contexto do evento\n",
+        t.prompt.trim()
+    ));
     out.push_str(&format!("- fonte: {source}\n"));
     if !ev.account.is_empty() {
         out.push_str(&format!("- conta: {}\n", ev.account));
@@ -431,7 +445,30 @@ mod tests {
             paused_reason: None,
             cursor: None,
         };
-        let m = fired_message(&t, &ev(), "30/10 09:00");
+        let m = fired_message(&t, &ev(), "30/10 09:00", None);
+        assert!(!m.contains("## Onde você está"));
+        let th = ThreadSummary {
+            id: ThreadId::new(),
+            origin: Origin::Telegram {
+                chat_id: -100,
+                topic_id: Some(7),
+            },
+            title: Some("Amor".into()),
+            claude_session_id: None,
+            status: crate::thread::ThreadStatus::Idle,
+            created_at: Utc::now(),
+            last_activity_at: Utc::now(),
+            total_cost_usd: 0.0,
+            alive: false,
+            pending: 0,
+            session_expired: false,
+            summary: None,
+        };
+        let m = fired_message(&t, &ev(), "30/10 09:00", Some(&th));
+        let onde = m.find("## Onde você está").unwrap();
+        let prompt = m.find("## Prompt da trigger").unwrap();
+        assert!(onde < prompt, "bloco de localização vem antes do prompt");
+        assert!(m.contains("`topic_id=7`"));
         assert!(m.contains("Responda com educação."));
         assert!(m.contains("- from_name: Pedro"));
         assert!(m.contains("bom dia, manda o boleto"));

@@ -71,13 +71,13 @@ Um único laço no processo (`run_loop`), ligado quando `SchedulerSettings.enabl
 4. Emite `Event::ScheduleFired { schedule_id, thread_id, name, ok, detail }` e `Event::SchedulesChanged`; log `info`/`error` na família `scheduler`.
 5. **Notificação nativa** (`Event::Notification`, título "Agendamento") se `notify_on_fire` e a origem da thread **não** é Telegram (no Telegram a resposta do agente já vai para o tópico). Também avisa quando a entrega falhou.
 
-Se a entrega falha (sem thread e sem conseguir recriar, motor indisponível), o disparo é registrado como `ok = false` com o motivo em `last_result`/`detail`; um cron segue para a próxima ocorrência, um único é dado como concluído. A resposta do agente ao disparo aparece na thread (UI) e, se a thread é do Telegram, no tópico, como qualquer turno.
+Se a entrega falha (sem thread e sem conseguir recriar, motor indisponível), o disparo é registrado como `ok = false` com o motivo em `last_result`/`detail`; um cron segue para a próxima ocorrência, um único é dado como concluído. A resposta do agente ao disparo aparece na thread (UI); no tópico do Telegram só chega o que o agente enviar por `telegram_send_*` (espelho unidirecional, `docs/08`). Para isso a mensagem do disparo leva o bloco **"Onde você está"** (`will_core::thread::whereabouts`, após o cabeçalho): thread, canal e `chat_id`/`topic_id` exatos do tópico.
 
 ### Thread dona apagada → recriação
 
 Se `get_thread` falha no disparo, o scheduler chama `ThreadHost::revive_thread(&origin, Some(&name), claude_session_id)`:
 
-- O `Host` **sempre cria** uma thread nova (diferente de `ensure_thread`, que reaproveita por origem) com a mesma `origin` (UI, o mesmo `<chat_id>:<topic_id>` do Telegram, ou voz), título = nome do agendamento, e grava o `claude_session_id` salvo; emite `ThreadCreated`.
+- O `Host` **sempre cria** uma thread nova (diferente de `ensure_thread`, que reaproveita por origem) com a mesma `origin` (o mesmo `<chat_id>:<topic_id>` do Telegram, ou voz), título = nome do agendamento, e grava o `claude_session_id` salvo; emite `ThreadCreated`. Origem `ui` passa pelo espelho do Telegram (`mirror_create`): a thread recriada nasce como tópico do fórum quando o espelho está pronto, senão fica só no app.
 - A mensagem é enviada à thread nova; o motor tenta `--resume <session_id>`. Se a sessão também **expirou** (`No conversation found with session ID`, ver `docs/05`), o fluxo normal de sessão expirada esquece a sessão, respawna do zero e reenvia a mensagem: o agente perde o contexto antigo, mas **a mensagem é entregue** (por isso a orientação de escrever `message` como instrução completa).
 - `schedules.thread_id` passa a apontar para a thread nova (`COALESCE` em `record_schedule_run`). Para threads do Telegram, o módulo Telegram volta a encontrar a thread pela origem (`ensure_thread` procura por `origin`/`origin_ref`), então a conversa do tópico continua nela.
 

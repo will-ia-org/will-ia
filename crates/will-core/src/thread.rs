@@ -134,6 +134,51 @@ pub struct ThreadSummary {
     pub summary: Option<String>,
 }
 
+/// Bloco "Onde você está" injetado pelo serviço nas mensagens que ele mesmo
+/// gera (trigger, agendamento): diz ao agente em que thread/canal ele está e,
+/// no Telegram, o `chat_id`/`topic_id` exatos para responder no mesmo tópico.
+/// A env `WILL_IA_ORIGIN` só carrega o tipo do canal e fica congelada no
+/// spawn do processo; aqui vai o dado fresco a cada disparo.
+pub fn whereabouts(t: &ThreadSummary) -> String {
+    let mut out = String::from("## Onde você está\n");
+    out.push_str(&format!("- thread: {}", t.id));
+    if let Some(title) = t.title.as_deref().filter(|s| !s.trim().is_empty()) {
+        out.push_str(&format!(" (\"{}\")", title.trim()));
+    }
+    out.push('\n');
+    match &t.origin {
+        Origin::Telegram {
+            chat_id,
+            topic_id: Some(topic),
+        } => {
+            out.push_str(&format!(
+                "- canal: Telegram, tópico {topic} do fórum (chat_id {chat_id})\n\
+                 - para responder NESTE tópico: `telegram_send_message` / `telegram_send_file` / `telegram_send_voice` com `chat_id=\"{chat_id}\"` e `topic_id={topic}` (sem esses argumentos o destino já é este tópico)\n\
+                 - esta mensagem veio do serviço, não do Telegram: a sua resposta final fica só no app; no tópico só chega o que você enviar por essas ferramentas\n"
+            ));
+        }
+        Origin::Telegram {
+            chat_id,
+            topic_id: None,
+        } => {
+            out.push_str(&format!(
+                "- canal: Telegram, chat {chat_id} (sem tópico)\n\
+                 - para responder neste chat: `telegram_send_message` com `chat_id=\"{chat_id}\"` (sem argumentos o destino já é este chat)\n"
+            ));
+        }
+        Origin::Ui => {
+            out.push_str(
+                "- canal: app will-ia (thread sem tópico no Telegram)\n\
+                 - `telegram_send_message` sem `chat_id`/`topic_id` vai para o destino padrão configurado, não para um tópico desta thread\n",
+            );
+        }
+        Origin::Realtime => {
+            out.push_str("- canal: voz (realtime)\n");
+        }
+    }
+    out
+}
+
 /// Títulos genéricos dados na criação, substituídos pelo assunto na primeira
 /// mensagem (ver `derive_title`).
 pub fn is_placeholder_title(title: Option<&str>) -> bool {
@@ -278,6 +323,55 @@ pub fn derive_title(prompt: &str) -> String {
 #[cfg(test)]
 mod title_tests {
     use super::*;
+
+    fn summary(origin: Origin, title: Option<&str>) -> ThreadSummary {
+        ThreadSummary {
+            id: ThreadId::new(),
+            origin,
+            title: title.map(String::from),
+            claude_session_id: None,
+            status: ThreadStatus::Idle,
+            created_at: chrono::Utc::now(),
+            last_activity_at: chrono::Utc::now(),
+            total_cost_usd: 0.0,
+            alive: false,
+            pending: 0,
+            session_expired: false,
+            summary: None,
+        }
+    }
+
+    #[test]
+    fn whereabouts_telegram_topic_has_exact_ids() {
+        let t = summary(
+            Origin::Telegram {
+                chat_id: -1004386240828,
+                topic_id: Some(3489),
+            },
+            Some("Whatsapp Resumo"),
+        );
+        let w = whereabouts(&t);
+        assert!(w.starts_with("## Onde você está\n"));
+        assert!(w.contains(&format!("- thread: {} (\"Whatsapp Resumo\")", t.id)));
+        assert!(w.contains("tópico 3489 do fórum (chat_id -1004386240828)"));
+        assert!(w.contains("`chat_id=\"-1004386240828\"` e `topic_id=3489`"));
+    }
+
+    #[test]
+    fn whereabouts_ui_and_dm() {
+        let w = whereabouts(&summary(Origin::Ui, None));
+        assert!(w.contains("app will-ia"));
+        assert!(!w.contains("topic_id="));
+        let w = whereabouts(&summary(
+            Origin::Telegram {
+                chat_id: 734398524,
+                topic_id: None,
+            },
+            Some("  "),
+        ));
+        assert!(w.contains("chat 734398524 (sem tópico)"));
+        assert!(!w.contains("(\""));
+    }
 
     #[test]
     fn placeholder_titles() {

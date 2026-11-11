@@ -321,8 +321,7 @@ impl SchedulerModule {
             .map(|n| (now - n).num_seconds().max(0))
             .unwrap_or(0);
         tracing::info!(late_secs, run_count = s.run_count, "agendamento disparado");
-        let text = will_core::schedule::fired_message(&s, &zone.format(now));
-        let outcome = self.deliver(&s, &text).await;
+        let outcome = self.deliver(&s, &zone.format(now)).await;
         let next = match &s.trigger {
             ScheduleTrigger::Cron { .. } => self.compute_next(&s, now).ok().flatten(),
             ScheduleTrigger::Once { .. } => None,
@@ -394,11 +393,17 @@ impl SchedulerModule {
         }
     }
 
-    /// Entrega e devolve `(thread, turno)` para correlacionar o disparo ao turno.
-    async fn deliver(&self, s: &Schedule, text: &str) -> Result<(ThreadId, TurnId), String> {
+    /// Resolve a thread dona (recriando-a se sumiu), monta a mensagem com o
+    /// bloco "Onde você está" e entrega. Devolve `(thread, turno)` para
+    /// correlacionar o disparo ao turno.
+    async fn deliver(
+        &self,
+        s: &Schedule,
+        fired_at_local: &str,
+    ) -> Result<(ThreadId, TurnId), String> {
         let host = &self.deps.host;
         let thread = match host.get_thread(s.thread_id).await {
-            Ok(t) => t.id,
+            Ok(t) => t,
             Err(_) => {
                 tracing::warn!(
                     schedule_id = %s.id,
@@ -414,11 +419,13 @@ impl SchedulerModule {
                         tracing::error!(schedule_id = %s.id, error = %e, "não recriou a thread dona");
                         e
                     })?;
-                tracing::info!(schedule_id = %s.id, thread_id = %t.id, "thread dona recriada");
-                t.id
+                tracing::info!(schedule_id = %s.id, thread_id = %t.id, channel = t.origin.kind().as_str(), "thread dona recriada");
+                t
             }
         };
-        let turn_id = host.send_message(thread, text).await.map_err(|e| {
+        let text = will_core::schedule::fired_message(s, fired_at_local, Some(&thread));
+        let thread = thread.id;
+        let turn_id = host.send_message(thread, &text).await.map_err(|e| {
             tracing::error!(schedule_id = %s.id, thread_id = %thread, error = %e, "mensagem do agendamento não entregue");
             e
         })?;
@@ -675,9 +682,9 @@ impl SchedulerModule {
         async {
             let now = Utc::now();
             let zone = self.zone_for(s.timezone.as_deref())?;
-            let text =
-                will_core::schedule::fired_message(&s, &format!("{} (manual)", zone.format(now)));
-            let (thread, turn_id) = self.deliver(&s, &text).await?;
+            let (thread, turn_id) = self
+                .deliver(&s, &format!("{} (manual)", zone.format(now)))
+                .await?;
             let next = if s.enabled { s.next_run_at } else { None };
             self.deps
                 .storage

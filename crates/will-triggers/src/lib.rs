@@ -424,8 +424,7 @@ impl TriggersModule {
             }
         }
         let now_local = Local::now().format("%d/%m/%Y %H:%M").to_string();
-        let text = fired_message(&t, &ev, &now_local);
-        let outcome = self.deliver(&t, &text).await;
+        let outcome = self.deliver(&t, &ev, &now_local).await;
         let (thread_id, ok, detail) = match &outcome {
             Ok(th) => (Some(*th), true, None),
             Err(e) => (None, false, Some(e.as_str())),
@@ -467,14 +466,21 @@ impl TriggersModule {
         }
     }
 
-    async fn deliver(&self, t: &Trigger, text: &str) -> Result<ThreadId, String> {
+    /// Resolve a thread (criando-a se preciso), monta a mensagem com o bloco
+    /// "Onde você está" da thread resolvida e entrega.
+    async fn deliver(
+        &self,
+        t: &Trigger,
+        ev: &TriggerEvent,
+        now_local: &str,
+    ) -> Result<ThreadId, String> {
         let host = &self.deps.host;
         let existing = match t.thread_id {
-            Some(id) => host.get_thread(id).await.ok().map(|x| x.id),
+            Some(id) => host.get_thread(id).await.ok(),
             None => None,
         };
         let thread = match existing {
-            Some(id) => id,
+            Some(th) => th,
             None => {
                 let title = t
                     .thread_title
@@ -489,18 +495,19 @@ impl TriggersModule {
                     .storage
                     .set_trigger_thread(t.id, created.id, created.claude_session_id.as_deref())
                     .await;
-                tracing::info!(trigger = %t.id, thread_id = %created.id, "triggers: thread criada para a trigger");
-                created.id
+                tracing::info!(trigger = %t.id, thread_id = %created.id, channel = created.origin.kind().as_str(), "triggers: thread criada para a trigger");
+                created
             }
         };
+        let text = fired_message(t, ev, now_local, Some(&thread));
         host.send_message_from(
-            thread,
-            text,
+            thread.id,
+            &text,
             &[],
             Some(&format!("trigger:{}", t.source.as_str())),
         )
         .await?;
-        Ok(thread)
+        Ok(thread.id)
     }
 
     // ----- operações (API/UI) -----

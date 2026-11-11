@@ -65,8 +65,8 @@ Laço a cada `triggers.gmail_poll_minutes`: agrupa as triggers habilitadas por (
 
 ## Disparo (`fire`)
 1. **Cooldown**: se `last_fired_at` está dentro de `cooldown_secs`, ignora (log `debug`).
-2. **Thread**: `thread_id` existente → usa; ausente/apagada → `ThreadHost::revive_thread(origin, título, claude_session_id)` cria (`Origin::Ui` quando nunca teve thread) e grava `thread_id`/sessão na trigger.
-3. **Entrega**: `send_message_from(thread, fired_message, [], "trigger:<fonte>")` — o motor sobe o processo se preciso. Não espera a resposta.
+2. **Thread**: `thread_id` existente → usa; ausente/apagada → `ThreadHost::revive_thread(origin, título, claude_session_id)` cria e grava `thread_id`/sessão na trigger. Com `Origin::Ui` (trigger que nunca teve thread) o host passa pelo **espelho do Telegram** (`mirror_create`, `docs/08`): a thread já nasce como tópico do fórum, igual à criada pela UI; se o espelho não está pronto, fica só no app.
+3. **Entrega**: `send_message_from(thread, fired_message, [], "trigger:<fonte>")` — o motor sobe o processo se preciso. Não espera a resposta. A mensagem leva, logo após o cabeçalho, o bloco **"Onde você está"** (`will_core::thread::whereabouts`): id/título da thread, canal e, no Telegram, `chat_id` + `topic_id` exatos com a instrução de usar `telegram_send_*` para responder no mesmo tópico — assim o prompt pode dizer "mande as propostas neste tópico". O disparo em si **não** ecoa no tópico (espelho unidirecional, `docs/08`): só chega lá o que o agente enviar pelas ferramentas.
 4. **Registro**: `trigger_runs` (últimos 50), `last_fired_at`/`last_result`/`fire_count`; eventos `TriggerFired` e `TriggersChanged`; notificação nativa se `notify_on_fire`.
 
 `Testar` (UI / `POST /api/triggers/{id}/test`) dispara com um evento de exemplo da fonte, ignorando filtro e cooldown.

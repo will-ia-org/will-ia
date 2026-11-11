@@ -75,7 +75,7 @@ Seleção de conta (`account`):
 - Exatamente **uma** conta conectada → ela é usada (com `account` informado, precisa bater).
 - Várias contas e `account` informado → resolve por **id exato**, depois **rótulo** (case-insensitive), depois **telefone** (só dígitos). Conta resolvida mas desconectada → erro "indisponível".
 - Várias contas e `account` ausente → `whatsapp_list_chats`, `whatsapp_search_messages` e `whatsapp_list_contacts` **agregam** todas as contas conectadas (cada item com `account` = id e `account_label`; a raiz traz `account: null` e `accounts: [...]`). As demais retornam erro de argumento inválido listando as contas (`id — rótulo — telefone`).
-- Toda saída inclui `account` (id) e `account_label` na raiz. O resumo de aprovação de envios inclui o rótulo: `Enviar WhatsApp (conta Trabalho) para …`.
+- Toda saída inclui `account` (id) e `account_label` na raiz. O resumo de aprovação de envios inclui o rótulo da conta e o **destino legível**: `Enviar WhatsApp (conta Trabalho) para Pedro (+55 (11) 98888-7777) · 1234…@lid: …` — nome e telefone vêm do cache `ChatLabel` do módulo (`WhatsAppModule::describe_target`), alimentado pela indexação (`chat_name`/`sender_phone`/`chat_phone`), pelo `sync_identities` (mapa LID → telefone + chats e telefones do índice) e, para `…@s.whatsapp.net`, pelo próprio JID; grupo vira `grupo "Nome" · jid`; sem nada conhecido fica só o JID. `phone` é apenas formatado (`format_phone`). O JID nunca sai do resumo, porque é o que o agente de fato mandou.
 
 Regras:
 - `phone` só é aceito se "permitir envio para números não salvos" estiver ligado; caso contrário, apenas chats/contatos existentes.

@@ -7,7 +7,7 @@
 //! o scheduler a recria com a mesma origem e sessão (`ThreadHost::revive_thread`).
 
 use crate::ids::{ScheduleId, ThreadId};
-use crate::thread::Origin;
+use crate::thread::{Origin, ThreadSummary};
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 
@@ -78,13 +78,19 @@ pub struct ScheduleRun {
 
 /// Cabeçalho que antecede a mensagem entregue ao agente. Gerado pelo serviço,
 /// nunca pelo agente, para que ele saiba que é um disparo e não o usuário ao vivo.
-pub fn fired_message(s: &Schedule, fired_at_local: &str) -> String {
+///
+/// `thread` = thread dona que recebe a mensagem; com ela entra o bloco
+/// [`whereabouts`](crate::thread::whereabouts) (canal, chat/tópico do Telegram).
+pub fn fired_message(s: &Schedule, fired_at_local: &str, thread: Option<&ThreadSummary>) -> String {
     let kind = match &s.trigger {
         ScheduleTrigger::Cron { expr } => format!("recorrente, cron `{expr}`"),
         ScheduleTrigger::Once { .. } => "único".to_string(),
     };
+    let onde = thread
+        .map(|t| format!("{}\n", crate::thread::whereabouts(t)))
+        .unwrap_or_default();
     format!(
-        "[Agendamento \"{}\" disparado em {} ({kind}; id {}). Esta mensagem foi programada anteriormente nesta conversa; execute o que ela pede. Para ajustar ou cancelar, use as ferramentas schedule_*.]\n\n{}",
+        "[Agendamento \"{}\" disparado em {} ({kind}; id {}). Esta mensagem foi programada anteriormente nesta conversa; execute o que ela pede. Para ajustar ou cancelar, use as ferramentas schedule_*.]\n\n{onde}{}",
         s.name, fired_at_local, s.id, s.message
     )
 }

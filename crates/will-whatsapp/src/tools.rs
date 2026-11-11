@@ -346,6 +346,33 @@ impl WaTool {
         )))
     }
 
+    /// Conta provável do envio (síncrono, melhor esforço): a informada em
+    /// `account` ou a única cadastrada.
+    fn account_id_hint(&self, args: &Value) -> Option<String> {
+        let m = self.module.upgrade()?;
+        if let Some(q) = arg_opt_str(args, "account") {
+            return m.resolve_account(q).map(|a| a.id.clone());
+        }
+        let accounts = m.accounts();
+        (accounts.len() == 1).then(|| accounts[0].id.clone())
+    }
+
+    /// Destino legível para o resumo de aprovação: `chat_id` vira
+    /// `Nome (+55 (11) 9…) · jid` pelo cache do módulo; `phone` só é formatado.
+    fn target_label(&self, args: &Value) -> String {
+        if let Some(jid) = arg_opt_str(args, "chat_id").filter(|s| !s.trim().is_empty()) {
+            let jid = jid.trim();
+            return match self.module.upgrade() {
+                Some(m) => m.describe_target(self.account_id_hint(args).as_deref(), jid),
+                None => jid.to_string(),
+            };
+        }
+        match arg_opt_str(args, "phone").filter(|s| !s.trim().is_empty()) {
+            Some(p) => crate::backend::format_phone(p),
+            None => "?".to_string(),
+        }
+    }
+
     /// Rótulo da conta para o resumo de aprovação (síncrono, melhor esforço).
     fn account_label(&self, args: &Value) -> Option<String> {
         let m = self.module.upgrade()?;
@@ -376,9 +403,7 @@ impl WillTool for WaTool {
             .unwrap_or_default();
         match self.kind {
             ToolKind::SendMessage => {
-                let target = arg_opt_str(args, "chat_id")
-                    .or_else(|| arg_opt_str(args, "phone"))
-                    .unwrap_or("?");
+                let target = self.target_label(args);
                 let text = arg_opt_str(args, "text").unwrap_or("");
                 format!(
                     "Enviar WhatsApp{via} para {target}: {}",
@@ -386,7 +411,7 @@ impl WillTool for WaTool {
                 )
             }
             ToolKind::SendMedia => {
-                let target = arg_opt_str(args, "chat_id").unwrap_or("?");
+                let target = self.target_label(args);
                 let path = arg_opt_str(args, "path").unwrap_or("?");
                 let caption = arg_opt_str(args, "caption")
                     .map(|c| format!(" — {}", truncate(c, 100)))
@@ -417,15 +442,11 @@ impl WillTool for WaTool {
             ToolKind::SendContact => format!(
                 "Enviar contato \"{}\" por WhatsApp{via} para {}",
                 arg_opt_str(args, "name").unwrap_or("(vCard)"),
-                arg_opt_str(args, "chat_id")
-                    .or_else(|| arg_opt_str(args, "phone"))
-                    .unwrap_or("?")
+                self.target_label(args)
             ),
             ToolKind::SendVoice => format!(
                 "Enviar mensagem de voz por WhatsApp{via} para {}: {}",
-                arg_opt_str(args, "chat_id")
-                    .or_else(|| arg_opt_str(args, "phone"))
-                    .unwrap_or("?"),
+                self.target_label(args),
                 arg_opt_str(args, "text")
                     .map(|t| truncate(t, 160))
                     .or_else(|| arg_opt_str(args, "path").map(str::to_string))

@@ -22,7 +22,8 @@ pub mod tools;
 pub use backend::{BackendEvent, IncomingMessage, MessageRef, WhatsAppBackend};
 pub use mock::{MockAction, MockBackend, MockSent};
 pub use module::{
-    is_default_label, BackendFactory, ConnState, Tts, WaAccount, WhatsAppDeps, WhatsAppModule,
+    is_default_label, BackendFactory, ChatLabel, ConnState, Tts, WaAccount, WhatsAppDeps,
+    WhatsAppModule,
 };
 #[cfg(feature = "real")]
 pub use real::RealBackend;

@@ -6,13 +6,13 @@
 //! consome um único `mpsc` com `(account_id, BackendEvent)`.
 
 use crate::backend::{
-    is_group_jid, phone_from_jid, BackendEvent, IncomingMessage, WhatsAppBackend,
+    format_phone, is_group_jid, phone_from_jid, BackendEvent, IncomingMessage, WhatsAppBackend,
 };
 use crate::qr_svg;
 use chrono::{DateTime, Utc};
 use parking_lot::{Mutex, RwLock};
 use serde_json::{json, Value};
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashMap};
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use std::sync::{Arc, Weak};
@@ -230,6 +230,40 @@ impl WaAccount {
     }
 }
 
+/// O que se sabe de um chat/contato para mostrar a um humano (resumo de
+/// aprovação, listas): nome da agenda/push name, telefone e se é grupo. Cache
+/// em memória alimentado pela indexação e pelo `sync_identities`, porque o
+/// resumo de aprovação é síncrono e o índice é SQLite assíncrono.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct ChatLabel {
+    pub name: Option<String>,
+    pub phone: Option<String>,
+    pub is_group: bool,
+}
+
+impl ChatLabel {
+    /// Destino legível: `Nome (+55 (11) 99999-9999) · jid`, `grupo "Nome" · jid`,
+    /// `+55 … · jid` ou só o `jid`. O JID fica sempre (é o que o agente mandou).
+    pub fn render(label: Option<&ChatLabel>, jid: &str) -> String {
+        let l = label.cloned().unwrap_or_default();
+        let phone = l
+            .phone
+            .clone()
+            .or_else(|| phone_from_jid(jid))
+            .map(|p| format_phone(&p));
+        let name = l.name.as_deref().map(str::trim).filter(|n| !n.is_empty());
+        let is_group = l.is_group || is_group_jid(jid);
+        match (is_group, name, phone) {
+            (true, Some(n), _) => format!("grupo \"{n}\" · {jid}"),
+            (true, None, _) => format!("grupo {jid}"),
+            (false, Some(n), Some(p)) => format!("{n} ({p}) · {jid}"),
+            (false, Some(n), None) => format!("{n} · {jid}"),
+            (false, None, Some(p)) => format!("{p} · {jid}"),
+            (false, None, None) => jid.to_string(),
+        }
+    }
+}
+
 pub struct WhatsAppModule {
     pub(crate) deps: WhatsAppDeps,
     pub(crate) settings: RwLock<WhatsAppSettings>,
@@ -237,6 +271,8 @@ pub struct WhatsAppModule {
     tx: mpsc::Sender<(String, BackendEvent)>,
     events: tokio::sync::Mutex<Option<mpsc::Receiver<(String, BackendEvent)>>>,
     accounts: RwLock<BTreeMap<String, Arc<WaAccount>>>,
+    /// `(account_id, jid)` → rótulo conhecido (ver [`ChatLabel`]).
+    labels: RwLock<HashMap<(String, String), ChatLabel>>,
     started: AtomicBool,
     token: Mutex<Option<CancellationToken>>,
     pub(crate) weak: Weak<WhatsAppModule>,
@@ -257,6 +293,7 @@ impl WhatsAppModule {
             tx,
             events: tokio::sync::Mutex::new(Some(rx)),
             accounts: RwLock::new(BTreeMap::new()),
+            labels: RwLock::new(HashMap::new()),
             started: AtomicBool::new(false),
             token: Mutex::new(None),
             weak: weak.clone(),
@@ -387,6 +424,79 @@ impl WhatsAppModule {
     }
 
     // ----- contas -----
+
+    /// Guarda/mescla o que se sabe de um chat ou contato (nunca apaga um dado
+    /// já conhecido com `None`).
+    pub(crate) fn remember_label(
+        &self,
+        account_id: &str,
+        jid: &str,
+        name: Option<&str>,
+        phone: Option<&str>,
+        is_group: bool,
+    ) {
+        if jid.is_empty() {
+            return;
+        }
+        let mut map = self.labels.write();
+        let e = map
+            .entry((account_id.to_string(), jid.to_string()))
+            .or_default();
+        if let Some(n) = name.map(str::trim).filter(|n| !n.is_empty()) {
+            e.name = Some(n.to_string());
+        }
+        if let Some(p) = phone.map(str::trim).filter(|p| !p.is_empty()) {
+            e.phone = Some(p.to_string());
+        }
+        e.is_group |= is_group;
+    }
+
+    /// Rótulo conhecido de um chat/contato; sem `account_id` procura em todas
+    /// as contas (primeira que conhece o JID).
+    pub fn chat_label(&self, account_id: Option<&str>, jid: &str) -> Option<ChatLabel> {
+        let map = self.labels.read();
+        match account_id {
+            Some(a) => map.get(&(a.to_string(), jid.to_string())).cloned(),
+            None => map
+                .iter()
+                .find(|((_, j), _)| j == jid)
+                .map(|(_, l)| l.clone()),
+        }
+    }
+
+    /// Destino legível para resumos de aprovação (ver [`ChatLabel::render`]).
+    pub fn describe_target(&self, account_id: Option<&str>, jid: &str) -> String {
+        ChatLabel::render(self.chat_label(account_id, jid).as_ref(), jid)
+    }
+
+    /// Pré-carrega o cache de rótulos a partir do índice (chats recentes +
+    /// telefones dos contatos), para o resumo de aprovação conhecer o destino
+    /// mesmo antes de chegar mensagem nova nesta sessão.
+    async fn preload_labels(&self, acc: &WaAccount) {
+        let st = &self.deps.storage;
+        let chats = match st.wa_list_chats(&acc.id, "all", 2000).await {
+            Ok(c) => c,
+            Err(e) => {
+                tracing::debug!(account_id = %acc.id, error = %e, "preload de rótulos: chats");
+                return;
+            }
+        };
+        let jids: Vec<String> = chats.iter().map(|c| c.jid.clone()).collect();
+        let phones = st
+            .wa_contact_phones(&acc.id, &jids)
+            .await
+            .unwrap_or_default();
+        for c in &chats {
+            self.remember_label(
+                &acc.id,
+                &c.jid,
+                c.name.as_deref(),
+                phones.get(&c.jid).map(String::as_str),
+                c.is_group,
+            );
+        }
+        tracing::debug!(account_id = %acc.id, chats = chats.len(), phones = phones.len(), "rótulos de chats pré-carregados");
+    }
 
     pub fn accounts(&self) -> Vec<Arc<WaAccount>> {
         self.accounts.read().values().cloned().collect()
@@ -876,6 +986,7 @@ impl WhatsAppModule {
             if st.wa_upsert_contact(&c).await.is_ok() {
                 n += 1;
             }
+            self.remember_label(&acc.id, &c.jid, None, Some(phone), false);
         }
         match st.wa_relink_names(&acc.id).await {
             Ok((chats, contacts)) => {
@@ -885,6 +996,7 @@ impl WhatsAppModule {
             }
             Err(e) => tracing::warn!(account_id = %acc.id, error = %e, "wa_relink_names falhou"),
         }
+        self.preload_labels(acc).await;
     }
 
     /// A cada 15 min religa identidades LID ↔ telefone ↔ nome (mapa novo da
@@ -1204,6 +1316,34 @@ impl WhatsAppModule {
         {
             tracing::warn!(account_id = %acc.id, chat_id = %m.chat_jid, error = %e, "wa_upsert_chat falhou");
             return;
+        }
+        let sender_phone = m
+            .sender_phone
+            .clone()
+            .or_else(|| phone_from_jid(&m.sender_jid));
+        let chat_phone = if m.is_group {
+            None
+        } else {
+            m.chat_phone
+                .clone()
+                .or_else(|| phone_from_jid(&m.chat_jid))
+                .or_else(|| (!m.from_me).then(|| sender_phone.clone()).flatten())
+        };
+        self.remember_label(
+            &acc.id,
+            &m.chat_jid,
+            chat_name.as_deref(),
+            chat_phone.as_deref(),
+            m.is_group,
+        );
+        if !m.from_me && !m.sender_jid.is_empty() {
+            self.remember_label(
+                &acc.id,
+                &m.sender_jid,
+                m.sender_name.as_deref(),
+                sender_phone.as_deref(),
+                false,
+            );
         }
         if !m.from_me && !m.sender_jid.is_empty() {
             let c = WaContact {

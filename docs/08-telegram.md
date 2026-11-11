@@ -115,6 +115,7 @@ O sentido Telegram → app sempre existiu (tópico novo vira thread na primeira 
 | Título derivado da 1ª mensagem | `editForumTopic` **só se** o tópico ainda se chama `"Nova thread"` (não sobrescreve o nome que o usuário deu no `/topico`). |
 | Renomear (`PATCH /api/threads/{id}`) | `editForumTopic` sempre (`Host::rename_thread`). |
 | Apagar (`DELETE /api/threads/{id}`, `/apagar`) | `deleteForumTopic` antes de apagar no banco (`Host::delete_thread` → `mirror_delete`). |
+| Thread criada por **trigger** ou **agendamento** sem thread dona (`Host::revive_thread` com origem `ui`, `docs/30`/`docs/24`) | Mesmo `createForumTopic`: nasce com origem `telegram { fórum, tópico }`. O disparo entregue nela **não** ecoa no tópico (abaixo); a mensagem leva o bloco "Onde você está" com `chat_id`/`topic_id` para o agente responder lá se o prompt mandar. |
 | **Sincronizar threads** (`POST /api/telegram/sync-threads`) | Para cada thread de origem `ui` não arquivada: cria o tópico e troca a origem (`set_thread_origin`), emitindo `ThreadUpdated` para o módulo se vincular. Devolve `{created, failed, skipped, errors}`. |
 
 Condições (`ForumState`, validada no `start` do módulo e exposta em `GET /api/telegram/status` → `mirror`): `telegram.enabled` + `mirror_threads` + `forum_chat_id` em `allowed_chats` + `getChat.is_forum` + bot `Owner` ou `Administrator{can_manage_topics}`. Qualquer falha → a thread fica só no app (`origin = ui`), com aviso no log; a criação da thread nunca é bloqueada pelo Telegram. Threads de voz (`realtime`) não são espelhadas.
