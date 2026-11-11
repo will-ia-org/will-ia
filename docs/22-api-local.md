@@ -134,8 +134,8 @@ Códigos: **401** `token de sessão ausente` / `token de sessão inválido` (tam
 ### Tarefas (`docs/31`)
 | Método | Rota | Descrição |
 |---|---|---|
-| GET | `/api/tasks?filter=pending\|running\|overdue\|upcoming\|done\|all` | `{tasks: TaskView[], enabled, timezone, offset_minutes, now}` |
-| POST | `/api/tasks` | `TaskInput` (`title`, `start_at` obrig.; `description`, `end_at`, `priority`) |
+| GET | `/api/tasks?filter=pending\|running\|overdue\|upcoming\|done\|all&tags=a,b` | `{tasks: TaskView[], tags: [todas em uso], filter_tags, enabled, timezone, offset_minutes, now}`; `tags` filtra por qualquer uma |
+| POST | `/api/tasks` | `TaskInput` (`title`, `start_at` obrig.; `description`, `end_at`, `priority`, `tags[]` normalizadas) |
 | GET / PUT / DELETE | `/api/tasks/{id}` | detalhar / alterar (só campos enviados; `end_at: ""` limpa) / remover |
 | POST | `/api/tasks/{id}/complete` · `/api/tasks/{id}/skip` · `/api/tasks/{id}/reopen` | concluir / fechar como não realizada / reabrir |
 | POST | `/api/tasks/sync-calendar` | `{from, to (YYYY-MM-DD), calendar_id}` opcionais → `SyncReport` (Tarefas ↔ Google Calendar, `docs/31`) |

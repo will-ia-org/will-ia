@@ -93,8 +93,24 @@ fn fields() -> Value {
         "start_at": {"type": "string", "description": "Início com hora, obrigatório: YYYY-MM-DDTHH:MM no fuso configurado (ex.: 2026-11-10T14:00) ou ISO-8601 com fuso. Só a data não vale."},
         "end_at": {"type": "string", "description": "Fim (opcional), mesmo formato. Depois dele, sem conclusão, a tarefa fica atrasada. Sem fim, fica em andamento até ser concluída. Na edição, \"\" limpa."},
         "priority": {"type": "string", "enum": ["high", "medium", "low"], "description": "Prioridade: high (alta), medium (média, padrão), low (baixa)."},
+        "tags": {"type": "array", "items": {"type": "string"}, "description": "Etiquetas livres (ex.: [\"devmania\", \"holding\"]). Normalizadas ao salvar: minúsculas, sem acento, espaço vira traço. Na edição, substitui a lista inteira ([] limpa). Prefira reaproveitar tags já existentes (veja `tags` em tasks_list)."},
         "id": {"type": "string", "description": "Id da tarefa (completo ou prefixo único)."}
     })
+}
+
+/// `tags` como array de strings ou string separada por vírgula; `None` = ausente.
+fn tags_arg(args: &Value) -> Option<Vec<String>> {
+    match args.get("tags")? {
+        Value::Array(a) => Some(
+            a.iter()
+                .filter_map(|v| v.as_str())
+                .map(str::to_string)
+                .collect(),
+        ),
+        Value::String(s) => Some(s.split(',').map(str::to_string).collect()),
+        Value::Null => None,
+        _ => None,
+    }
 }
 
 fn subset(keys: &[&str]) -> Value {
@@ -113,20 +129,23 @@ impl WillTool for TaskTool {
     fn spec(&self) -> ToolSpec {
         let (description, input_schema) = match self.kind {
             Kind::Create => (
-                "Cria uma tarefa no painel de tarefas (Gantt) do usuário: título, descrição, início com hora (obrigatório), fim (opcional) e prioridade. O estado é automático: futura → em andamento (azul) → atrasada (vermelha, se passou do fim) → concluída (verde).",
-                schema(subset(&["title", "description", "start_at", "end_at", "priority"]), &["title", "start_at"]),
+                "Cria uma tarefa no painel de tarefas (Gantt) do usuário: título, descrição, início com hora (obrigatório), fim (opcional), prioridade e tags. O estado é automático: futura → em andamento (azul) → atrasada (vermelha, se passou do fim) → concluída (verde).",
+                schema(subset(&["title", "description", "start_at", "end_at", "priority", "tags"]), &["title", "start_at"]),
             ),
             Kind::List => (
-                "Lista tarefas com estado e horários no fuso configurado. `filter`: pending (padrão: tudo que não foi fechado), running (em andamento), overdue (atrasadas), upcoming (futuras), done (concluídas), skipped (não realizadas) ou all.",
-                schema(json!({"filter": {"type": "string", "enum": ["pending", "running", "overdue", "upcoming", "done", "skipped", "all"]}}), &[]),
+                "Lista tarefas com estado e horários no fuso configurado. `filter`: pending (padrão: tudo que não foi fechado), running (em andamento), overdue (atrasadas), upcoming (futuras), done (concluídas), skipped (não realizadas) ou all. `tags`: só tarefas com QUALQUER uma das tags dadas. A resposta traz `tags` = todas as tags em uso.",
+                schema(json!({
+                    "filter": {"type": "string", "enum": ["pending", "running", "overdue", "upcoming", "done", "skipped", "all"]},
+                    "tags": {"type": "array", "items": {"type": "string"}, "description": "Filtra por tag (qualquer uma das dadas)."}
+                }), &[]),
             ),
             Kind::Get => (
                 "Detalha uma tarefa pelo id (completo ou prefixo).",
                 schema(subset(&["id"]), &["id"]),
             ),
             Kind::Update => (
-                "Altera campos de uma tarefa: title, description, start_at, end_at (\"\" limpa), priority. Só os campos enviados mudam.",
-                schema(subset(&["id", "title", "description", "start_at", "end_at", "priority"]), &["id"]),
+                "Altera campos de uma tarefa: title, description, start_at, end_at (\"\" limpa), priority, tags (substitui a lista; [] limpa). Só os campos enviados mudam.",
+                schema(subset(&["id", "title", "description", "start_at", "end_at", "priority", "tags"]), &["id"]),
             ),
             Kind::Delete => (
                 "Remove uma tarefa definitivamente (para encerrar sem apagar, use tasks_complete).",
@@ -190,6 +209,7 @@ impl WillTool for TaskTool {
                 .and_then(|v| v.as_str())
                 .map(str::to_string),
             priority: arg_opt_str(&args, "priority").map(str::to_string),
+            tags: tags_arg(&args),
         };
         match self.kind {
             Kind::Create => {
@@ -201,10 +221,17 @@ impl WillTool for TaskTool {
             }
             Kind::List => {
                 let filter = arg_opt_str(&args, "filter").unwrap_or("pending");
-                let list = m.list(filter).await.map_err(ToolError::InvalidArgs)?;
+                let mut list = m.list(filter).await.map_err(ToolError::InvalidArgs)?;
+                let want = will_core::task::normalize_tags(tags_arg(&args).unwrap_or_default());
+                if !want.is_empty() {
+                    list.retain(|v| v.task.tags.iter().any(|t| want.contains(t)));
+                }
+                let all_tags = m.tags().await.map_err(ToolError::Failed)?;
                 Ok(ToolOutput::json(&json!({
                     "count": list.len(),
                     "filter": filter,
+                    "filter_tags": want,
+                    "tags": all_tags,
                     "timezone": m.zone().name(),
                     "tasks": list,
                 })))

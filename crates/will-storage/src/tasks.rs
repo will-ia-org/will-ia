@@ -17,6 +17,8 @@ pub struct NewTask {
     pub done_at: Option<DateTime<Utc>>,
     pub skipped: bool,
     pub link: Option<TaskLink>,
+    /// Já normalizadas (`will_core::task::normalize_tags`).
+    pub tags: Vec<String>,
 }
 
 /// Vínculo com um evento do Google Calendar.
@@ -51,6 +53,16 @@ pub struct TaskPatch {
     pub start_at: Option<DateTime<Utc>>,
     pub end_at: Option<Option<DateTime<Utc>>>,
     pub priority: Option<TaskPriority>,
+    /// Substitui a lista inteira (já normalizada).
+    pub tags: Option<Vec<String>>,
+}
+
+fn tags_json(tags: &[String]) -> String {
+    serde_json::to_string(tags).unwrap_or_else(|_| "[]".into())
+}
+
+fn parse_tags(s: &str) -> Vec<String> {
+    serde_json::from_str::<Vec<String>>(s).unwrap_or_default()
 }
 
 fn opt_dt(r: &sqlx::sqlite::SqliteRow, col: &str) -> Option<DateTime<Utc>> {
@@ -77,6 +89,7 @@ fn row_to_task(r: &sqlx::sqlite::SqliteRow) -> Option<Task> {
         event_id: r.get::<Option<String>, _>("event_id"),
         synced_at: opt_dt(r, "synced_at"),
         remote_updated_at: opt_dt(r, "remote_updated_at"),
+        tags: parse_tags(&r.get::<String, _>("tags")),
     })
 }
 
@@ -91,8 +104,8 @@ impl Storage {
         let marks = n.done_at.map(|_| fmt(ts));
         sqlx::query(
             "INSERT INTO tasks (id, title, description, start_at, end_at, done_at, skipped, priority, created_by, created_at, updated_at, \
-             notified_start_at, notified_overdue_at, calendar_id, event_id, synced_at, remote_updated_at) \
-             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+             notified_start_at, notified_overdue_at, calendar_id, event_id, synced_at, remote_updated_at, tags) \
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
         )
         .bind(id.to_string())
         .bind(&n.title)
@@ -111,9 +124,25 @@ impl Storage {
         .bind(n.link.as_ref().map(|l| l.event_id.clone()))
         .bind(n.link.as_ref().map(|l| fmt(l.synced_at)))
         .bind(n.link.as_ref().map(|l| fmt(l.remote_updated_at)))
+        .bind(tags_json(&n.tags))
         .execute(&self.pool)
         .await?;
         self.get_task(id).await
+    }
+
+    /// Todas as tags em uso (inclusive de tarefas fechadas), sem repetição,
+    /// em ordem alfabética — para o filtro do painel.
+    pub async fn list_task_tags(&self) -> Result<Vec<String>> {
+        let rows = sqlx::query("SELECT tags FROM tasks WHERE tags != '[]'")
+            .fetch_all(&self.pool)
+            .await?;
+        let mut set = std::collections::BTreeSet::new();
+        for r in rows {
+            for t in parse_tags(&r.get::<String, _>("tags")) {
+                set.insert(t);
+            }
+        }
+        Ok(set.into_iter().collect())
     }
 
     /// Tarefa vinculada a um evento da agenda.
@@ -274,10 +303,11 @@ impl Storage {
             None => cur.end_at,
         };
         let priority = p.priority.unwrap_or(cur.priority);
+        let tags = p.tags.clone().unwrap_or(cur.tags);
         // mudou o período → as marcas de aviso voltam a valer
         let reset_marks = p.start_at.is_some() || p.end_at.is_some();
         sqlx::query(
-            "UPDATE tasks SET title = ?, description = ?, start_at = ?, end_at = ?, priority = ?, updated_at = ?, \
+            "UPDATE tasks SET title = ?, description = ?, start_at = ?, end_at = ?, priority = ?, tags = ?, updated_at = ?, \
              notified_start_at = CASE WHEN ? THEN NULL ELSE notified_start_at END, \
              notified_overdue_at = CASE WHEN ? THEN NULL ELSE notified_overdue_at END \
              WHERE id = ?",
@@ -287,6 +317,7 @@ impl Storage {
         .bind(fmt(start_at))
         .bind(end_at.map(fmt))
         .bind(i64::from(priority.rank()))
+        .bind(tags_json(&tags))
         .bind(fmt(now()))
         .bind(reset_marks)
         .bind(reset_marks)

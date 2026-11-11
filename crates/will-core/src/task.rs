@@ -128,6 +128,83 @@ pub struct Task {
     pub synced_at: Option<DateTime<Utc>>,
     #[serde(default)]
     pub remote_updated_at: Option<DateTime<Utc>>,
+    /// Etiquetas livres, sempre normalizadas ([`normalize_tag`]): minúsculas,
+    /// sem acento, espaço vira `-`. Sem duplicatas, na ordem em que entraram.
+    #[serde(default)]
+    pub tags: Vec<String>,
+}
+
+/// Tamanho máximo de uma tag depois de normalizada.
+pub const TAG_MAX: usize = 40;
+
+/// Normaliza uma tag digitada: minúsculas, acentos removidos (`ç`→`c`,
+/// `ã`→`a`…), espaços e separadores viram `-` (sem repetir, sem sobrar nas
+/// pontas), só `[a-z0-9._-]` sobrevive, até [`TAG_MAX`] caracteres. `None` se
+/// não sobrar nada.
+pub fn normalize_tag(raw: &str) -> Option<String> {
+    let mut out = String::with_capacity(raw.len());
+    let mut pending_dash = false;
+    for c in raw.trim().chars() {
+        let c = strip_accent(c).to_ascii_lowercase();
+        let keep = match c {
+            'a'..='z' | '0'..='9' | '.' | '_' => Some(c),
+            // qualquer separador vira um traço só
+            ' ' | '-' | '/' | '\\' | ',' | ';' | ':' | '|' | '\t' | '\n' | '+' | '&' => None,
+            // o resto (acento sem mapa, emoji, pontuação) some
+            _ if c.is_alphanumeric() && c.is_ascii() => Some(c),
+            _ => continue,
+        };
+        match keep {
+            Some(ch) => {
+                if pending_dash && !out.is_empty() {
+                    out.push('-');
+                }
+                pending_dash = false;
+                out.push(ch);
+            }
+            None => pending_dash = true,
+        }
+    }
+    let out: String = out
+        .trim_matches(|c| c == '-' || c == '.' || c == '_')
+        .chars()
+        .take(TAG_MAX)
+        .collect();
+    let out = out.trim_end_matches('-').to_string();
+    (!out.is_empty()).then_some(out)
+}
+
+/// Normaliza uma lista: aplica [`normalize_tag`], descarta vazias e repetidas
+/// (mantendo a primeira ocorrência).
+pub fn normalize_tags<I, S>(raw: I) -> Vec<String>
+where
+    I: IntoIterator<Item = S>,
+    S: AsRef<str>,
+{
+    let mut out: Vec<String> = Vec::new();
+    for r in raw {
+        if let Some(t) = normalize_tag(r.as_ref()) {
+            if !out.contains(&t) {
+                out.push(t);
+            }
+        }
+    }
+    out
+}
+
+/// Letras acentuadas do português (e vizinhas) → base ASCII.
+fn strip_accent(c: char) -> char {
+    match c {
+        'á' | 'à' | 'â' | 'ã' | 'ä' | 'å' | 'Á' | 'À' | 'Â' | 'Ã' | 'Ä' | 'Å' => 'a',
+        'é' | 'è' | 'ê' | 'ë' | 'É' | 'È' | 'Ê' | 'Ë' => 'e',
+        'í' | 'ì' | 'î' | 'ï' | 'Í' | 'Ì' | 'Î' | 'Ï' => 'i',
+        'ó' | 'ò' | 'ô' | 'õ' | 'ö' | 'Ó' | 'Ò' | 'Ô' | 'Õ' | 'Ö' => 'o',
+        'ú' | 'ù' | 'û' | 'ü' | 'Ú' | 'Ù' | 'Û' | 'Ü' => 'u',
+        'ç' | 'Ç' => 'c',
+        'ñ' | 'Ñ' => 'n',
+        'ý' | 'ÿ' | 'Ý' => 'y',
+        other => other,
+    }
 }
 
 impl Task {
@@ -183,6 +260,7 @@ mod tests {
             notified_overdue_at: None,
             calendar_id: None,
             event_id: None,
+            tags: vec![],
             synced_at: None,
             remote_updated_at: None,
         }
@@ -211,5 +289,22 @@ mod tests {
         assert_eq!(TaskPriority::parse("low"), Some(TaskPriority::Low));
         assert_eq!(TaskPriority::parse("urgente"), None);
         assert_eq!(TaskPriority::from_rank(3), TaskPriority::Low);
+    }
+
+    #[test]
+    fn tags_are_normalized() {
+        assert_eq!(normalize_tag("  Dev Mania ").as_deref(), Some("dev-mania"));
+        assert_eq!(
+            normalize_tag("Ação/Reunião").as_deref(),
+            Some("acao-reuniao")
+        );
+        assert_eq!(normalize_tag("--Olá--").as_deref(), Some("ola"));
+        assert_eq!(normalize_tag("v1.2_beta").as_deref(), Some("v1.2_beta"));
+        assert_eq!(normalize_tag("🚀 !!!"), None);
+        assert_eq!(normalize_tag("a   b\tc"), Some("a-b-c".into()));
+        assert_eq!(
+            normalize_tags(["Holding", "holding", "", "Pessoal ", "HOLDING"]),
+            vec!["holding".to_string(), "pessoal".to_string()]
+        );
     }
 }

@@ -60,6 +60,8 @@ struct Row {
     end_local: String,
     /// Espelhada num evento do Google Calendar.
     linked: bool,
+    /// Etiquetas normalizadas.
+    tags: Vec<String>,
 }
 
 impl Row {
@@ -86,6 +88,16 @@ impl Row {
             start_local: ui::s(v, "start_local"),
             end_local: ui::s(v, "end_local"),
             linked: v.get("event_id").is_some_and(|e| e.is_string()),
+            tags: v
+                .get("tags")
+                .and_then(|t| t.as_array())
+                .map(|a| {
+                    a.iter()
+                        .filter_map(|x| x.as_str())
+                        .map(str::to_string)
+                        .collect()
+                })
+                .unwrap_or_default(),
         })
     }
 
@@ -120,6 +132,9 @@ struct Form {
     end_h: u32,
     end_m: u32,
     priority: String,
+    /// Etiquetas já normalizadas (chips) e o que está sendo digitado.
+    tags: Vec<String>,
+    tag_input: String,
     done: bool,
     skipped: bool,
     /// Espelhada no Google Calendar (só informativo no cabeçalho).
@@ -179,6 +194,8 @@ impl Form {
             end_h: 10,
             end_m: 0,
             priority: "medium".into(),
+            tags: Vec::new(),
+            tag_input: String::new(),
             done: false,
             skipped: false,
             linked: false,
@@ -230,7 +247,19 @@ impl Form {
         .into();
         f.done = r.done;
         f.skipped = r.skipped;
+        f.tags = r.tags.clone();
         f
+    }
+
+    /// Transforma o que está na caixa de tags em chips (normalizado, sem
+    /// repetir). Aceita várias separadas por vírgula.
+    fn commit_tag_input(&mut self) {
+        let raw = std::mem::take(&mut self.tag_input);
+        for t in will_core::task::normalize_tags(raw.split(',')) {
+            if !self.tags.contains(&t) {
+                self.tags.push(t);
+            }
+        }
     }
 
     fn start_naive(&self) -> NaiveDateTime {
@@ -268,12 +297,20 @@ impl Form {
         } else {
             String::new()
         };
+        // o que ficou na caixa sem Enter também entra
+        let mut tags = self.tags.clone();
+        for t in will_core::task::normalize_tags(self.tag_input.split(',')) {
+            if !tags.contains(&t) {
+                tags.push(t);
+            }
+        }
         Ok(json!({
             "title": self.title.trim(),
             "description": self.description.trim(),
             "start_at": start,
             "end_at": end,
             "priority": self.priority,
+            "tags": tags,
         }))
     }
 }
@@ -468,6 +505,12 @@ pub struct TasksPage {
     show_done: bool,
     /// Dia / semana / mês atuais ou tudo (persistido nas preferências locais).
     scope: Scope,
+    /// Todas as tags em uso (vem com a lista) e as marcadas no filtro
+    /// (vazio = todas; com marcas, mostra quem tem QUALQUER uma delas).
+    all_tags: Vec<String>,
+    tag_filter: Vec<String>,
+    /// Busca digitada dentro do dropdown de tags (limpa ao fechar).
+    tag_search: String,
     /// `start` | `alpha` | `priority` (persistido em `settings.tasks.sort`).
     sort: String,
     sort_loaded: bool,
@@ -501,6 +544,9 @@ impl Default for TasksPage {
             offset_minutes: -180,
             show_done: false,
             scope: Scope::All,
+            all_tags: Vec::new(),
+            tag_filter: Vec::new(),
+            tag_search: String::new(),
             sort: "start".into(),
             sort_loaded: false,
             sort_save: None,
@@ -548,6 +594,18 @@ impl TasksPage {
                     .and_then(|t| t.as_array())
                     .map(|a| a.iter().filter_map(Row::from_json).collect())
                     .unwrap_or_default();
+                self.all_tags = v
+                    .get("tags")
+                    .and_then(|t| t.as_array())
+                    .map(|a| {
+                        a.iter()
+                            .filter_map(|x| x.as_str())
+                            .map(str::to_string)
+                            .collect()
+                    })
+                    .unwrap_or_default();
+                // tag marcada que sumiu do uso sai do filtro
+                self.tag_filter.retain(|t| self.all_tags.contains(t));
             }
         }
     }
@@ -690,6 +748,10 @@ impl TasksPage {
                 Some((s, e)) => r.start < e && r.end.unwrap_or(r.start) >= s,
                 None => true,
             })
+            // filtro de tags: nenhuma marcada = todas; senão, qualquer uma delas
+            .filter(|r| {
+                self.tag_filter.is_empty() || r.tags.iter().any(|t| self.tag_filter.contains(t))
+            })
             .cloned()
             .collect();
         match self.sort.as_str() {
@@ -699,6 +761,89 @@ impl TasksPage {
         }
         let _ = now;
         rows
+    }
+
+    /// Combo de múltipla escolha com todas as tags em uso. Nenhuma marcada =
+    /// todas as tarefas; marcadas = tarefas com qualquer uma delas.
+    fn tag_filter_ui(&mut self, ui: &mut egui::Ui) {
+        ui.label(egui::RichText::new(tr("Tags:")).weak().small());
+        let label = if self.tag_filter.is_empty() {
+            tr("todas").to_string()
+        } else {
+            self.tag_filter.join(", ")
+        };
+        let label = ui::ellipsize(&label, 28);
+        let opened = egui::ComboBox::from_id_salt("tasks-tag-filter")
+            .selected_text(label)
+            .width(200.0)
+            .show_ui(ui, |ui| {
+                if self.all_tags.is_empty() {
+                    ui.label(
+                        egui::RichText::new(tr("Nenhuma tag ainda. Adicione tags nas tarefas."))
+                            .small()
+                            .weak(),
+                    );
+                    return;
+                }
+                // busca: filtra a lista enquanto digita (foco ao abrir)
+                let search = ui.add(
+                    egui::TextEdit::singleline(&mut self.tag_search)
+                        .hint_text(tr("buscar tag…"))
+                        .desired_width(f32::INFINITY),
+                );
+                if self.tag_search.is_empty() && !search.has_focus() {
+                    search.request_focus();
+                }
+                let needle = self.tag_search.trim().to_lowercase();
+                let mut clear = false;
+                if !self.tag_filter.is_empty() {
+                    let n = self.tag_filter.len();
+                    if ui
+                        .selectable_label(false, trf("limpar filtro ({})", &[&n]))
+                        .clicked()
+                    {
+                        clear = true;
+                    }
+                }
+                let visible: Vec<String> = self
+                    .all_tags
+                    .iter()
+                    .filter(|t| needle.is_empty() || t.contains(&needle))
+                    .cloned()
+                    .collect();
+                if visible.is_empty() {
+                    ui.label(
+                        egui::RichText::new(tr("nenhuma tag com esse texto"))
+                            .small()
+                            .weak(),
+                    );
+                }
+                egui::ScrollArea::vertical()
+                    .max_height(260.0)
+                    .auto_shrink([false, true])
+                    .show(ui, |ui| {
+                        for t in visible {
+                            let mut on = self.tag_filter.contains(&t);
+                            if ui.checkbox(&mut on, &t).changed() {
+                                if on {
+                                    self.tag_filter.push(t);
+                                } else {
+                                    self.tag_filter.retain(|x| *x != t);
+                                }
+                            }
+                        }
+                    });
+                if clear {
+                    self.tag_filter.clear();
+                }
+            });
+        opened.response.on_hover_text(tr(
+            "Filtrar por tag: nenhuma marcada mostra todas; com marcas, só tarefas que têm qualquer uma delas.",
+        ));
+        if opened.inner.is_none() {
+            // fechado: a próxima abertura começa sem busca
+            self.tag_search.clear();
+        }
     }
 
     fn color_for(state: State, pal: &ui::Palette, dark: bool) -> Color32 {
@@ -815,6 +960,9 @@ impl TasksPage {
                 self.list.loaded_at = None;
             }
             ui.label(egui::RichText::new(tr("mostrar concluídas")).small());
+            ui.add_space(10.0);
+            // filtro de tags (múltipla escolha; vazio = todas)
+            self.tag_filter_ui(ui);
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                 if ui::icon_button(ui, crate::icons::REFRESH, tr("Atualizar")).clicked() {
                     self.list.loaded_at = None;
@@ -961,9 +1109,18 @@ impl TasksPage {
                 if bg.dragged() {
                     pan_delta = bg.drag_delta().x;
                 }
+                // A roda só vale para o Gantt se o ponteiro está nele E a camada
+                // no topo sob o ponteiro é esta (não um dropdown, popup ou
+                // modal aberto por cima): senão a rolagem da lista do combo
+                // virava zoom aqui atrás.
                 let hover_pos = ui.input(|i| i.pointer.hover_pos());
-                let over_tl = hover_pos.is_some_and(|hp| tl.contains(hp));
-                let over_header = hover_pos.is_some_and(|hp| tl_header.contains(hp));
+                let on_top = hover_pos.is_some_and(|hp| {
+                    ui.ctx().layer_id_at(hp) == Some(ui.layer_id())
+                }) && !egui::Popup::is_any_open(ui.ctx())
+                    && self.form.is_none()
+                    && self.confirm.is_none();
+                let over_tl = on_top && hover_pos.is_some_and(|hp| tl.contains(hp));
+                let over_header = on_top && hover_pos.is_some_and(|hp| tl_header.contains(hp));
                 wheel_now = over_tl;
                 if over_tl || over_header {
                     let (zd, sd) = ui.input(|i| (i.zoom_delta(), i.smooth_scroll_delta));
@@ -1032,6 +1189,22 @@ impl TasksPage {
                             ],
                             Stroke::new(1.2, title_color),
                         );
+                    }
+                    // tags depois do título, no que sobrar de largura
+                    if !r.tags.is_empty() {
+                        let tags_x = tr_rect.right() + 8.0;
+                        let room = list_rect.right() - 6.0 - tags_x;
+                        if room > 24.0 {
+                            let text = r.tags.iter().map(|t| format!("#{t}")).collect::<Vec<_>>().join(" ");
+                            let text = fit_text(&p, &text, small.clone(), room);
+                            p.with_clip_rect(list_rect).text(
+                                Pos2::new(tags_x, y + ROW_H / 2.0),
+                                Align2::LEFT_CENTER,
+                                text,
+                                small.clone(),
+                                pal.text_weak,
+                            );
+                        }
                     }
                     let list_resp = ui.interact(list_rect, ui.scope_id().with(("task-row", &r.id)), Sense::click());
                     if list_resp.hovered() {
@@ -1106,6 +1279,9 @@ impl TasksPage {
                         ));
                     }
                     tip.push_str(&format!("\n{} · {} {}", state.label(), tr("prioridade"), match r.priority { 1 => tr("alta"), 3 => tr("baixa"), _ => tr("média") }));
+                    if !r.tags.is_empty() {
+                        tip.push_str(&format!("\n{}", r.tags.iter().map(|t| format!("#{t}")).collect::<Vec<_>>().join(" ")));
+                    }
                     if !r.description.trim().is_empty() {
                         tip.push_str("\n\n");
                         tip.push_str(&ui::ellipsize(r.description.trim(), 240));
@@ -1760,6 +1936,50 @@ impl TasksPage {
                             ],
                         );
                     });
+                    ui::field(
+                        ui,
+                        tr("Tags"),
+                        Some(tr("Digite e Enter (ou vírgula) para adicionar. Vira minúsculas sem acento; espaço vira traço.")),
+                        |ui| {
+                            ui.horizontal_wrapped(|ui| {
+                                let mut remove: Option<usize> = None;
+                                for (i, t) in f.tags.iter().enumerate() {
+                                    if ui
+                                        .add(
+                                            egui::Button::new(egui::RichText::new(format!("{t} ×")).small())
+                                                .corner_radius(10.0),
+                                        )
+                                        .on_hover_text(tr("remover"))
+                                        .clicked()
+                                    {
+                                        remove = Some(i);
+                                    }
+                                }
+                                if let Some(i) = remove {
+                                    f.tags.remove(i);
+                                }
+                                let r = ui.add(
+                                    egui::TextEdit::singleline(&mut f.tag_input)
+                                        .hint_text(tr("nova tag"))
+                                        .desired_width(140.0),
+                                );
+                                let enter = r.lost_focus()
+                                    && ui.input(|i| i.key_pressed(egui::Key::Enter));
+                                if enter || f.tag_input.contains(',') {
+                                    f.commit_tag_input();
+                                    if enter {
+                                        r.request_focus();
+                                    }
+                                }
+                            });
+                            // prévia do que vai ser gravado enquanto digita
+                            if let Some(p) = will_core::task::normalize_tag(&f.tag_input) {
+                                if p != f.tag_input.trim() {
+                                    ui.label(egui::RichText::new(format!("→ {p}")).small().weak());
+                                }
+                            }
+                        },
+                    );
                 }
                 ui.advance_cursor_after_rect(body);
                 if let Some(e) = &f.error {

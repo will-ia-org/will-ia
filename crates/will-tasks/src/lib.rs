@@ -55,6 +55,9 @@ pub struct TaskInput {
     pub end_at: Option<String>,
     /// `high|medium|low` (ou alta/média/baixa, 1/2/3).
     pub priority: Option<String>,
+    /// Etiquetas (texto livre; normalizadas ao salvar). Na edição, substitui a lista.
+    #[serde(default)]
+    pub tags: Option<Vec<String>>,
 }
 
 /// Tarefa + campos derivados: estado, rótulos e horários no fuso configurado.
@@ -442,12 +445,22 @@ impl TasksModule {
                 done_at: None,
                 skipped: false,
                 link: None,
+                tags: will_core::task::normalize_tags(input.tags.unwrap_or_default()),
             })
             .await
             .map_err(|e| e.to_string())?;
         tracing::info!(task_id = %t.id, title = %t.title, created_by, "tarefa criada");
         self.deps.bus.emit(Event::TasksChanged);
         Ok(self.view(t))
+    }
+
+    /// Tags em uso (todas as tarefas), em ordem alfabética.
+    pub async fn tags(&self) -> Result<Vec<String>, String> {
+        self.deps
+            .storage
+            .list_task_tags()
+            .await
+            .map_err(|e| e.to_string())
     }
 
     pub async fn resolve_id(&self, s: &str) -> Result<TaskId, String> {
@@ -532,6 +545,9 @@ impl TasksModule {
         }
         if let Some(pr) = Self::parse_priority(input.priority.as_deref())? {
             p.priority = Some(pr);
+        }
+        if let Some(tags) = input.tags {
+            p.tags = Some(will_core::task::normalize_tags(tags));
         }
         let start = p.start_at.unwrap_or(cur.start_at);
         let end = match p.end_at {

@@ -26,15 +26,24 @@ fn tid(s: &str) -> Result<TaskId, ApiError> {
 pub struct ListQuery {
     /// `pending` (padrão) | `running` | `overdue` | `upcoming` | `done` | `skipped` | `all`.
     pub filter: Option<String>,
+    /// Tags separadas por vírgula: só tarefas com qualquer uma delas.
+    pub tags: Option<String>,
 }
 
 pub async fn list(State(state): State<App>, Query(q): Query<ListQuery>) -> ApiResult<Value> {
     let m = module(&state)?;
     let filter = q.filter.as_deref().unwrap_or("pending");
-    let list = m.list(filter).await.map_err(bad)?;
+    let mut list = m.list(filter).await.map_err(bad)?;
+    let want = will_core::task::normalize_tags(q.tags.as_deref().unwrap_or("").split(','));
+    if !want.is_empty() {
+        list.retain(|v| v.task.tags.iter().any(|t| want.contains(t)));
+    }
+    let all_tags = m.tags().await.map_err(bad)?;
     let zone = m.zone();
     Ok(Json(json!({
         "tasks": list,
+        "tags": all_tags,
+        "filter_tags": want,
         "enabled": m.enabled(),
         "timezone": zone.name(),
         "offset_minutes": zone.offset_minutes(),

@@ -14,6 +14,7 @@ página `pages/tasks.rs`, seção Configurações › Tarefas.
 | `start_at` | instante UTC | obrigatório, **sempre com hora** (só a data é recusada) |
 | `end_at` | instante UTC opcional | precisa ser depois do início; `""` na edição limpa |
 | `priority` | `high` (1) · `medium` (2, padrão) · `low` (3) | aceita alta/média/baixa e 1/2/3 na entrada |
+| `tags` | lista de strings (JSON na coluna `tags`, migration 0013) | **normalizadas** ao salvar (`will_core::task::normalize_tag`): minúsculas, sem acento (`ç`→`c`), separadores/espaços viram `-`, só `[a-z0-9._-]`, ≤ 40 chars, sem repetição; na edição a lista é substituída inteira (`[]` limpa). Não vão para o Google Calendar |
 | `done_at` | instante opcional | fechada: `tasks_complete` / botão ✓ (concluída) ou `tasks_skip` / botão Não realizada; `tasks_reopen` limpa |
 | `skipped` | bool | com `done_at`: fechada como **não realizada** (faltou/desistiu) — some da tela como a concluída, mas não conta como feita |
 | `notified_start_at`, `notified_overdue_at` | instantes | marcas do laço (um aviso por transição) |
@@ -57,10 +58,10 @@ reabrir zera só a de atraso. Qualquer transição emite `Event::TasksChanged` (
 
 | Ferramenta | Entrada | Efeito |
 |---|---|---|
-| `tasks_create` | `title`, `start_at` (obrig.), `description`, `end_at`, `priority` | cria |
-| `tasks_list` | `filter`: `pending` (padrão) · `running` · `overdue` · `upcoming` · `done` · `skipped` · `all` | lista `TaskView`s + `timezone` |
+| `tasks_create` | `title`, `start_at` (obrig.), `description`, `end_at`, `priority`, `tags[]` | cria |
+| `tasks_list` | `filter`: `pending` (padrão) · `running` · `overdue` · `upcoming` · `done` · `skipped` · `all`; `tags[]` = só tarefas com **qualquer** uma delas | lista `TaskView`s + `timezone` + `tags` (todas em uso, ordem alfabética) + `filter_tags` |
 | `tasks_get` | `id` (completo ou prefixo único ≥ 4) | detalha |
-| `tasks_update` | `id` + campos (só os enviados mudam; `end_at: ""` limpa) | altera |
+| `tasks_update` | `id` + campos (só os enviados mudam; `end_at: ""` limpa; `tags` substitui a lista) | altera |
 | `tasks_delete` | `id` | remove |
 | `tasks_complete` / `tasks_skip` / `tasks_reopen` | `id` | conclui / fecha como não realizada / reabre |
 
@@ -85,7 +86,7 @@ Configurações: seção `tasks` (`enabled`, `timezone`, `notify_native`, `notif
 - Lista à esquerda (bandeira de prioridade 🔴🟡🟢 pintada, título, bolinha do estado) e **linha do
   tempo** à direita, mesma altura de linha; cabeçalho fixo com dias (fim de semana sombreado, hoje em
   destaque) e ticks de hora conforme o zoom; **linha do agora** em azul com o horário.
-- **Zoom** por rolagem / pinça / botões − + (meio dia a **2 anos** visíveis; o eixo troca de escala: ≥ 30 px/dia = dias com ticks de hora, ≥ 7 px/dia = semanas seg–dom com o número ISO e os dias embaixo, abaixo disso = meses); **arrastar** o fundo
+- **Zoom** por rolagem / pinça / botões − + (só quando o ponteiro está sobre o Gantt **e** nada está aberto por cima — dropdown, popup ou modal — senão a rolagem é do que está em cima; meio dia a **2 anos** visíveis; o eixo troca de escala: ≥ 30 px/dia = dias com ticks de hora, ≥ 7 px/dia = semanas seg–dom com o número ISO e os dias embaixo, abaixo disso = meses); **arrastar** o fundo
   navega; rolagem horizontal também; **Hoje** reposiciona (agora a 30 % da largura).
 - Barra com cor do estado; sem fim, a barra vai até o agora com a ponta esvaecida; fora da janela, uma
   seta na borda indica o lado. Tooltip com título, período, estado, prioridade e descrição.
@@ -93,6 +94,11 @@ Configurações: seção `tasks` (`enabled`, `timezone`, `notify_native`, `notif
   Clicar na barra ou na linha abre o formulário (título, descrição, início, fim, prioridade,
   Concluir/Reabrir, Excluir com confirmação).
 - **Concluídas somem por padrão**; o toggle "mostrar concluídas" busca `all`.
+- **Tags** (desde 0.1.23): campo no formulário (chips; digitar + Enter ou vírgula adiciona, prévia da forma
+  normalizada enquanto digita, × remove), `#tag` em cinza depois do título na lista e no tooltip da barra, e um
+  combo de **múltipla escolha** depois de "mostrar concluídas" (com **busca** no topo, que filtra a lista enquanto digita e zera ao fechar; lista com rolagem) com todas as tags em uso (`tags` da resposta de
+  `GET /api/tasks`): nenhuma marcada = todas as tarefas; marcadas = tarefas que têm **qualquer** uma delas
+  ("limpar filtro" zera). O filtro é só da sessão. A API aceita `GET /api/tasks?tags=a,b` com a mesma regra.
 - **Ver: Tudo · Dia · Semana · Mês** (botões entre a ordenação e o toggle; desde 0.1.22, `Scope` em
   `pages/tasks.rs`, persistido em `ui-prefs.json` → `gantt.scope`): nos três recortes a lista mostra só as
   tarefas que tocam o período (início antes do fim do período e fim — ou início, sem fim — depois do começo)
