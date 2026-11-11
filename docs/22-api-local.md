@@ -161,6 +161,7 @@ Códigos: **401** `token de sessão ausente` / `token de sessão inválido` (tam
 | POST | `/api/voice/transcribe?lang=` | corpo WAV PCM16 mono 16 kHz (até 32 MB): ditado do campo de mensagem (Whisper com a chave do módulo de voz) → `{ text, secs, usd }`; custo `voice_stt` |
 | POST | `/api/voice/summary` | `{ text }` → `{ summary, usd }`: resposta (Markdown) vira roteiro falável pelo modelo/prompt de `realtime.summary` (`docs/07`, "Ouvir resumo"); 400 se o módulo de voz estiver desligado, sem chave ou com o resumo desabilitado; custo `voice_summary` |
 | POST | `/api/voice/tts` | `{ text, voice? }` → PCM16 LE mono 24 kHz sem cabeçalho (`audio/L16; rate=24000`, header `X-Sample-Rate`), sintetizado com `realtime.summary.tts_model`/`voice`/`speed`; custo `voice_tts` |
+| POST | `/api/voice/read` | `{ text, voice? }` → **stream** de PCM16 LE mono 24 kHz sem cabeçalho (`audio/L16; rate=24000`, `X-Sample-Rate`, `X-TTS-Chunks`): leitura **literal** do texto (só a marcação Markdown sai, nada é resumido), partida em pedaços ≤ 3 500 caracteres e emitida conforme a OpenAI gera; mesma voz/modelo/velocidade do `tts`; não depende de `realtime.summary.enabled`; fechar a conexão cancela os pedaços seguintes; custo `voice_read` (gravado ao fim, com `note` ok/cancelado/erro) |
 
 ### WhatsApp
 | Método | Rota | Descrição |

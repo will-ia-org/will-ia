@@ -307,6 +307,20 @@ async fn speech_openai(state: &App) -> Result<will_realtime::openai::OpenAi, sup
     Ok(will_realtime::openai::OpenAi::new(key))
 }
 
+/// Voz do TTS: a pedida na chamada, senão a da seção "Ouvir (TTS)", senão a
+/// da sessão de voz (`realtime.voice`).
+fn speak_voice(
+    requested: Option<String>,
+    cfg: &will_core::settings::SpeakSummarySettings,
+    state: &App,
+) -> String {
+    requested
+        .map(|v| v.trim().to_string())
+        .filter(|v| !v.is_empty())
+        .or_else(|| Some(cfg.voice.trim().to_string()).filter(|v| !v.is_empty()))
+        .unwrap_or_else(|| state.settings().realtime.voice.clone())
+}
+
 /// Configuração do "ouvir resumo" (Configurações → Voz), exigindo-o habilitado.
 fn speak_summary_cfg(
     state: &App,
@@ -374,12 +388,7 @@ pub async fn voice_tts(
     }
     let ai = speech_openai(&state).await?;
     let cfg = speak_summary_cfg(&state)?;
-    let voice = b
-        .voice
-        .map(|v| v.trim().to_string())
-        .filter(|v| !v.is_empty())
-        .or_else(|| Some(cfg.voice.trim().to_string()).filter(|v| !v.is_empty()))
-        .unwrap_or_else(|| state.settings().realtime.voice.clone());
+    let voice = speak_voice(b.voice, &cfg, &state);
     let pcm = ai
         .synthesize_pcm(&text, &cfg.tts_model, &voice, cfg.speed)
         .await
@@ -416,6 +425,129 @@ pub async fn voice_tts(
         pcm,
     )
         .into_response())
+}
+
+/// `POST /api/voice/read { text, voice? }`: lê o texto **literalmente** (só a
+/// marcação do Markdown sai; nada é resumido) e devolve o áudio em
+/// **streaming**: PCM16 LE mono 24 kHz sem cabeçalho (`audio/L16;
+/// rate=24000`, header `X-Sample-Rate`), em pedaços conforme a OpenAI gera —
+/// o app começa a tocar em segundos. Textos acima do teto da API são partidos
+/// em parágrafos/frases ([`will_core::speech::tts_chunks`]) e sintetizados em
+/// sequência na mesma resposta. Usa `realtime.summary.tts_model`/`voice`/
+/// `speed`; não depende de `realtime.summary.enabled`. Custo estimado por
+/// caractere em `ai_costs` (`voice_read`), gravado ao fim — inclusive quando o
+/// cliente desliga no meio (os pedaços já pedidos à OpenAI são cobrados).
+pub async fn voice_read(
+    State(state): State<App>,
+    axum::extract::Extension(me): axum::extract::Extension<will_core::Principal>,
+    Json(b): Json<SpeechBody>,
+) -> Result<axum::response::Response, super::ApiError> {
+    use futures::StreamExt;
+    let text = will_core::speech::speakable_literal(&b.text);
+    if text.is_empty() {
+        return Err(bad("texto vazio"));
+    }
+    let ai = speech_openai(&state).await?;
+    let cfg = state.settings().realtime.summary;
+    let voice = speak_voice(b.voice, &cfg, &state);
+    let chunks = will_core::speech::tts_chunks(&text, will_core::speech::TTS_CHUNK_CHARS);
+    let rate = will_realtime::openai::TTS_PCM_RATE;
+    let model = cfg.tts_model.clone();
+    let speed = cfg.speed;
+    let n_chunks = chunks.len();
+    // O primeiro pedaço é pedido ANTES de responder: erro de parâmetro/chave/
+    // cota vira 400 com o texto da OpenAI (como em `voice_tts`), em vez de um
+    // stream quebrado depois do 200.
+    let mut rest = chunks.into_iter();
+    let first = rest.next().ok_or_else(|| bad("texto vazio"))?;
+    let first_stream = ai
+        .synthesize_pcm_stream(&first, &model, &voice, speed)
+        .await
+        .map_err(|e| bad(format!("OpenAI: {e}")))?;
+    let rest: Vec<String> = rest.collect();
+    let (tx, rx) = tokio::sync::mpsc::channel::<Result<bytes::Bytes, std::io::Error>>(64);
+    let storage = state.storage.clone();
+    let user = me.username.clone();
+    tokio::spawn(async move {
+        let started = std::time::Instant::now();
+        // só conta caracteres de pedaços que a OpenAI aceitou sintetizar
+        let mut chars = first.chars().count();
+        let mut bytes_total = 0usize;
+        let mut outcome = "ok";
+        let mut stream = Box::pin(first_stream);
+        let mut next = 0usize;
+        'outer: loop {
+            while let Some(item) = stream.next().await {
+                match item {
+                    Ok(b) => {
+                        bytes_total += b.len();
+                        if tx.send(Ok(b)).await.is_err() {
+                            outcome = "cancelado";
+                            break 'outer;
+                        }
+                    }
+                    Err(e) => {
+                        tracing::warn!(error = %e, chunk = next + 1, of = n_chunks, "leitura em voz: stream interrompido");
+                        let _ = tx.send(Err(std::io::Error::other(e))).await;
+                        outcome = "erro";
+                        break 'outer;
+                    }
+                }
+            }
+            let Some(chunk) = rest.get(next) else {
+                break;
+            };
+            next += 1;
+            match ai.synthesize_pcm_stream(chunk, &model, &voice, speed).await {
+                Ok(s) => {
+                    chars += chunk.chars().count();
+                    stream = Box::pin(s);
+                }
+                Err(e) => {
+                    tracing::warn!(error = %e, chunk = next + 1, of = n_chunks, "leitura em voz: TTS falhou");
+                    let _ = tx.send(Err(std::io::Error::other(e))).await;
+                    outcome = "erro";
+                    break;
+                }
+            }
+        }
+        let secs = bytes_total as f64 / (rate as f64 * 2.0);
+        tracing::info!(
+            user = %user,
+            chunks = n_chunks,
+            chars,
+            audio_secs = secs.round() as i64,
+            duration_ms = started.elapsed().as_millis() as u64,
+            outcome,
+            "leitura em voz (literal)"
+        );
+        if chars == 0 {
+            return;
+        }
+        let usd = will_realtime::openai::tts_usd(chars);
+        let rec = will_storage::costs::NewAiCost {
+            source: "voice_read".into(),
+            r#ref: Some(format!("user:{user}")),
+            model: Some(model),
+            units: json!({ "chars": chars, "audio_secs": secs.round() as i64, "chunks": n_chunks }),
+            usd,
+            estimated: true,
+            duration_secs: Some(secs.round() as i64),
+            note: Some(format!("leitura literal para {user} ({outcome})")),
+        };
+        let _ = storage.add_ai_cost(&rec).await;
+    });
+    let body = axum::body::Body::from_stream(tokio_stream::wrappers::ReceiverStream::new(rx));
+    axum::response::Response::builder()
+        .status(axum::http::StatusCode::OK)
+        .header(
+            axum::http::header::CONTENT_TYPE,
+            format!("audio/L16; rate={rate}"),
+        )
+        .header("x-sample-rate", rate.to_string())
+        .header("x-tts-chunks", n_chunks.to_string())
+        .body(body)
+        .map_err(|e| internal(e.to_string()))
 }
 
 pub async fn voice_transcripts(

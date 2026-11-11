@@ -15,6 +15,7 @@ pub mod paths;
 pub mod process;
 pub mod schedule;
 pub mod settings;
+pub mod speech;
 pub mod task;
 pub mod thread;
 pub mod tools;

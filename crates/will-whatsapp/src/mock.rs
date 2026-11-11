@@ -17,6 +17,8 @@ pub struct MockSent {
     pub path: Option<PathBuf>,
     pub caption: Option<String>,
     pub quote: Option<String>,
+    /// JIDs mencionados (`ContextInfo.mentionedJid`).
+    pub mentions: Vec<String>,
 }
 
 /// Ação registrada pelo mock além dos envios de texto/mídia (para asserções).
@@ -29,6 +31,7 @@ pub enum MockAction {
     Edit {
         msg: MessageRef,
         text: String,
+        mentions: Vec<String>,
     },
     Delete {
         msg: MessageRef,
@@ -210,6 +213,7 @@ impl WhatsAppBackend for MockBackend {
         chat_jid: &str,
         text: &str,
         quote_message_id: Option<&str>,
+        mentions: &[String],
     ) -> Result<String, String> {
         self.ensure_connected()?;
         if self.fail_send.load(Ordering::SeqCst) {
@@ -223,6 +227,7 @@ impl WhatsAppBackend for MockBackend {
             path: None,
             caption: None,
             quote: quote_message_id.map(str::to_string),
+            mentions: mentions.to_vec(),
         });
         Ok(id)
     }
@@ -232,6 +237,7 @@ impl WhatsAppBackend for MockBackend {
         chat_jid: &str,
         path: &Path,
         caption: Option<&str>,
+        mentions: &[String],
     ) -> Result<String, String> {
         self.ensure_connected()?;
         if self.fail_send.load(Ordering::SeqCst) {
@@ -245,6 +251,7 @@ impl WhatsAppBackend for MockBackend {
             path: Some(path.to_path_buf()),
             caption: caption.map(str::to_string),
             quote: None,
+            mentions: mentions.to_vec(),
         });
         Ok(id)
     }
@@ -299,7 +306,12 @@ impl WhatsAppBackend for MockBackend {
         Ok(())
     }
 
-    async fn edit_message(&self, msg: &MessageRef, new_text: &str) -> Result<(), String> {
+    async fn edit_message(
+        &self,
+        msg: &MessageRef,
+        new_text: &str,
+        mentions: &[String],
+    ) -> Result<(), String> {
         self.ensure_connected()?;
         if self.fail_send.load(Ordering::SeqCst) {
             return Err("falha simulada".into());
@@ -307,6 +319,7 @@ impl WhatsAppBackend for MockBackend {
         self.actions.lock().push(MockAction::Edit {
             msg: msg.clone(),
             text: new_text.to_string(),
+            mentions: mentions.to_vec(),
         });
         Ok(())
     }

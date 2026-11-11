@@ -88,6 +88,31 @@ pub struct MessageRef {
     pub timestamp: Option<i64>,
 }
 
+/// Como o grupo endereça os participantes: telefone (`pn`) ou LID. Define
+/// qual JID e qual token `@…` uma menção precisa usar (ver `mentions.rs`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum GroupAddressing {
+    Phone,
+    Lid,
+}
+
+/// Participante de grupo com as duas identidades que o protocolo expõe.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct GroupMember {
+    /// `<telefone>@s.whatsapp.net`, se o grupo informa.
+    pub phone_jid: Option<String>,
+    /// `<lid>@lid`, se o grupo informa.
+    pub lid_jid: Option<String>,
+    pub is_admin: bool,
+}
+
+/// Participantes + modo de endereçamento de um grupo (para menções).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct GroupMembers {
+    pub addressing: GroupAddressing,
+    pub members: Vec<GroupMember>,
+}
+
 #[async_trait::async_trait]
 pub trait WhatsAppBackend: Send + Sync {
     /// `"real"` ou `"mock"` (aparece em `status()`).
@@ -100,19 +125,30 @@ pub trait WhatsAppBackend: Send + Sync {
     async fn disconnect(&self) -> Result<(), String>;
     /// Desvincula remotamente e apaga a sessão local.
     async fn logout(&self) -> Result<(), String>;
-    /// Retorna o id da mensagem enviada.
+    /// Retorna o id da mensagem enviada. `mentions` = JIDs que vão em
+    /// `ContextInfo.mentionedJid` (o texto já deve trazer os tokens `@…`).
     async fn send_text(
         &self,
         chat_jid: &str,
         text: &str,
         quote_message_id: Option<&str>,
+        mentions: &[String],
     ) -> Result<String, String>;
+    /// `mentions` vale para a legenda (imagem, vídeo, documento).
     async fn send_media(
         &self,
         chat_jid: &str,
         path: &Path,
         caption: Option<&str>,
+        mentions: &[String],
     ) -> Result<String, String>;
+    /// Participantes do grupo com telefone e LID + modo de endereçamento, para
+    /// montar menções. Padrão: não suportado.
+    async fn group_members(&self, jid: &str) -> Result<GroupMembers, String> {
+        Err(format!(
+            "participantes de {jid} indisponíveis neste backend"
+        ))
+    }
     /// Baixa a mídia da mensagem para `dest_dir` e devolve o caminho do arquivo.
     /// `media_ref` é a referência guardada no índice (permite baixar após reinício).
     /// Mapa LID → telefone conhecido pela sessão (`(lid_user, phone_digits)`).
@@ -135,7 +171,13 @@ pub trait WhatsAppBackend: Send + Sync {
     /// Reage a uma mensagem com um emoji; `""` remove a reação.
     async fn send_reaction(&self, msg: &MessageRef, emoji: &str) -> Result<(), String>;
     /// Edita o texto de uma mensagem **minha** (janela de ~15 min do WhatsApp).
-    async fn edit_message(&self, msg: &MessageRef, new_text: &str) -> Result<(), String>;
+    /// `mentions` = JIDs para `ContextInfo.mentionedJid` do texto novo.
+    async fn edit_message(
+        &self,
+        msg: &MessageRef,
+        new_text: &str,
+        mentions: &[String],
+    ) -> Result<(), String>;
     /// `for_everyone`: revoga (minha mensagem, ou de outro se eu for admin do
     /// grupo); senão apaga só para mim (app state).
     async fn delete_message(&self, msg: &MessageRef, for_everyone: bool) -> Result<(), String>;

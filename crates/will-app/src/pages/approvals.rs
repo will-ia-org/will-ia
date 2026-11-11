@@ -13,7 +13,13 @@ use will_core::{ApprovalRequest, Event, ThreadId, ThreadSummary};
 /// Largura da coluna de chaves na lista de argumentos do cartão.
 const ARG_KEY_WIDTH: f32 = 150.0;
 /// Acima disso o valor é cortado no cartão (o JSON completo fica em "Detalhes").
-const ARG_VALUE_MAX_CHARS: usize = 600;
+/// Acima disso o valor é cortado (só segurança contra argumentos absurdos; a
+/// mensagem de um pedido comum aparece inteira, com rolagem quando é longa).
+const ARG_VALUE_MAX_CHARS: usize = 40_000;
+/// Valores com mais linhas/caracteres que isso ganham uma área com rolagem
+/// própria, para não empurrar os botões de decisão para fora da tela.
+const ARG_SCROLL_LINES: usize = 18;
+const ARG_SCROLL_CHARS: usize = 1500;
 /// Altura máxima da tabela do histórico antes de rolar.
 const HISTORY_MAX_HEIGHT: f32 = 460.0;
 
@@ -209,7 +215,7 @@ impl ApprovalsPage {
                 ui.add_space(8.0);
                 ui.separator();
                 ui.add_space(4.0);
-                args_list(ui, &a.args_redacted);
+                ui.push_id(("approval-args", &id), |ui| args_list(ui, &a.args_redacted));
                 let pretty = serde_json::to_string_pretty(&a.args_redacted).unwrap_or_default();
                 egui::CollapsingHeader::new(RichText::new(tr("Detalhes (JSON completo)")).small())
                     .id_salt(("approval-details", &id))
@@ -652,7 +658,20 @@ fn args_list(ui: &mut egui::Ui, args: &Value) {
                         .inner_margin(egui::Margin::symmetric(10, 8))
                         .show(ui, |ui| {
                             ui.set_width(ui.available_width());
-                            ui::wrapped_text(ui, &text);
+                            let huge = text.lines().count() > ARG_SCROLL_LINES
+                                || text.chars().count() > ARG_SCROLL_CHARS;
+                            if huge {
+                                egui::ScrollArea::vertical()
+                                    .id_salt(("arg-scroll", k))
+                                    .max_height(360.0)
+                                    .auto_shrink([false, true])
+                                    .show(ui, |ui| {
+                                        ui.set_width(ui.available_width());
+                                        ui::wrapped_text(ui, &text);
+                                    });
+                            } else {
+                                ui::wrapped_text(ui, &text);
+                            }
                         });
                 } else {
                     ui::wrapped_text(ui, &text);

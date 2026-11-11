@@ -1,12 +1,12 @@
-//! Cache do "ouvir resumo": roteiro + áudio (PCM16) já gerados para um turno,
-//! chaveados pelo id do turno. Ouvir de novo a mesma resposta não refaz o
+//! Cache do "ouvir": roteiro + áudio (PCM16) já gerados para um turno,
+//! chaveados pelo id do turno (leitura literal: `<turno>-ler`). Ouvir de novo a mesma resposta não refaz o
 //! resumo nem o TTS (zero tokens): toca o que já existe.
 //!
 //! Dois níveis: memória (vida do app) e disco em `<config>/will-ia-app/ouvir/`
 //! (`<turn>.pcm` + `<turn>.json` com o roteiro e a taxa), para sobreviver a
 //! reinícios. O disco é podado aos [`MAX_FILES`] mais recentes.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 use std::sync::Arc;
 
@@ -23,6 +23,10 @@ pub struct SpeakAudio {
 #[derive(Default)]
 pub struct SpeakCache {
     mem: HashMap<String, Arc<SpeakAudio>>,
+    /// Ids com áudio em disco (lido uma vez; mantido por `put`/poda), para
+    /// `has()` não ir ao disco a cada quadro.
+    known: HashSet<String>,
+    known_loaded: bool,
 }
 
 #[derive(serde::Serialize, serde::Deserialize)]
@@ -54,6 +58,38 @@ impl SpeakCache {
         let id = safe_id(turn_id)?;
         let meta = std::fs::read_to_string(dir().join(format!("{id}.json"))).ok()?;
         serde_json::from_str::<Meta>(&meta).ok().map(|m| m.summary)
+    }
+
+    /// Já existe áudio guardado para esta chave (memória ou disco)?
+    pub fn has(&mut self, turn_id: &str) -> bool {
+        if self.mem.contains_key(turn_id) {
+            return true;
+        }
+        self.load_known();
+        self.known.contains(turn_id)
+    }
+
+    /// Lista o disco uma vez: ids com o par `.json` + `.pcm`.
+    fn load_known(&mut self) {
+        if self.known_loaded {
+            return;
+        }
+        self.known_loaded = true;
+        let d = dir();
+        let Ok(rd) = std::fs::read_dir(&d) else {
+            return;
+        };
+        for e in rd.flatten() {
+            let p = e.path();
+            if p.extension().and_then(|x| x.to_str()) != Some("json") {
+                continue;
+            }
+            if let Some(stem) = p.file_stem().and_then(|s| s.to_str()) {
+                if p.with_extension("pcm").is_file() {
+                    self.known.insert(stem.to_string());
+                }
+            }
+        }
     }
 
     /// Áudio pronto do turno, da memória ou do disco (promovido à memória).
@@ -96,14 +132,20 @@ impl SpeakCache {
         if let Ok(j) = serde_json::to_string(&meta) {
             let _ = std::fs::write(d.join(format!("{id}.json")), j);
         }
-        prune(&d);
+        self.load_known();
+        self.known.insert(id.to_string());
+        for gone in prune(&d) {
+            self.known.remove(&gone);
+        }
     }
 }
 
-/// Mantém só os [`MAX_FILES`] pares mais recentes em disco.
-fn prune(d: &std::path::Path) {
+/// Mantém só os [`MAX_FILES`] pares mais recentes em disco; devolve os ids
+/// apagados.
+fn prune(d: &std::path::Path) -> Vec<String> {
+    let mut removed = Vec::new();
     let Ok(rd) = std::fs::read_dir(d) else {
-        return;
+        return removed;
     };
     let mut entries: Vec<(std::time::SystemTime, PathBuf)> = rd
         .flatten()
@@ -119,13 +161,17 @@ fn prune(d: &std::path::Path) {
         })
         .collect();
     if entries.len() <= MAX_FILES {
-        return;
+        return removed;
     }
     entries.sort_by_key(|(t, _)| *t);
     for (_, json) in entries.iter().take(entries.len() - MAX_FILES) {
         let _ = std::fs::remove_file(json);
         let _ = std::fs::remove_file(json.with_extension("pcm"));
+        if let Some(stem) = json.file_stem().and_then(|s| s.to_str()) {
+            removed.push(stem.to_string());
+        }
     }
+    removed
 }
 
 #[cfg(test)]

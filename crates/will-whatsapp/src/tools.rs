@@ -189,7 +189,8 @@ impl ToolKind {
                     "chat_id": {"type": "string", "description": "JID do chat/contato ou nome exato do contato/grupo."},
                     "phone": {"type": "string", "description": "Telefone com DDI (só dígitos). Aceito apenas se o envio para números não salvos estiver habilitado."},
                     "text": {"type": "string", "description": "Texto da mensagem."},
-                    "reply_to": {"type": "string", "description": "message_id a citar (opcional)."}
+                    "reply_to": {"type": "string", "description": "message_id a citar (opcional)."},
+                    "mentions": {"type": "array", "items": {"type": "string"}, "description": "Só em grupo: pessoas a mencionar (@ de verdade, com notificação) — telefone com DDI, JID ou nome do contato. No texto, escreva @telefone ou @Nome onde a menção vai; se não escrever, o @ entra no início. O serviço converte para o id certo do grupo (LID ou telefone)."}
                 }),
                 vec!["text"],
                 ToolPolicy::Confirm,
@@ -199,7 +200,8 @@ impl ToolKind {
                 json!({
                     "chat_id": {"type": "string", "description": "JID do chat/contato ou nome exato."},
                     "path": {"type": "string", "description": "Caminho do arquivo dentro da KB (absoluto ou relativo à KB)."},
-                    "caption": {"type": "string", "description": "Legenda (opcional)."}
+                    "caption": {"type": "string", "description": "Legenda (opcional)."},
+                    "mentions": {"type": "array", "items": {"type": "string"}, "description": "Só em grupo: pessoas a mencionar na legenda (telefone com DDI, JID ou nome), como em whatsapp_send_message."}
                 }),
                 vec!["chat_id", "path"],
                 ToolPolicy::Confirm,
@@ -225,7 +227,8 @@ impl ToolKind {
                 "Edita o texto de uma mensagem que NÓS enviamos (o WhatsApp permite por ~15 min). Exige aprovação. Com várias contas, informe `account`.",
                 json!({
                     "message_id": {"type": "string", "description": "message_id da mensagem nossa."},
-                    "text": {"type": "string", "description": "Novo texto."}
+                    "text": {"type": "string", "description": "Novo texto."},
+                    "mentions": {"type": "array", "items": {"type": "string"}, "description": "Só em grupo: pessoas a mencionar no texto novo (telefone com DDI, JID ou nome), como em whatsapp_send_message. A edição passa a notificar quem foi mencionado."}
                 }),
                 vec!["message_id", "text"],
                 ToolPolicy::Confirm,
@@ -406,7 +409,8 @@ impl WillTool for WaTool {
                 let target = self.target_label(args);
                 let text = arg_opt_str(args, "text").unwrap_or("");
                 format!(
-                    "Enviar WhatsApp{via} para {target}: {}",
+                    "Enviar WhatsApp{via} para {target}{}: {}",
+                    mentions_label(args),
                     truncate(text, 200)
                 )
             }
@@ -416,7 +420,10 @@ impl WillTool for WaTool {
                 let caption = arg_opt_str(args, "caption")
                     .map(|c| format!(" — {}", truncate(c, 100)))
                     .unwrap_or_default();
-                format!("Enviar arquivo {path} por WhatsApp{via} para {target}{caption}")
+                format!(
+                    "Enviar arquivo {path} por WhatsApp{via} para {target}{}{caption}",
+                    mentions_label(args)
+                )
             }
             ToolKind::React => format!(
                 "Reagir com {} à mensagem {} no WhatsApp{via}",
@@ -426,8 +433,9 @@ impl WillTool for WaTool {
                 arg_opt_str(args, "message_id").unwrap_or("?")
             ),
             ToolKind::EditMessage => format!(
-                "Editar mensagem {} no WhatsApp{via}: {}",
+                "Editar mensagem {} no WhatsApp{via}{}: {}",
                 arg_opt_str(args, "message_id").unwrap_or("?"),
+                mentions_label(args),
                 truncate(arg_opt_str(args, "text").unwrap_or(""), 200)
             ),
             ToolKind::DeleteMessage => format!(
@@ -1151,6 +1159,95 @@ async fn record_sent(
     let _ = st.wa_insert_message(&msg).await;
 }
 
+/// Entradas de `mentions` (array de strings ou string separada por vírgula).
+fn mentions_arg(args: &Value) -> Vec<String> {
+    let items: Vec<String> = match args.get("mentions") {
+        Some(Value::Array(a)) => a
+            .iter()
+            .filter_map(|v| v.as_str())
+            .map(str::to_string)
+            .collect(),
+        Some(Value::String(s)) => s.split(',').map(str::to_string).collect(),
+        _ => Vec::new(),
+    };
+    items
+        .into_iter()
+        .map(|s| s.trim().trim_start_matches('@').to_string())
+        .filter(|s| !s.is_empty())
+        .collect()
+}
+
+/// " · menciona: a, b" para o resumo de aprovação (como o agente pediu).
+fn mentions_label(args: &Value) -> String {
+    let m = mentions_arg(args);
+    if m.is_empty() {
+        String::new()
+    } else {
+        format!(" · menciona: {}", m.join(", "))
+    }
+}
+
+/// Resolve `mentions` contra os participantes do grupo: telefone, JID ou nome
+/// (nome passa pelo índice, como `chat_id`). Devolve as menções prontas para
+/// reescrever o texto e preencher `mentionedJid` (`crate::mentions`). Sem
+/// `mentions`, lista vazia; `mentions` fora de grupo é erro de argumento.
+async fn mentions_for(
+    m: &WhatsAppModule,
+    acc: &WaAccount,
+    chat_jid: &str,
+    args: &Value,
+) -> Result<Vec<crate::mentions::Mention>, ToolError> {
+    use crate::mentions::{user_of, MentionQuery};
+    let raw = mentions_arg(args);
+    if raw.is_empty() {
+        return Ok(Vec::new());
+    }
+    if !is_group_jid(chat_jid) {
+        return Err(ToolError::InvalidArgs(
+            "mentions só vale em grupo (em conversa 1:1 a pessoa já é o destinatário)".into(),
+        ));
+    }
+    let members = acc
+        .backend
+        .group_members(chat_jid)
+        .await
+        .map_err(|e| ToolError::Failed(format!("participantes do grupo: {e}")))?;
+    let lid_map = acc.backend.lid_mappings().await;
+    let mut queries = Vec::with_capacity(raw.len());
+    for r in raw {
+        let mut q = MentionQuery {
+            raw: r.clone(),
+            ..Default::default()
+        };
+        let looks_like_phone = r
+            .chars()
+            .all(|c| c.is_ascii_digit() || matches!(c, '+' | ' ' | '-' | '(' | ')'));
+        if let Some((user, server)) = r.split_once('@') {
+            if server == "lid" {
+                q.lid = Some(user.split(':').next().unwrap_or(user).to_string());
+            } else {
+                q.phone = phone_from_jid(&r);
+            }
+        } else if looks_like_phone {
+            q.phone = phone_digits(&r);
+        } else {
+            // nome: mesmo caminho do `chat_id` (chats e contatos do índice)
+            let jid = resolve_chat_id(m, acc, &r).await?;
+            q.name = Some(r.clone());
+            if jid.ends_with("@lid") {
+                q.lid = Some(user_of(&jid).to_string());
+            } else {
+                q.phone = phone_from_jid(&jid);
+            }
+            if q.phone.is_none() {
+                q.phone = m.chat_label(Some(&acc.id), &jid).and_then(|l| l.phone);
+            }
+        }
+        queries.push(q);
+    }
+    crate::mentions::resolve(&members, &lid_map, queries).map_err(ToolError::InvalidArgs)
+}
+
 async fn send_message(
     m: &WhatsAppModule,
     acc: &WaAccount,
@@ -1162,13 +1259,22 @@ async fn send_message(
     }
     let reply_to = arg_opt_str(args, "reply_to");
     let (jid, name) = resolve_send_target(m, acc, args).await?;
+    let mentions = mentions_for(m, acc, &jid, args).await?;
+    let text = crate::mentions::apply(text, &mentions);
+    let mentioned: Vec<String> = mentions.iter().map(|x| x.jid.clone()).collect();
     check_rate_limit(m, acc).await?;
-    tracing::debug!(account_id = %acc.id, chat_id = %jid, text_len = text.chars().count(), reply = reply_to.is_some(), "whatsapp_send_message");
-    match acc.backend.send_text(&jid, text, reply_to).await {
+    tracing::debug!(account_id = %acc.id, chat_id = %jid, text_len = text.chars().count(), reply = reply_to.is_some(), mentions = mentioned.len(), "whatsapp_send_message");
+    match acc
+        .backend
+        .send_text(&jid, &text, reply_to, &mentioned)
+        .await
+    {
         Ok(id) => {
-            tracing::info!(account_id = %acc.id, chat_id = %jid, msg_id = %id, "mensagem enviada");
-            record_sent(m, acc, &id, &jid, "text", Some(text.to_string()), None).await;
-            Ok(json!({"ok": true, "message_id": id, "chat_id": jid, "chat_name": name}))
+            tracing::info!(account_id = %acc.id, chat_id = %jid, msg_id = %id, mentions = mentioned.len(), "mensagem enviada");
+            record_sent(m, acc, &id, &jid, "text", Some(text.clone()), None).await;
+            Ok(
+                json!({"ok": true, "message_id": id, "chat_id": jid, "chat_name": name, "text": text, "mentions": mentioned}),
+            )
         }
         Err(e) => {
             tracing::warn!(account_id = %acc.id, chat_id = %jid, error = %e, "envio de texto falhou");
@@ -1215,19 +1321,30 @@ async fn send_media(m: &WhatsAppModule, acc: &WaAccount, args: &Value) -> Result
     let caption = arg_opt_str(args, "caption");
     let path = resolve_kb_path(m.kb_path(), raw_path)?;
     let (jid, name) = resolve_send_target(m, acc, args).await?;
+    let mentions = mentions_for(m, acc, &jid, args).await?;
+    let caption: Option<String> = if mentions.is_empty() {
+        caption.map(str::to_string)
+    } else {
+        Some(crate::mentions::apply(caption.unwrap_or(""), &mentions))
+    };
+    let mentioned: Vec<String> = mentions.iter().map(|x| x.jid.clone()).collect();
     check_rate_limit(m, acc).await?;
     let mime = mime_for_path(&path);
     let kind = crate::backend::media_class(mime);
-    tracing::debug!(account_id = %acc.id, chat_id = %jid, mime, kind, "whatsapp_send_media");
-    match acc.backend.send_media(&jid, &path, caption).await {
+    tracing::debug!(account_id = %acc.id, chat_id = %jid, mime, kind, mentions = mentioned.len(), "whatsapp_send_media");
+    match acc
+        .backend
+        .send_media(&jid, &path, caption.as_deref(), &mentioned)
+        .await
+    {
         Ok(id) => {
             tracing::info!(account_id = %acc.id, chat_id = %jid, msg_id = %id, kind, "mídia enviada");
             let text = caption
-                .map(str::to_string)
+                .clone()
                 .or_else(|| path.file_name().map(|f| f.to_string_lossy().to_string()));
             record_sent(m, acc, &id, &jid, kind, text, None).await;
             Ok(
-                json!({"ok": true, "message_id": id, "chat_id": jid, "chat_name": name, "mime": mime, "kind": kind}),
+                json!({"ok": true, "message_id": id, "chat_id": jid, "chat_name": name, "mime": mime, "kind": kind, "mentions": mentioned}),
             )
         }
         Err(e) => {
@@ -1372,12 +1489,17 @@ async fn edit_message(
             msg.kind
         )));
     }
+    let mentions = mentions_for(m, acc, &msg.chat_jid, args).await?;
+    let text = crate::mentions::apply(text, &mentions);
+    let mentioned: Vec<String> = mentions.iter().map(|x| x.jid.clone()).collect();
     acc.backend
-        .edit_message(&r, text)
+        .edit_message(&r, &text, &mentioned)
         .await
         .map_err(|e| ToolError::Failed(format!("falha ao editar: {e}")))?;
-    let _ = m.storage().wa_set_text(&acc.id, id, text).await;
-    Ok(json!({"ok": true, "message_id": id, "chat_id": msg.chat_jid, "text": text}))
+    let _ = m.storage().wa_set_text(&acc.id, id, &text).await;
+    Ok(
+        json!({"ok": true, "message_id": id, "chat_id": msg.chat_jid, "text": text, "mentions": mentioned}),
+    )
 }
 
 async fn delete_message(

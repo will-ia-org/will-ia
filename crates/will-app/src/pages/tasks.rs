@@ -353,6 +353,12 @@ fn local_hours(dt: DateTime<Utc>, offset_minutes: i32) -> f64 {
     dt.timestamp() as f64 / 3600.0 + f64::from(offset_minutes) / 60.0
 }
 
+/// Inverso de [`local_hours`].
+fn utc_of_local_hours(h: f64, offset_minutes: i32) -> DateTime<Utc> {
+    let secs = ((h - f64::from(offset_minutes) / 60.0) * 3600.0).round() as i64;
+    DateTime::from_timestamp(secs, 0).unwrap_or_default()
+}
+
 fn month_pt(m: u32) -> &'static str {
     match m {
         1 => tr("jan"),
@@ -382,11 +388,86 @@ fn weekday_pt(n: NaiveDateTime) -> &'static str {
     }
 }
 
+/// Recorte da visão: tudo (zoom/rolagem livres) ou o dia, a semana ou o mês
+/// atuais — a lista mostra só o que cai no período e a linha do tempo fica
+/// travada com o começo do período na borda esquerda e o fim na direita.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+enum Scope {
+    #[default]
+    All,
+    Day,
+    Week,
+    Month,
+}
+
+impl Scope {
+    const ALL: [Scope; 4] = [Scope::All, Scope::Day, Scope::Week, Scope::Month];
+
+    fn as_str(self) -> &'static str {
+        match self {
+            Scope::All => "all",
+            Scope::Day => "day",
+            Scope::Week => "week",
+            Scope::Month => "month",
+        }
+    }
+
+    fn parse(s: &str) -> Scope {
+        match s {
+            "day" => Scope::Day,
+            "week" => Scope::Week,
+            "month" => Scope::Month,
+            _ => Scope::All,
+        }
+    }
+
+    fn label(self) -> &'static str {
+        match self {
+            Scope::All => tr("Tudo"),
+            Scope::Day => tr("Dia"),
+            Scope::Week => tr("Semana"),
+            Scope::Month => tr("Mês"),
+        }
+    }
+
+    fn hover(self) -> &'static str {
+        match self {
+            Scope::All => tr("Todas as tarefas; zoom e rolagem livres"),
+            Scope::Day => tr("Só o dia de hoje: 00:00 na borda esquerda, 24:00 na direita"),
+            Scope::Week => tr("Só a semana atual (segunda a domingo), de ponta a ponta"),
+            Scope::Month => tr("Só o mês atual, do dia 1 ao último dia"),
+        }
+    }
+
+    /// `[início, fim)` do período em horas locais desde a época, para o "agora".
+    fn range(self, now_h: f64) -> Option<(f64, f64)> {
+        let day_start = (now_h / 24.0).floor() * 24.0;
+        let local = DateTime::from_timestamp((day_start * 3600.0).round() as i64, 0)?.naive_utc();
+        match self {
+            Scope::All => None,
+            Scope::Day => Some((day_start, day_start + 24.0)),
+            Scope::Week => {
+                let start = day_start - 24.0 * f64::from(local.weekday().num_days_from_monday());
+                Some((start, start + 24.0 * 7.0))
+            }
+            Scope::Month => {
+                let start = day_start - 24.0 * f64::from(local.day() - 1);
+                let first = chrono::NaiveDate::from_ymd_opt(local.year(), local.month(), 1)?;
+                let next = first.checked_add_months(chrono::Months::new(1))?;
+                let days = next.signed_duration_since(first).num_days();
+                Some((start, start + 24.0 * days as f64))
+            }
+        }
+    }
+}
+
 pub struct TasksPage {
     list: Loader<Value>,
     rows: Vec<Row>,
     offset_minutes: i32,
     show_done: bool,
+    /// Dia / semana / mês atuais ou tudo (persistido nas preferências locais).
+    scope: Scope,
     /// `start` | `alpha` | `priority` (persistido em `settings.tasks.sort`).
     sort: String,
     sort_loaded: bool,
@@ -419,6 +500,7 @@ impl Default for TasksPage {
             rows: Vec::new(),
             offset_minutes: -180,
             show_done: false,
+            scope: Scope::All,
             sort: "start".into(),
             sort_loaded: false,
             sort_save: None,
@@ -503,6 +585,7 @@ impl TasksPage {
                 }
             }
             self.show_done = g.show_done;
+            self.scope = Scope::parse(&g.scope);
             self.last_saved = Some(g);
         }
     }
@@ -587,11 +670,26 @@ impl TasksPage {
         );
     }
 
+    /// Período do recorte atual em UTC (`[início, fim)`), se houver.
+    fn scope_range_utc(&self, now: DateTime<Utc>) -> Option<(DateTime<Utc>, DateTime<Utc>)> {
+        let (s, e) = self.scope.range(local_hours(now, self.offset_minutes))?;
+        Some((
+            utc_of_local_hours(s, self.offset_minutes),
+            utc_of_local_hours(e, self.offset_minutes),
+        ))
+    }
+
     fn sorted_rows(&self, now: DateTime<Utc>) -> Vec<Row> {
+        let range = self.scope_range_utc(now);
         let mut rows: Vec<Row> = self
             .rows
             .iter()
             .filter(|r| self.show_done || !r.done)
+            .filter(|r| match range {
+                // no recorte, só o que toca o período (tarefa sem fim = instante)
+                Some((s, e)) => r.start < e && r.end.unwrap_or(r.start) >= s,
+                None => true,
+            })
             .cloned()
             .collect();
         match self.sort.as_str() {
@@ -697,6 +795,22 @@ impl TasksPage {
                 self.save_sort(cx);
             }
             ui.add_space(10.0);
+            // recorte: tudo · dia · semana · mês
+            ui.label(egui::RichText::new(tr("Ver:")).weak().small());
+            for sc in Scope::ALL {
+                let selected = self.scope == sc;
+                if ui
+                    .add(
+                        egui::Button::new(egui::RichText::new(sc.label()).small())
+                            .selected(selected),
+                    )
+                    .on_hover_text(sc.hover())
+                    .clicked()
+                {
+                    self.scope = sc;
+                }
+            }
+            ui.add_space(10.0);
             if ui::toggle(ui, &mut self.show_done).changed() {
                 self.list.loaded_at = None;
             }
@@ -788,6 +902,13 @@ impl TasksPage {
             let candidate = now_h - f64::from(hours_left);
             candidate.min(day_start)
         });
+        // Recorte (dia/semana/mês): o período ocupa a largura toda; zoom e
+        // rolagem salvos ficam intactos para quando voltar a "Tudo".
+        let scoped = self.scope.range(now_h);
+        let (zoom, view_start) = match scoped {
+            Some((s, e)) => ((tl_w / ((e - s) as f32)).max(f32::EPSILON), s),
+            None => (zoom, view_start),
+        };
 
         // ---- cabeçalho (fixo) ----
         let (header, _) =
@@ -1064,7 +1185,7 @@ impl TasksPage {
                     p.text(
                         Pos2::new(area.left() + 12.0, area.top() + 16.0),
                         Align2::LEFT_CENTER,
-                        if self.show_done { tr("Nenhuma tarefa ainda. Clique em + Nova tarefa ou peça ao agente (tasks_create).") } else { tr("Nada pendente. Ligue \"mostrar concluídas\" para ver o histórico.") },
+                        if self.scope != Scope::All { tr("Nada neste período. Clique em \"Tudo\" para ver todas as tarefas.") } else if self.show_done { tr("Nenhuma tarefa ainda. Clique em + Nova tarefa ou peça ao agente (tasks_create).") } else { tr("Nada pendente. Ligue \"mostrar concluídas\" para ver o histórico.") },
                         font,
                         pal.text_weak,
                     );
@@ -1103,6 +1224,11 @@ impl TasksPage {
             );
         }
         self.wheel_over_tl = wheel_now;
+        if scoped.is_some() {
+            // visão travada no período: nem arrastar nem zoom
+            pan_delta = 0.0;
+            zoom_at = None;
+        }
         if pan_delta != 0.0 {
             self.view_start = Some(view_start - f64::from(pan_delta / zoom));
         }
@@ -1394,6 +1520,7 @@ impl TasksPage {
             px_per_hour: self.px_per_hour,
             view_start: self.view_start,
             show_done: self.show_done,
+            scope: self.scope.as_str().into(),
         };
         if self.last_saved.as_ref() == Some(&cur) {
             self.dirty_since = None;

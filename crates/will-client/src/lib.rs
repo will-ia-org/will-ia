@@ -15,6 +15,15 @@ use will_core::Event;
 
 pub use voice::{AudioOut, VoiceLink};
 
+/// Eventos da leitura em voz em streaming ([`Api::voice_read`]).
+#[derive(Debug, Clone)]
+pub enum VoiceRead {
+    /// Taxa de amostragem do PCM que vem a seguir (Hz).
+    Rate(u32),
+    /// Pedaço de PCM16 LE mono.
+    Pcm(bytes::Bytes),
+}
+
 /// Como validar o certificado do servidor (só para `https://`).
 #[derive(Debug, Clone, Default)]
 pub struct TlsOptions {
@@ -903,6 +912,69 @@ impl Client {
             return Err(msg);
         }
         Ok((rate, bytes.to_vec()))
+    }
+    /// Leitura **literal** em streaming (`POST /api/voice/read`): o servidor
+    /// manda PCM16 LE mono conforme a OpenAI gera. `on` recebe primeiro
+    /// [`VoiceRead::Rate`] (taxa, do header `X-Sample-Rate`) e depois cada
+    /// pedaço de áudio; devolve a taxa ao terminar. `cancel` ligado interrompe
+    /// a leitura (a conexão fecha e o servidor para de pedir áudio).
+    pub async fn voice_read(
+        &self,
+        text: &str,
+        cancel: Arc<std::sync::atomic::AtomicBool>,
+        mut on: impl FnMut(VoiceRead) + Send,
+    ) -> Result<u32, String> {
+        use std::sync::atomic::Ordering;
+        let mut resp = self
+            .http
+            .post(self.url("voice/read"))
+            .bearer_auth(&self.token)
+            .timeout(Duration::from_secs(3600))
+            .json(&json!({ "text": text }))
+            .send()
+            .await
+            .map_err(|e| transport_error(&e))?;
+        let status = resp.status();
+        if !status.is_success() {
+            let bytes = resp.bytes().await.map_err(|e| e.to_string())?;
+            let text = String::from_utf8_lossy(&bytes).to_string();
+            let msg = serde_json::from_str::<Value>(&text)
+                .ok()
+                .and_then(|v| v.get("error").and_then(|e| e.as_str()).map(str::to_string))
+                .unwrap_or_else(|| format!("HTTP {status}"));
+            return Err(msg);
+        }
+        let rate = resp
+            .headers()
+            .get("x-sample-rate")
+            .and_then(|v| v.to_str().ok())
+            .and_then(|v| v.parse::<u32>().ok())
+            .unwrap_or(24_000);
+        on(VoiceRead::Rate(rate));
+        let mut got = 0usize;
+        loop {
+            if cancel.load(Ordering::Relaxed) {
+                return Err("cancelado".into());
+            }
+            match resp.chunk().await {
+                Ok(Some(b)) => {
+                    got += b.len();
+                    on(VoiceRead::Pcm(b));
+                }
+                Ok(None) => break,
+                Err(e) => {
+                    return Err(if got == 0 {
+                        transport_error(&e)
+                    } else {
+                        format!("áudio interrompido: {e}")
+                    })
+                }
+            }
+        }
+        if got < 2 {
+            return Err("o servidor não devolveu áudio".into());
+        }
+        Ok(rate)
     }
     pub async fn voice_transcripts(&self, query: &[(&str, String)]) -> ApiResult {
         self.get_q("voice/transcripts", query).await

@@ -55,15 +55,17 @@ Prefixo `whatsapp_`. Cada uma tem toggle e **política** (`auto` / `confirmar` /
 | `whatsapp_get_group` | `chat_id` | nome, descrição, participantes, admins | auto |
 | `whatsapp_download_media` | `message_id` | caminho em `inbox/whatsapp/`, mime, tamanho | auto |
 | `whatsapp_mark_read` | `chat_id` | ok | auto (toggle: enviar recibo azul ou só local) |
-| `whatsapp_send_message` | `chat_id` ou `phone`, `text`, `reply_to?` | `message_id` | **confirmar** |
-| `whatsapp_send_media` | `chat_id`, `path` (dentro da KB), `caption?` | `message_id` | **confirmar** |
+| `whatsapp_send_message` | `chat_id` ou `phone`, `text`, `reply_to?`, `mentions?[]` (só em grupo: telefone, JID ou nome) | `message_id`, `text` final, `mentions` (JIDs) | **confirmar** |
+| `whatsapp_send_media` | `chat_id`, `path` (dentro da KB), `caption?`, `mentions?[]` | `message_id` | **confirmar** |
 | `whatsapp_react` | `message_id`, `emoji` (vazio = remover) | ok | **confirmar** |
 | `whatsapp_message_status` | `message_id` (de um envio nosso) | `status: sent\|delivered\|read\|played\|error` + rótulo, `sent_at`, `error` (do `wa_outbox`, atualizado pelos recibos) | auto |
-| `whatsapp_edit_message` | `message_id` (nossa, texto), `text` | ok; índice atualizado | **confirmar** |
+| `whatsapp_edit_message` | `message_id` (nossa, texto), `text`, `mentions?[]` (só em grupo; a edição passa a notificar) | ok; índice atualizado; `text` final, `mentions` | **confirmar** |
 | `whatsapp_delete_message` | `message_id`, `for_everyone?` (padrão true; em 1:1 só mensagens nossas) | ok; sai do índice | **confirmar** |
 | `whatsapp_send_contact` | `chat_id` ou `phone`, `name` + `phones[]` (+ `org?`) **ou** `vcard` | `message_id` | **confirmar** |
 | `whatsapp_send_voice` | `chat_id` ou `phone`, `path` (áudio na KB) **ou** `text` (TTS OpenAI: voz/velocidade do "ouvir resumo"), `duration_secs?` | `message_id`, `synthesized` | **confirmar** |
 | `whatsapp_contact_info` | `contact` (JID, telefone ou nome) | `on_whatsapp`, `jid`, `phone`, `name`, `push_name`, `status` (recado), `picture_url`, `is_business`, `verified_name`, `business {description, email, website, address, business_hours}`, `devices` | auto |
+
+**Menções (`@`) em grupo — desde 0.1.22 (`mentions.rs`):** o WhatsApp só renderiza uma menção (nome em azul, notificação) quando a mensagem vai como `extendedTextMessage` com o JID da pessoa em `ContextInfo.mentionedJid` **e** o texto traz o token `@<usuário do JID>`. Grupos novos são endereçados por **LID** (`GroupMetadata.addressing_mode = lid`): JID e token precisam ser o LID do participante (`@<telefone>` vira texto solto ou "@Unknown user"); grupos antigos usam `<telefone>@s.whatsapp.net`. A ferramenta recebe `mentions` (telefone com DDI, JID ou nome do contato — nome passa por `resolve_chat_id`), pede os participantes ao backend (`WhatsAppBackend::group_members` → telefone + LID + modo), completa telefone ↔ LID pelo `lid_mappings` da sessão, escolhe o JID conforme o modo (`mentions::resolve`) e reescreve o texto (`mentions::apply`: troca `@telefone`, `@+telefone`, `@lid` ou `@Nome` pelo token certo; sem token no texto, o `@` entra no início). Quem não está no grupo recusa a mensagem inteira (`InvalidArgs`); `mentions` fora de grupo também. O resumo de aprovação mostra "· menciona: a, b" como o agente pediu; o retorno traz o `text` final e os JIDs. Mídia: o mesmo `ContextInfo` vai na legenda (imagem, vídeo, documento). Edição (`whatsapp_edit_message`): aceita `mentions` do mesmo jeito — o texto editado vai com `mentionedJid`, então uma mensagem mandada sem menção pode ganhar a menção na edição (dentro da janela de ~15 min). Backend real: `send_text`/`send_media` recebem a lista de JIDs; mock registra em `MockSent.mentions`.
 
 Notas das ferramentas de 2026-10-29 (lote 1):
 - Reagir/editar/apagar usam a **chave da mensagem** reconstruída do índice (`chat`, `id`, `from_me`, remetente em grupo) — `MessageRef` em `backend.rs`. Editar só mensagens nossas de texto; apagar para todos só as nossas (ou de outros se formos admin do grupo); "só para mim" vale para qualquer uma.

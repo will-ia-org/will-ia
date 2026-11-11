@@ -38,6 +38,24 @@ pub struct ApprovalRequest {
     pub timeout_secs: u64,
 }
 
+/// Argumentos de texto **longos** de um pedido (mensagem, corpo de e-mail,
+/// legenda…): valores string com quebra de linha ou mais de 80 caracteres que
+/// o `summary` (curto por desenho: cabe num card) não traz por inteiro. Serve
+/// para o app e o Telegram mostrarem a mensagem completa antes de aprovar.
+/// Devolve `(chave, valor)` em ordem alfabética de chave (ordem do mapa JSON).
+pub fn long_text_args(args: &serde_json::Value, summary: &str) -> Vec<(String, String)> {
+    let Some(obj) = args.as_object() else {
+        return Vec::new();
+    };
+    obj.iter()
+        .filter_map(|(k, v)| {
+            let s = v.as_str()?.trim();
+            let long = s.contains('\n') || s.chars().count() > 80;
+            (long && !summary.contains(s)).then(|| (k.clone(), s.to_string()))
+        })
+        .collect()
+}
+
 struct Pending {
     request: ApprovalRequest,
     tx: Option<oneshot::Sender<(ApprovalDecision, String)>>,
@@ -124,5 +142,28 @@ impl ApprovalManager {
             }
         }
         false
+    }
+}
+
+#[cfg(test)]
+mod long_text_tests {
+    use super::*;
+
+    #[test]
+    fn long_text_args_picks_untruncated_strings() {
+        let msg = "linha um\nlinha dois";
+        let args = serde_json::json!({
+            "chat_id": "5511@c.us",
+            "message": msg,
+            "n": 3,
+            "short": "ok",
+            "long": "x".repeat(100),
+        });
+        let got = long_text_args(&args, &format!("enviar: {msg}"));
+        assert_eq!(got, vec![("long".to_string(), "x".repeat(100))]);
+        let got = long_text_args(&args, "enviar: linha um…");
+        assert_eq!(got.len(), 2);
+        assert!(got.iter().any(|(k, v)| k == "message" && v == msg));
+        assert!(long_text_args(&serde_json::Value::Null, "").is_empty());
     }
 }

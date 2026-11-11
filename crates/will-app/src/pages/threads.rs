@@ -7,7 +7,7 @@ use crate::i18n::{tr, trf};
 use crate::service::{Loader, Service, Task};
 use crate::ui::{self, Tone};
 use serde_json::{json, Value};
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 use will_core::{EngineDelta, Event, ThreadId, ThreadStatus, ThreadSummary, TurnResult};
 
@@ -302,10 +302,11 @@ pub struct ThreadsPage {
     /// mesmo que o usuário abra outra thread enquanto o áudio é transcrito.
     dictation_for: Option<ThreadId>,
     dictation_task: Option<(ThreadId, Task<Value>)>,
-    /// "Ouvir resumo" de uma resposta: resumo → TTS → reprodução (um por vez).
+    /// "Ouvir" uma resposta (um por vez): resumo em áudio (resumo → TTS →
+    /// reprodução) ou leitura literal em streaming.
     speak: Option<SpeakJob>,
     /// Roteiros/áudios já gerados por turno (memória + disco): ouvir de novo não
-    /// refaz resumo nem TTS.
+    /// refaz resumo nem TTS. Leitura literal fica na chave `<turno>-ler`.
     speak_cache: crate::speak_cache::SpeakCache,
     /// Linhas do tempo de turnos já concluídos (id do turno → atividade), mantidas
     /// em memória para a faixa recolhida acima da resposta.
@@ -608,17 +609,45 @@ fn small_button(
     .clicked()
 }
 
-/// Etapas do "ouvir resumo": o servidor resume a resposta num roteiro falável
-/// (`POST /api/voice/summary`), sintetiza (`POST /api/voice/tts`) e o app toca.
+/// Etapas do "ouvir". Resumo em áudio: o servidor resume a resposta num
+/// roteiro falável (`POST /api/voice/summary`), sintetiza (`POST
+/// /api/voice/tts`) e o app toca. Leitura literal: `POST /api/voice/read`
+/// devolve o PCM em streaming e o app toca enquanto baixa, guardando o áudio
+/// para a próxima vez.
 enum SpeakStage {
     Summarizing(Task<Value>),
     Synthesizing(Task<(u32, Vec<u8>)>),
     Playing(crate::voice::audio::Player),
+    Streaming {
+        player: crate::voice::audio::Player,
+        /// `None` depois que a rede terminou (o player ainda esvazia a fila).
+        task: Option<Task<u32>>,
+        /// Todo o PCM recebido, para o cache.
+        buf: Arc<parking_lot::Mutex<Vec<u8>>>,
+    },
+}
+
+/// Qual botão: "resumo em áudio" (roteiro + TTS) ou "ler" (literal, streaming).
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+enum SpeakKind {
+    Summary,
+    Read,
+}
+
+impl SpeakKind {
+    /// Chave no cache de áudio.
+    fn cache_key(self, turn_id: &str) -> String {
+        match self {
+            SpeakKind::Summary => turn_id.to_string(),
+            SpeakKind::Read => format!("{turn_id}-ler"),
+        }
+    }
 }
 
 /// Leitura em andamento de uma resposta (uma por vez na página).
 struct SpeakJob {
     turn_id: String,
+    kind: SpeakKind,
     /// Roteiro devolvido pelo resumo (mostrado no hover do botão).
     summary: Option<String>,
     stage: SpeakStage,
@@ -631,19 +660,25 @@ enum SpeakState {
     Summarizing,
     Synthesizing,
     Playing,
+    /// Leitura literal: baixando e tocando ao mesmo tempo.
+    Streaming,
 }
 
 /// O que os cards precisam saber sobre o "ouvir" e o que pedem de volta.
 struct SpeakUi {
-    /// Módulo de voz pronto (chave da OpenAI configurada): mostra o botão.
+    /// Módulo de voz pronto (chave da OpenAI configurada): mostra os botões.
     enabled: bool,
-    /// Leitura em andamento: (id do turno, etapa, roteiro).
-    current: Option<(String, SpeakState, Option<String>)>,
-    /// Pedido feito neste quadro: `Some((id, Some(texto)))` = começar;
-    /// `Some((id, None))` = parar.
-    request: Option<(String, Option<String>)>,
-    /// Roteiros já gerados (cache): o botão mostra "ouvir de novo" e o texto no hover.
+    /// "Resumo em áudio" habilitado nas configurações (o "ler" independe).
+    summary_enabled: bool,
+    /// Leitura em andamento: (id do turno, botão, etapa, roteiro).
+    current: Option<(String, SpeakKind, SpeakState, Option<String>)>,
+    /// Pedido feito neste quadro: `Some((id, botão, Some(texto)))` = começar;
+    /// `Some((id, botão, None))` = parar.
+    request: Option<(String, SpeakKind, Option<String>)>,
+    /// Roteiros já gerados (cache): o botão mostra "de novo" e o texto no hover.
     cached: HashMap<String, String>,
+    /// Leituras literais já guardadas (id do turno).
+    cached_read: HashSet<String>,
 }
 
 /// Ícone "i" desenhado (círculo + letra), sem depender de glifos especiais.
@@ -901,14 +936,52 @@ impl ThreadsPage {
         }
     }
 
-    /// Avança o "ouvir resumo": resumo pronto → pede o áudio; áudio pronto →
-    /// toca no dispositivo de saída do módulo de voz; acabou → libera o botão.
+    /// Avança o "ouvir": resumo pronto → pede o áudio; áudio pronto → toca no
+    /// dispositivo de saída do módulo de voz; leitura em streaming → quando a
+    /// rede termina, fecha a fila e guarda o áudio; acabou → libera o botão.
     fn poll_speak(&mut self, cx: &mut Cx) {
         let Some(job) = &mut self.speak else {
             return;
         };
         let mut finish: Option<Option<String>> = None; // Some(err) encerra
         match &mut job.stage {
+            SpeakStage::Streaming { player, task, buf } => {
+                if let Some(t) = task.as_ref() {
+                    if let Some(r) = t.take() {
+                        *task = None;
+                        match r {
+                            Ok(rate) => {
+                                let feed = player.feed();
+                                feed.set_rate(rate);
+                                feed.finish();
+                                let pcm = buf.lock().clone();
+                                if pcm.len() >= 2 {
+                                    // guarda para ler de novo sem gastar TTS
+                                    let audio = Arc::new(crate::speak_cache::SpeakAudio {
+                                        summary: String::new(),
+                                        rate,
+                                        pcm,
+                                    });
+                                    self.speak_cache
+                                        .put(&job.kind.cache_key(&job.turn_id), audio);
+                                }
+                            }
+                            Err(e) => {
+                                if player.feed().pushed_secs() > 0.0 {
+                                    // já tocou parte: termina o que tem e avisa
+                                    player.feed().finish();
+                                    cx.toasts.error(trf("Ler em voz alta: {}", &[&e]));
+                                } else {
+                                    finish = Some(Some(e));
+                                }
+                            }
+                        }
+                    }
+                }
+                if finish.is_none() && task.is_none() && !player.playing() {
+                    finish = Some(None);
+                }
+            }
             SpeakStage::Summarizing(t) => {
                 if let Some(r) = t.take() {
                     match r {
@@ -959,9 +1032,13 @@ impl ThreadsPage {
             }
         }
         if let Some(err) = finish {
+            let kind = job.kind;
             self.speak = None;
             if let Some(e) = err {
-                cx.toasts.error(trf("Ouvir resumo: {}", &[&e]));
+                cx.toasts.error(match kind {
+                    SpeakKind::Summary => trf("Ouvir resumo: {}", &[&e]),
+                    SpeakKind::Read => trf("Ler em voz alta: {}", &[&e]),
+                });
             }
         }
     }
@@ -1656,20 +1733,21 @@ impl ThreadsPage {
         let has_live = live.is_some();
         let dark = ui.visuals().dark_mode;
         let pal = ui::palette(dark);
-        // "Ouvir resumo": só com o módulo de voz pronto (mesma regra do "Falar").
+        // "Ouvir": só com o módulo de voz pronto (mesma regra do "Falar").
         let mut speak_ui = SpeakUi {
-            enabled: cx.snap.settings.realtime.summary.enabled
-                && matches!(
-                    cx.snap.modules.get(&will_core::Module::Realtime),
-                    Some(will_core::ModuleStatus::Running)
-                ),
+            enabled: matches!(
+                cx.snap.modules.get(&will_core::Module::Realtime),
+                Some(will_core::ModuleStatus::Running)
+            ),
+            summary_enabled: cx.snap.settings.realtime.summary.enabled,
             current: self.speak.as_ref().map(|j| {
                 let st = match j.stage {
                     SpeakStage::Summarizing(_) => SpeakState::Summarizing,
                     SpeakStage::Synthesizing(_) => SpeakState::Synthesizing,
                     SpeakStage::Playing(_) => SpeakState::Playing,
+                    SpeakStage::Streaming { .. } => SpeakState::Streaming,
                 };
-                (j.turn_id.clone(), st, j.summary.clone())
+                (j.turn_id.clone(), j.kind, st, j.summary.clone())
             }),
             request: None,
             cached: turns
@@ -1677,6 +1755,15 @@ impl ThreadsPage {
                 .filter_map(|t| {
                     let id = ui::s(t, "id");
                     self.speak_cache.summary(&id).map(|s| (id, s))
+                })
+                .collect(),
+            cached_read: turns
+                .iter()
+                .filter_map(|t| {
+                    let id = ui::s(t, "id");
+                    self.speak_cache
+                        .has(&SpeakKind::Read.cache_key(&id))
+                        .then_some(id)
                 })
                 .collect(),
         };
@@ -1838,31 +1925,73 @@ impl ThreadsPage {
             self.echo_action(t.id, a);
         }
 
-        // "Ouvir resumo": começar (resumo no servidor) ou parar (solta o player).
-        if let Some((turn_id, text)) = speak_ui.request.take() {
+        // "Ouvir": começar (resumo no servidor / leitura em streaming) ou parar
+        // (solta o player; na leitura, o produtor é cancelado junto).
+        if let Some((turn_id, kind, text)) = speak_ui.request.take() {
             match text {
                 Some(text) => {
+                    let dev = cx.snap.settings.realtime.output_device.clone();
+                    let err_label = |e: &str| match kind {
+                        SpeakKind::Summary => trf("Ouvir resumo: {}", &[&e]),
+                        SpeakKind::Read => trf("Ler em voz alta: {}", &[&e]),
+                    };
                     // Já gerado antes (memória/disco): toca direto, sem resumo nem TTS.
-                    if let Some(audio) = self.speak_cache.get(&turn_id) {
-                        let dev = cx.snap.settings.realtime.output_device.clone();
+                    if let Some(audio) = self.speak_cache.get(&kind.cache_key(&turn_id)) {
                         let p = crate::voice::audio::Player::start(
                             &audio.pcm,
                             audio.rate,
                             dev.as_deref(),
                         );
                         match &p.error {
-                            Some(e) => cx.toasts.error(trf("Ouvir resumo: {}", &[e])),
+                            Some(e) => cx.toasts.error(err_label(e)),
                             None => {
                                 self.speak = Some(SpeakJob {
                                     turn_id,
-                                    summary: Some(audio.summary.clone()),
+                                    kind,
+                                    summary: Some(audio.summary.clone()).filter(|s| !s.is_empty()),
                                     stage: SpeakStage::Playing(p),
                                 });
                             }
                         }
+                    } else if kind == SpeakKind::Read {
+                        // Leitura literal: abre a saída já e vai empurrando o PCM
+                        // conforme chega do servidor (toca em segundos).
+                        let p = crate::voice::audio::Player::start_stream(
+                            crate::voice::audio::TARGET_RATE,
+                            dev.as_deref(),
+                        );
+                        if let Some(e) = &p.error {
+                            cx.toasts.error(err_label(e));
+                        } else {
+                            let feed = p.feed();
+                            let cancel = feed.cancel_flag();
+                            let buf: Arc<parking_lot::Mutex<Vec<u8>>> = Arc::default();
+                            let buf2 = buf.clone();
+                            let task = cx.svc.call(move |c| async move {
+                                c.voice_read(&text, cancel, move |ev| match ev {
+                                    will_client::VoiceRead::Rate(r) => feed.set_rate(r),
+                                    will_client::VoiceRead::Pcm(b) => {
+                                        feed.push(&b);
+                                        buf2.lock().extend_from_slice(&b);
+                                    }
+                                })
+                                .await
+                            });
+                            self.speak = Some(SpeakJob {
+                                turn_id,
+                                kind,
+                                summary: None,
+                                stage: SpeakStage::Streaming {
+                                    player: p,
+                                    task: Some(task),
+                                    buf,
+                                },
+                            });
+                        }
                     } else {
                         self.speak = Some(SpeakJob {
                             turn_id,
+                            kind,
                             summary: None,
                             stage: SpeakStage::Summarizing(
                                 cx.svc
@@ -2638,56 +2767,82 @@ fn assistant_card(
                                 ui.ctx().copy_text(text.to_string());
                                 toasts.success(tr("Resposta copiada."));
                             }
-                            // ouvir: resumo falável + TTS (só com o módulo de voz pronto)
+                            // ouvir (só com o módulo de voz pronto): "ler" = literal em
+                            // streaming; "resumo em áudio" = roteiro falável + TTS
                             if speak.enabled {
                                 let turn_id = ui::s(turn, "id");
                                 let mine = speak
                                     .current
                                     .as_ref()
-                                    .filter(|(id, _, _)| *id == turn_id);
-                                let state = mine.map(|(_, st, _)| *st).unwrap_or(SpeakState::Idle);
-                                let summary = mine.and_then(|(_, _, s)| s.clone());
-                                let cached = speak.cached.get(&turn_id);
-                                let (label, hover): (String, String) = match state {
-                                    SpeakState::Idle => match cached {
-                                        Some(s) => (
-                                            tr("ouvir de novo").into(),
-                                            format!("{}\n\n{}", tr("Áudio já gerado: toca na hora, sem gastar tokens."), s),
-                                        ),
-                                        None => (
-                                            tr("ouvir").into(),
-                                            tr("Ouvir um resumo falado desta resposta (resumo + voz pela OpenAI).").into(),
-                                        ),
-                                    },
-                                    SpeakState::Summarizing => (
-                                        tr("resumindo…").into(),
-                                        tr("Preparando um roteiro fluido para ouvir… (clique para cancelar)").into(),
-                                    ),
-                                    SpeakState::Synthesizing => (
-                                        tr("gerando áudio…").into(),
-                                        summary.clone().unwrap_or_else(|| tr("Gerando a voz… (clique para cancelar)").into()),
-                                    ),
-                                    SpeakState::Playing => (
-                                        tr("parar").into(),
-                                        summary.clone().unwrap_or_else(|| tr("Tocando o resumo (clique para parar)").into()),
-                                    ),
-                                };
-                                if state != SpeakState::Idle {
+                                    .filter(|(id, _, _, _)| *id == turn_id);
+                                if mine.is_some() {
                                     ui.ctx().request_repaint_after(
                                         std::time::Duration::from_millis(250),
                                     );
                                 }
-                                // Só uma leitura por vez: outro card em andamento desabilita este.
-                                let other_busy = speak.current.is_some() && mine.is_none();
-                                ui.add_enabled_ui(!other_busy, |ui| {
-                                    if small_button(ui, pal, &label, &hover, state == SpeakState::Playing) {
-                                        speak.request = Some(if state == SpeakState::Idle {
-                                            (turn_id.clone(), Some(text.to_string()))
-                                        } else {
-                                            (turn_id.clone(), None)
-                                        });
-                                    }
-                                });
+                                let kinds: &[SpeakKind] = if speak.summary_enabled {
+                                    &[SpeakKind::Read, SpeakKind::Summary]
+                                } else {
+                                    &[SpeakKind::Read]
+                                };
+                                for kind in kinds {
+                                    let mine_k = mine.filter(|(_, k, _, _)| k == kind);
+                                    let state = mine_k.map(|(_, _, st, _)| *st).unwrap_or(SpeakState::Idle);
+                                    let summary = mine_k.and_then(|(_, _, _, s)| s.clone());
+                                    let (label, hover): (String, String) = match (kind, state) {
+                                        (SpeakKind::Read, SpeakState::Idle) => {
+                                            if speak.cached_read.contains(&turn_id) {
+                                                (
+                                                    tr("ler de novo").into(),
+                                                    tr("Áudio já gerado: toca na hora, sem gastar tokens.").into(),
+                                                )
+                                            } else {
+                                                (
+                                                    tr("ler").into(),
+                                                    tr("Ler esta resposta em voz alta, palavra por palavra (sem resumir). Começa a tocar em segundos e o áudio fica guardado.").into(),
+                                                )
+                                            }
+                                        }
+                                        (SpeakKind::Read, _) => (
+                                            tr("parar").into(),
+                                            tr("Lendo a resposta (clique para parar)").into(),
+                                        ),
+                                        (SpeakKind::Summary, SpeakState::Idle) => match speak.cached.get(&turn_id) {
+                                            Some(s) => (
+                                                tr("resumo de novo").into(),
+                                                format!("{}\n\n{}", tr("Áudio já gerado: toca na hora, sem gastar tokens."), s),
+                                            ),
+                                            None => (
+                                                tr("resumo em áudio").into(),
+                                                tr("Ouvir um resumo falado desta resposta (resumo + voz pela OpenAI).").into(),
+                                            ),
+                                        },
+                                        (SpeakKind::Summary, SpeakState::Summarizing) => (
+                                            tr("resumindo…").into(),
+                                            tr("Preparando um roteiro fluido para ouvir… (clique para cancelar)").into(),
+                                        ),
+                                        (SpeakKind::Summary, SpeakState::Synthesizing) => (
+                                            tr("gerando áudio…").into(),
+                                            summary.clone().unwrap_or_else(|| tr("Gerando a voz… (clique para cancelar)").into()),
+                                        ),
+                                        (SpeakKind::Summary, _) => (
+                                            tr("parar").into(),
+                                            summary.clone().unwrap_or_else(|| tr("Tocando o resumo (clique para parar)").into()),
+                                        ),
+                                    };
+                                    // Só uma leitura por vez: qualquer outra em andamento desabilita este.
+                                    let other_busy = speak.current.is_some() && mine_k.is_none();
+                                    let live = matches!(state, SpeakState::Playing | SpeakState::Streaming);
+                                    ui.add_enabled_ui(!other_busy, |ui| {
+                                        if small_button(ui, pal, &label, &hover, live) {
+                                            speak.request = Some(if state == SpeakState::Idle {
+                                                (turn_id.clone(), *kind, Some(text.to_string()))
+                                            } else {
+                                                (turn_id.clone(), *kind, None)
+                                            });
+                                        }
+                                    });
+                                }
                             }
                         });
                     });

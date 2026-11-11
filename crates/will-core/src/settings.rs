@@ -270,7 +270,8 @@ pub struct RealtimeSettings {
     pub summary: SpeakSummarySettings,
 }
 
-/// "Ouvir resumo" (botão "ouvir" nas respostas da thread): a resposta é
+/// "Resumo em áudio" (botão nas respostas da thread; o botão "ler" literal usa
+/// só `tts_model`/`voice`/`speed` daqui e não depende de `enabled`): a resposta é
 /// resumida num roteiro fluido para ser ouvido e sintetizada em voz. Usa a
 /// mesma chave da OpenAI do módulo de voz; só aparece com o módulo ligado.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]

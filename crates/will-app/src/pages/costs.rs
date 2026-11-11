@@ -20,12 +20,13 @@ pub struct CostsPage {
 
 /// Fontes gravadas em `ai_costs` pelo código (valor → rótulo), na ordem do filtro.
 /// Quem grava: `will-realtime` (`voice`), `orchestrator` (`claude`,
-/// `thread_summary`), `api/integrations` (`voice_stt`, `voice_summary`, `voice_tts`).
-/// `telegram_*` ficam por compatibilidade com registros antigos.
-const KNOWN_SOURCES: [(&str, &str); 8] = [
+/// `thread_summary`), `api/integrations` (`voice_stt`, `voice_summary`, `voice_tts`,
+/// `voice_read`). `telegram_*` ficam por compatibilidade com registros antigos.
+const KNOWN_SOURCES: [(&str, &str); 9] = [
     ("voice", "Voz (tempo real)"),
     ("voice_stt", "Voz · transcrição"),
     ("voice_tts", "Voz · áudio (TTS)"),
+    ("voice_read", "Voz · leitura (TTS)"),
     ("voice_summary", "Voz · resumo"),
     ("claude", "Claude Code"),
     ("thread_summary", "Resumo de thread"),

@@ -261,6 +261,26 @@ impl OpenAi {
             .await
     }
 
+    /// Como [`synthesize_pcm`](Self::synthesize_pcm), mas devolve o áudio
+    /// **conforme a OpenAI gera** (PCM16 LE mono a [`TTS_PCM_RATE`], em
+    /// pedaços): quem consome pode começar a tocar antes do fim. Erros de
+    /// parâmetro continuam tratados antes do primeiro byte; erro de rede no
+    /// meio chega como item `Err`.
+    pub async fn synthesize_pcm_stream(
+        &self,
+        script: &str,
+        model: &str,
+        voice: &str,
+        speed: f32,
+    ) -> Result<impl futures::Stream<Item = Result<bytes::Bytes, String>>, String> {
+        use futures::TryStreamExt;
+        let body = tts_body(script, model, voice, speed, "pcm");
+        let res = self
+            .post_tolerant_response(&format!("{OPENAI}/audio/speech"), body, "tts")
+            .await?;
+        Ok(res.bytes_stream().map_err(|e| format!("tts: {e}")))
+    }
+
     /// `POST /audio/speech` no formato pedido (`opus`, `pcm`, `mp3`, `wav`…).
     async fn synthesize_format(
         &self,
@@ -270,26 +290,7 @@ impl OpenAi {
         speed: f32,
         format: &str,
     ) -> Result<Vec<u8>, String> {
-        let input: String = script.chars().take(4000).collect();
-        let model = model.trim();
-        let model = if model.is_empty() { TTS_MODEL } else { model };
-        let speed = if speed.is_finite() {
-            speed.clamp(0.25, 4.0)
-        } else {
-            1.0
-        };
-        let mut body = serde_json::json!({
-            "model": model,
-            "voice": voice,
-            "input": input,
-            "response_format": format,
-            "speed": speed,
-        });
-        // `instructions` só existe nos modelos gpt-4o-*-tts; `tts-1`/`tts-1-hd`
-        // recusam. Em dúvida, manda e deixa o `post_tolerant` remover.
-        if !model.starts_with("tts-1") {
-            body["instructions"] = serde_json::json!(TTS_INSTRUCTIONS);
-        }
+        let body = tts_body(script, model, voice, speed, format);
         let bytes = self
             .post_tolerant_bytes(&format!("{OPENAI}/audio/speech"), body, "tts")
             .await?;
@@ -315,9 +316,32 @@ impl OpenAi {
     async fn post_tolerant_bytes(
         &self,
         url: &str,
-        mut body: serde_json::Value,
+        body: serde_json::Value,
         what: &str,
     ) -> Result<Vec<u8>, String> {
+        let started = Instant::now();
+        let model = body["model"].as_str().unwrap_or("").to_string();
+        let res = self.post_tolerant_response(url, body, what).await?;
+        let bytes = res.bytes().await.map_err(|e| e.to_string())?;
+        tracing::debug!(
+            what,
+            model,
+            bytes = bytes.len(),
+            duration_ms = started.elapsed().as_millis() as u64,
+            "OpenAI: corpo recebido"
+        );
+        Ok(bytes.to_vec())
+    }
+
+    /// Mesma tolerância de [`post_tolerant`](Self::post_tolerant), devolvendo a
+    /// resposta **ainda aberta** (status 2xx garantido) para quem quer ler o
+    /// corpo em streaming.
+    async fn post_tolerant_response(
+        &self,
+        url: &str,
+        mut body: serde_json::Value,
+        what: &str,
+    ) -> Result<reqwest::Response, String> {
         let mut dropped: Vec<String> = Vec::new();
         let started = Instant::now();
         loop {
@@ -333,13 +357,11 @@ impl OpenAi {
                     format!("{what}: {e}")
                 })?;
             let status = res.status();
-            let bytes = res.bytes().await.map_err(|e| e.to_string())?;
             if status.is_success() {
                 tracing::debug!(
                     what,
                     model = body["model"].as_str().unwrap_or(""),
                     http_status = status.as_u16(),
-                    bytes = bytes.len(),
                     duration_ms = started.elapsed().as_millis() as u64,
                     "OpenAI: ok"
                 );
@@ -351,8 +373,9 @@ impl OpenAi {
                         "OpenAI: parâmetros não suportados pelo modelo foram removidos"
                     );
                 }
-                return Ok(bytes.to_vec());
+                return Ok(res);
             }
+            let bytes = res.bytes().await.map_err(|e| e.to_string())?;
             let text = String::from_utf8_lossy(&bytes);
             if status.as_u16() == 400 && dropped.len() < MAX_PARAM_RETRIES {
                 if let Some(param) = rejected_param(&text) {
@@ -395,6 +418,32 @@ impl OpenAi {
         let ogg = self.synthesize(&script, voice, speed).await?;
         Ok(if ogg.is_empty() { None } else { Some(ogg) })
     }
+}
+
+/// Corpo de `POST /audio/speech` (texto limitado ao teto da API, velocidade
+/// saneada, `instructions` só nas famílias que aceitam).
+fn tts_body(script: &str, model: &str, voice: &str, speed: f32, format: &str) -> serde_json::Value {
+    let input: String = script.chars().take(4000).collect();
+    let model = model.trim();
+    let model = if model.is_empty() { TTS_MODEL } else { model };
+    let speed = if speed.is_finite() {
+        speed.clamp(0.25, 4.0)
+    } else {
+        1.0
+    };
+    let mut body = serde_json::json!({
+        "model": model,
+        "voice": voice,
+        "input": input,
+        "response_format": format,
+        "speed": speed,
+    });
+    // `instructions` só existe nos modelos gpt-4o-*-tts; `tts-1`/`tts-1-hd`
+    // recusam. Em dúvida, manda e deixa o `post_tolerant` remover.
+    if !model.starts_with("tts-1") {
+        body["instructions"] = serde_json::json!(TTS_INSTRUCTIONS);
+    }
+    body
 }
 
 fn snippet(s: &str) -> String {

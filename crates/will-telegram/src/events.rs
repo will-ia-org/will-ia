@@ -213,11 +213,7 @@ impl TelegramModule {
             tracing::warn!(approval_id = %approval.id, thread_id = ?approval.thread_id, "aprovação sem destino no Telegram");
             return;
         };
-        let text = format!(
-            "🔐 <b>Aprovação</b>\n{}\n<i>ferramenta: {}</i>",
-            escape_html(&approval.summary),
-            escape_html(&approval.tool)
-        );
+        let text = approval_notice(&approval);
         let keyboard = InlineKeyboardMarkup::new(vec![vec![
             InlineKeyboardButton::callback("✅ Aprovar", format!("ap:{}:y", approval.id)),
             InlineKeyboardButton::callback("❌ Negar", format!("ap:{}:n", approval.id)),
@@ -244,5 +240,99 @@ impl TelegramModule {
         }
         .instrument(span)
         .await
+    }
+}
+
+/// Texto do pedido de aprovação no Telegram: resumo + **conteúdo completo**
+/// dos argumentos de texto longos (mensagem, corpo, legenda…) em blocos de
+/// citação expansíveis, para dar para ler tudo antes de aprovar. Cabe numa
+/// mensagem só (teclado inline exige): acima de [`crate::text::TELEGRAM_MAX`]
+/// o último bloco é cortado com "…" (o app mostra o inteiro).
+fn approval_notice(approval: &will_core::ApprovalRequest) -> String {
+    const BUDGET: usize = crate::text::TELEGRAM_MAX - 96;
+    let mut text = format!(
+        "🔐 <b>Aprovação</b>\n{}\n<i>ferramenta: {}</i>",
+        escape_html(&approval.summary),
+        escape_html(&approval.tool)
+    );
+    for (key, value) in
+        will_core::approvals::long_text_args(&approval.args_redacted, &approval.summary)
+    {
+        let head = format!("\n\n📝 <b>{}</b>\n", escape_html(&key));
+        let open = "<blockquote expandable>";
+        let close = "</blockquote>";
+        let fixed = text.len() + head.len() + open.len() + close.len();
+        if fixed + 40 > BUDGET {
+            break;
+        }
+        let mut body = escape_html(&value);
+        let mut cut = false;
+        let mut keep = value.chars().count();
+        while fixed + body.len() > BUDGET && keep > 0 {
+            // corta no texto cru (antes do escape) para não partir uma entidade;
+            // `keep` só diminui, então o laço termina
+            keep = keep.saturating_sub((fixed + body.len() - BUDGET).max(16));
+            let raw: String = value.chars().take(keep).collect();
+            body = format!("{}…", escape_html(raw.trim_end()));
+            cut = true;
+        }
+        text.push_str(&head);
+        text.push_str(open);
+        text.push_str(&body);
+        text.push_str(close);
+        if cut {
+            text.push_str("\n<i>(cortado aqui; o app mostra o texto inteiro)</i>");
+            break;
+        }
+    }
+    text
+}
+
+#[cfg(test)]
+mod approval_notice_tests {
+    use super::*;
+
+    fn req(summary: &str, args: serde_json::Value) -> will_core::ApprovalRequest {
+        will_core::ApprovalRequest {
+            id: will_core::ApprovalId::new(),
+            requested_at: chrono::Utc::now(),
+            thread_id: None,
+            tool: "whatsapp_send_message".into(),
+            summary: summary.into(),
+            args_redacted: args,
+            timeout_secs: 60,
+        }
+    }
+
+    #[test]
+    fn notice_includes_full_message() {
+        let msg = "Oi <Ana>,\n".to_string() + &"frase longa ".repeat(30);
+        let r = req(
+            "whatsapp_send_message para Ana: Oi <Ana>, frase longa…",
+            serde_json::json!({ "chat_id": "1@c.us", "message": msg }),
+        );
+        let t = approval_notice(&r);
+        assert!(t.starts_with("🔐 <b>Aprovação</b>\n"));
+        assert!(t.contains("📝 <b>message</b>\n<blockquote expandable>Oi &lt;Ana&gt;,\n"));
+        assert!(t.ends_with("</blockquote>"));
+        assert!(t.len() <= crate::text::TELEGRAM_MAX);
+    }
+
+    #[test]
+    fn notice_cuts_to_fit_one_message() {
+        let msg = "palavra ".repeat(2000);
+        let r = req("resumo", serde_json::json!({ "message": msg }));
+        let t = approval_notice(&r);
+        assert!(t.len() <= crate::text::TELEGRAM_MAX, "{}", t.len());
+        assert!(t.contains("…</blockquote>\n<i>(cortado aqui"));
+    }
+
+    #[test]
+    fn notice_without_long_args_is_plain() {
+        let r = req(
+            "resumo",
+            serde_json::json!({ "chat_id": "1@c.us", "message": "curta" }),
+        );
+        assert!(!approval_notice(&r).contains("blockquote"));
     }
 }

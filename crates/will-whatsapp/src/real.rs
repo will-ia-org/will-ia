@@ -7,7 +7,7 @@
 
 use crate::backend::{
     ext_for_mime, is_group_jid, media_class, mime_for_path, phone_from_jid, BackendEvent,
-    IncomingMessage, MessageRef, WhatsAppBackend,
+    GroupAddressing, GroupMember, GroupMembers, IncomingMessage, MessageRef, WhatsAppBackend,
 };
 use base64::prelude::*;
 use chrono::{DateTime, Utc};
@@ -244,6 +244,7 @@ impl WhatsAppBackend for RealBackend {
         chat_jid: &str,
         text: &str,
         quote_message_id: Option<&str>,
+        mentions: &[String],
     ) -> Result<String, String> {
         let client = self.connected_client()?;
         let jid = Jid::from_str(chat_jid).map_err(|e| format!("JID inválido {chat_jid}: {e}"))?;
@@ -260,14 +261,27 @@ impl WhatsAppBackend for RealBackend {
         });
         let message = match quoted {
             Some((qid, qchat, qsender, qmsg)) => {
-                let ctx = build_quote_context_with_info(qid, &qsender, &qchat, &jid, &qmsg);
+                let mut ctx = build_quote_context_with_info(qid, &qsender, &qchat, &jid, &qmsg);
+                ctx.mentioned_jid = mentions.to_vec();
                 wa::Message::text_with_context(text, ctx)
             }
             None => {
                 if quote_message_id.is_some() {
                     tracing::debug!(account_id = %self.shared.account_id, "reply_to fora do cache; enviando sem citação");
                 }
-                wa::Message::text(text)
+                if mentions.is_empty() {
+                    wa::Message::text(text)
+                } else {
+                    // menção só é renderizada com o JID em `mentionedJid`
+                    // (a mensagem vira `extendedTextMessage`)
+                    wa::Message::text_with_context(
+                        text,
+                        wa::ContextInfo {
+                            mentioned_jid: mentions.to_vec(),
+                            ..Default::default()
+                        },
+                    )
+                }
             }
         };
         let res = client
@@ -282,6 +296,7 @@ impl WhatsAppBackend for RealBackend {
         chat_jid: &str,
         path: &Path,
         caption: Option<&str>,
+        mentions: &[String],
     ) -> Result<String, String> {
         let client = self.connected_client()?;
         let jid = Jid::from_str(chat_jid).map_err(|e| format!("JID inválido {chat_jid}: {e}"))?;
@@ -308,12 +323,20 @@ impl WhatsAppBackend for RealBackend {
             })?;
         tracing::debug!(account_id = %self.shared.account_id, bytes, class, duration_ms = started.elapsed().as_millis() as u64, "mídia enviada ao CDN");
         let caption = caption.map(str::to_string);
+        // menções na legenda: mesmo ContextInfo do texto
+        let context_info = (!mentions.is_empty()).then(|| {
+            Box::new(wa::ContextInfo {
+                mentioned_jid: mentions.to_vec(),
+                ..Default::default()
+            })
+        });
         let message = match class {
             "image" => image_message(
                 upload,
                 ImageOptions {
                     caption,
                     mimetype: Some(mime),
+                    context_info,
                     ..Default::default()
                 },
             ),
@@ -322,6 +345,7 @@ impl WhatsAppBackend for RealBackend {
                 VideoOptions {
                     caption,
                     mimetype: Some(mime),
+                    context_info,
                     ..Default::default()
                 },
             ),
@@ -339,6 +363,7 @@ impl WhatsAppBackend for RealBackend {
                     file_name: file_name.clone(),
                     title: file_name,
                     caption,
+                    context_info,
                     ..Default::default()
                 },
             ),
@@ -430,6 +455,45 @@ impl WhatsAppBackend for RealBackend {
             .map_err(|e| e.to_string())
     }
 
+    async fn group_members(&self, jid: &str) -> Result<GroupMembers, String> {
+        let client = self.connected_client()?;
+        let gjid = Jid::from_str(jid).map_err(|e| format!("JID inválido {jid}: {e}"))?;
+        let meta = client
+            .groups()
+            .get_metadata(&gjid)
+            .await
+            .map_err(|e| e.to_string())?;
+        let addressing = match meta.addressing_mode {
+            whatsapp_rust::wacore::types::message::AddressingMode::Lid => GroupAddressing::Lid,
+            _ => GroupAddressing::Phone,
+        };
+        let members = meta
+            .participants
+            .iter()
+            .map(|p| {
+                // `jid` é o telefone OU o LID; `phone_number`/`lid` trazem o outro
+                let (mut phone_jid, mut lid_jid) = (
+                    p.phone_number.as_ref().map(Jid::to_non_ad_string),
+                    p.lid.as_ref().map(Jid::to_non_ad_string),
+                );
+                if p.jid.is_lid() {
+                    lid_jid.get_or_insert_with(|| p.jid.to_non_ad_string());
+                } else {
+                    phone_jid.get_or_insert_with(|| p.jid.to_non_ad_string());
+                }
+                GroupMember {
+                    phone_jid,
+                    lid_jid,
+                    is_admin: p.is_admin(),
+                }
+            })
+            .collect();
+        Ok(GroupMembers {
+            addressing,
+            members,
+        })
+    }
+
     async fn fetch_group(&self, jid: &str) -> Result<Value, String> {
         let client = self.connected_client()?;
         let gjid = Jid::from_str(jid).map_err(|e| format!("JID inválido {jid}: {e}"))?;
@@ -485,11 +549,27 @@ impl WhatsAppBackend for RealBackend {
             .map_err(|e| e.to_string())
     }
 
-    async fn edit_message(&self, msg: &MessageRef, new_text: &str) -> Result<(), String> {
+    async fn edit_message(
+        &self,
+        msg: &MessageRef,
+        new_text: &str,
+        mentions: &[String],
+    ) -> Result<(), String> {
         let client = self.connected_client()?;
         let jid = parse_jid(&msg.chat_jid)?;
+        let message = if mentions.is_empty() {
+            wa::Message::text(new_text)
+        } else {
+            wa::Message::text_with_context(
+                new_text,
+                wa::ContextInfo {
+                    mentioned_jid: mentions.to_vec(),
+                    ..Default::default()
+                },
+            )
+        };
         client
-            .edit_message(jid, msg.message_id.clone(), wa::Message::text(new_text))
+            .edit_message(jid, msg.message_id.clone(), message)
             .await
             .map(|_| ())
             .map_err(|e| e.to_string())

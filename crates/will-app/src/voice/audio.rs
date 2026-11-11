@@ -770,54 +770,170 @@ pub fn wav_pcm16_mono(samples: &[i16], rate: u32) -> Vec<u8> {
     w
 }
 
-/// Reprodução única de um trecho PCM16 LE mono (o "ouvir resumo" da thread):
-/// abre um stream de saída, reamostra para a taxa do dispositivo e termina
-/// sozinho quando o áudio acaba. Soltar o valor interrompe a reprodução.
+/// Alimentação de um [`Player`] em streaming: handle `Send + Clone` para a
+/// tarefa de rede empurrar PCM16 enquanto a GUI segue; `finish()` avisa que
+/// não vem mais nada (o player encerra sozinho quando a fila esvazia).
+/// Fila de amostras + byte ímpar pendente: os pedaços da rede têm tamanho
+/// arbitrário, então um sample PCM16 pode chegar partido entre dois pedaços.
+#[derive(Default)]
+struct FeedQueue {
+    samples: VecDeque<f32>,
+    odd: Option<u8>,
+}
+
+/// Reserva para voltar a tocar depois que a fila secou no meio (rede mais
+/// lenta que o tempo real): maior que a inicial para não picotar.
+const REBUFFER_MS: u64 = 600;
+
+#[derive(Clone)]
+pub struct Feed {
+    queue: Arc<Mutex<FeedQueue>>,
+    /// Taxa do PCM que entra (Hz); pode ser definida antes do primeiro `push`.
+    rate: Arc<AtomicU32>,
+    /// Produtor terminou.
+    ended: Arc<AtomicBool>,
+    /// Cancelado pela GUI (o produtor para de ler a rede).
+    cancelled: Arc<AtomicBool>,
+    /// Amostras já empurradas (para o teto de duração) e quando acabou.
+    pushed: Arc<AtomicU64>,
+    finished_at: Arc<Mutex<Option<Instant>>>,
+}
+
+impl Feed {
+    fn new(rate: u32) -> Self {
+        Self {
+            queue: Arc::new(Mutex::new(FeedQueue::default())),
+            rate: Arc::new(AtomicU32::new(rate.max(1))),
+            ended: Arc::new(AtomicBool::new(false)),
+            cancelled: Arc::new(AtomicBool::new(false)),
+            pushed: Arc::new(AtomicU64::new(0)),
+            finished_at: Arc::new(Mutex::new(None)),
+        }
+    }
+    /// Taxa do PCM (só faz efeito antes da primeira amostra tocar).
+    pub fn set_rate(&self, rate: u32) {
+        self.rate.store(rate.max(1), Ordering::Relaxed);
+    }
+    pub fn rate(&self) -> u32 {
+        self.rate.load(Ordering::Relaxed)
+    }
+    /// Empurra PCM16 LE mono para a fila de reprodução. Pedaço de tamanho
+    /// ímpar deixa o último byte guardado para casar com o próximo pedaço (sem
+    /// isso o alinhamento inverte e o resto vira chiado).
+    pub fn push(&self, pcm16_le: &[u8]) {
+        let mut q = self.queue.lock();
+        let mut n = 0u64;
+        let mut bytes = pcm16_le;
+        if let Some(lo) = q.odd.take() {
+            if let Some((&hi, rest)) = bytes.split_first() {
+                q.samples
+                    .push_back(i16::from_le_bytes([lo, hi]) as f32 / 32768.0);
+                n += 1;
+                bytes = rest;
+            } else {
+                q.odd = Some(lo);
+                return;
+            }
+        }
+        let (pairs, rest) = bytes.as_chunks::<2>();
+        for s in pairs {
+            q.samples
+                .push_back(i16::from_le_bytes([s[0], s[1]]) as f32 / 32768.0);
+            n += 1;
+        }
+        if let [b] = rest {
+            q.odd = Some(*b);
+        }
+        self.pushed.fetch_add(n, Ordering::Relaxed);
+    }
+    /// Não vem mais áudio: o player termina quando tocar o que resta.
+    pub fn finish(&self) {
+        if !self.ended.swap(true, Ordering::Relaxed) {
+            *self.finished_at.lock() = Some(Instant::now());
+        }
+    }
+    /// Sinal de cancelamento para quem produz (ver [`Player`]: cai ao soltar).
+    pub fn cancel_flag(&self) -> Arc<AtomicBool> {
+        self.cancelled.clone()
+    }
+    /// Segundos de áudio já empurrados.
+    pub fn pushed_secs(&self) -> f32 {
+        self.pushed.load(Ordering::Relaxed) as f32 / self.rate() as f32
+    }
+}
+
+/// Reprodução de PCM16 LE mono (o "ouvir" da thread): abre um stream de
+/// saída, reamostra para a taxa do dispositivo e termina sozinho quando o
+/// áudio acaba. Pode nascer com o áudio inteiro ([`Player::start`]) ou ser
+/// alimentado aos poucos ([`Player::start_stream`] + [`Feed`]). Soltar o
+/// valor interrompe a reprodução e cancela o produtor.
 pub struct Player {
     _stream: Option<cpal::Stream>,
     done: Arc<AtomicBool>,
     pub error: Option<String>,
-    started: Instant,
-    total_secs: f32,
+    feed: Feed,
 }
 
 impl Player {
+    /// Toca um trecho completo (o mesmo que abrir em streaming e empurrar tudo).
     pub fn start(pcm16_le: &[u8], src_rate: u32, output_name: Option<&str>) -> Self {
+        if pcm16_le.len() < 2 {
+            let feed = Feed::new(src_rate);
+            feed.finish();
+            return Self {
+                _stream: None,
+                done: Arc::new(AtomicBool::new(true)),
+                error: Some(tr("áudio vazio").into()),
+                feed,
+            };
+        }
+        let p = Self::start_stream(src_rate, output_name);
+        if p.error.is_none() {
+            p.feed.push(pcm16_le);
+        }
+        p.feed.finish();
+        p
+    }
+
+    /// Abre a saída e espera áudio pelo [`Feed`]: toca assim que houver
+    /// [`PREBUFFER_MS`] na fila (ou o produtor terminar) e termina quando a
+    /// fila esvaziar depois de `finish()`.
+    pub fn start_stream(src_rate: u32, output_name: Option<&str>) -> Self {
         let host = audio_host();
         let done = Arc::new(AtomicBool::new(false));
-        let samples: VecDeque<f32> = pcm16_le
-            .as_chunks::<2>()
-            .0
-            .iter()
-            .map(|s| i16::from_le_bytes([s[0], s[1]]) as f32 / 32768.0)
-            .collect();
-        let total_secs = samples.len() as f32 / src_rate.max(1) as f32;
-        let fail = |msg: String, done: &Arc<AtomicBool>| {
+        let feed = Feed::new(src_rate);
+        let fail = |msg: String, done: &Arc<AtomicBool>, feed: &Feed| {
             done.store(true, Ordering::Relaxed);
+            feed.finish();
             Self {
                 _stream: None,
                 done: done.clone(),
                 error: Some(msg),
-                started: Instant::now(),
-                total_secs,
+                feed: feed.clone(),
             }
         };
-        if samples.is_empty() {
-            return fail(tr("áudio vazio").into(), &done);
-        }
         let Some(dev) = find_device(&host, output_name, false) else {
-            return fail(tr("nenhum dispositivo de saída de áudio").into(), &done);
+            return fail(
+                tr("nenhum dispositivo de saída de áudio").into(),
+                &done,
+                &feed,
+            );
         };
         let cfg = match dev.default_output_config() {
             Ok(c) => c,
-            Err(e) => return fail(trf("alto-falante: {}", &[&e]), &done),
+            Err(e) => return fail(trf("alto-falante: {}", &[&e]), &done, &feed),
         };
         let rate = cfg.sample_rate();
         let channels = cfg.channels() as usize;
-        let mut rs = Resampler::new(src_rate, rate);
-        let queue = Arc::new(Mutex::new(samples));
-        let q = queue.clone();
+        let q = feed.queue.clone();
+        let src_rate_cell = feed.rate.clone();
+        let ended = feed.ended.clone();
         let done_cb = done.clone();
+        // (taxa de origem, reamostrador): refeito se a taxa mudar antes do
+        // primeiro áudio (o header `X-Sample-Rate` chega depois do `play()`).
+        let mut rs: Option<(u32, Resampler)> = None;
+        let mut primed = false;
+        let mut started_once = false;
         let mut src: Vec<f32> = Vec::new();
         let mut dst: Vec<f32> = Vec::new();
         let mut carry: VecDeque<f32> = VecDeque::new();
@@ -828,15 +944,43 @@ impl Player {
             move |data: &mut [f32], _| {
                 let ch = channels.max(1);
                 let frames = data.len() / ch;
+                let src_rate = src_rate_cell.load(Ordering::Relaxed).max(1);
+                if rs.as_ref().is_none_or(|(r, _)| *r != src_rate) {
+                    rs = Some((src_rate, Resampler::new(src_rate, rate)));
+                }
+                let Some((_, rs)) = rs.as_mut() else {
+                    return;
+                };
+                let is_ended = ended.load(Ordering::Relaxed);
                 let missing = frames.saturating_sub(carry.len());
                 let need = ((missing as f64) * (src_rate as f64 / rate as f64)).ceil() as usize;
                 src.clear();
                 {
                     let mut g = q.lock();
-                    for _ in 0..need {
-                        match g.pop_front() {
-                            Some(x) => src.push(x),
-                            None => break,
+                    // Reserva: só começa com PREBUFFER_MS na fila (ou se já acabou).
+                    // Se a fila secar no meio, espera REBUFFER_MS antes de voltar,
+                    // em vez de tocar migalhas a cada callback (picotado).
+                    if !primed {
+                        let min = if started_once {
+                            REBUFFER_MS
+                        } else {
+                            PREBUFFER_MS
+                        };
+                        let min = (src_rate as u64 * min / 1000) as usize;
+                        primed = is_ended || g.samples.len() >= min;
+                    }
+                    if primed {
+                        started_once = true;
+                        if !is_ended && g.samples.len() < need {
+                            // secou: toca silêncio e volta a juntar reserva
+                            primed = false;
+                        } else {
+                            for _ in 0..need {
+                                match g.samples.pop_front() {
+                                    Some(x) => src.push(x),
+                                    None => break,
+                                }
+                            }
                         }
                     }
                 }
@@ -849,7 +993,7 @@ impl Player {
                         *c = v;
                     }
                 }
-                if src.is_empty() && carry.is_empty() {
+                if is_ended && src.is_empty() && carry.is_empty() && q.lock().samples.is_empty() {
                     done_cb.store(true, Ordering::Relaxed);
                 }
             },
@@ -859,31 +1003,66 @@ impl Player {
         match build {
             Ok(s) => {
                 if let Err(e) = s.play() {
-                    return fail(trf("alto-falante: {}", &[&e]), &done);
+                    return fail(trf("alto-falante: {}", &[&e]), &done, &feed);
                 }
                 Self {
                     _stream: Some(s),
                     done,
                     error: None,
-                    started: Instant::now(),
-                    total_secs,
+                    feed,
                 }
             }
-            Err(e) => fail(trf("alto-falante: {}", &[&e]), &done),
+            Err(e) => fail(trf("alto-falante: {}", &[&e]), &done, &feed),
         }
     }
 
-    /// Ainda tocando (o callback marca `done` quando a fila esvazia; há também
-    /// um teto pela duração do áudio, caso o dispositivo pare de chamar).
+    /// Handle para alimentar/encerrar a reprodução de fora da GUI.
+    pub fn feed(&self) -> Feed {
+        self.feed.clone()
+    }
+
+    /// Ainda tocando: antes do `finish()` sempre (está esperando áudio); depois,
+    /// até a fila esvaziar — com um teto pela duração do que foi empurrado,
+    /// caso o dispositivo pare de chamar.
     pub fn playing(&self) -> bool {
-        !self.done.load(Ordering::Relaxed)
-            && self.started.elapsed().as_secs_f32() < self.total_secs + 2.0
+        if self.done.load(Ordering::Relaxed) {
+            return false;
+        }
+        match *self.feed.finished_at.lock() {
+            None => true,
+            Some(t) => t.elapsed().as_secs_f32() < self.feed.pushed_secs() + 2.0,
+        }
+    }
+}
+
+impl Drop for Player {
+    fn drop(&mut self) {
+        self.feed.cancelled.store(true, Ordering::Relaxed);
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn feed_keeps_sample_alignment_across_odd_chunks() {
+        let feed = Feed::new(24_000);
+        // três amostras: 1, 2, 3 (LE) partidas em pedaços de 1, 2 e 3 bytes
+        let bytes: Vec<u8> = [1i16, 2, 3].iter().flat_map(|s| s.to_le_bytes()).collect();
+        feed.push(&bytes[..1]);
+        feed.push(&bytes[1..3]);
+        feed.push(&bytes[3..]);
+        let q = feed.queue.lock();
+        let got: Vec<i16> = q
+            .samples
+            .iter()
+            .map(|s| (s * 32768.0).round() as i16)
+            .collect();
+        assert_eq!(got, vec![1, 2, 3]);
+        assert!(q.odd.is_none());
+        assert_eq!(feed.pushed.load(Ordering::Relaxed), 3);
+    }
 
     #[test]
     fn resampler_halves_rate() {

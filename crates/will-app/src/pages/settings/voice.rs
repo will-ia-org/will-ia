@@ -62,7 +62,7 @@ impl VoicePage {
             &[
                 ui::Tab::new("session", tr("Sessão")),
                 ui::Tab::new("config", tr("Configuração")),
-                ui::Tab::new("tts", tr("Ouvir resumo (TTS)")),
+                ui::Tab::new("tts", tr("Ouvir (TTS)")),
                 ui::Tab::new("pricing", tr("Preços")),
             ],
         );
@@ -515,32 +515,33 @@ impl VoicePage {
         }
         // ---- ouvir resumo (TTS) ----
         if tab == "tts" {
-            ui::section_help(
-                ui,
-                tr("Ouvir resumo (TTS)"),
-                Some(&help::VOICE_SPEAK),
-                |ui| {
-                    let sm = &mut st.draft.realtime.summary;
-                    ui.label(
+            ui::section_help(ui, tr("Ouvir (TTS)"), Some(&help::VOICE_SPEAK), |ui| {
+                let sm = &mut st.draft.realtime.summary;
+                ui.label(
                 egui::RichText::new(tr(
-                    "Botão \"ouvir\" nas respostas da thread: a resposta vira um roteiro fluido (sem código, links ou marcação) e é lida em voz alta. Usa a chave da OpenAI acima; só aparece com o módulo de voz ligado.",
+                    "Botões \"ler\" e \"resumo em áudio\" nas respostas da thread: \"ler\" lê o texto palavra por palavra em streaming (começa em segundos); \"resumo em áudio\" vira um roteiro fluido (sem código, links ou marcação) e é lido. Usam a chave da OpenAI acima; só aparecem com o módulo de voz ligado.",
                 ))
                 .small()
                 .weak(),
             );
-                    ui.add_space(4.0);
-                    ui::field(ui, tr("Habilitar"), None, |ui| {
+                ui.add_space(4.0);
+                ui::field(
+                    ui,
+                    tr("Habilitar o resumo em áudio"),
+                    Some(tr("O botão \"ler\" (leitura literal) não depende disto.")),
+                    |ui| {
                         ui::toggle(ui, &mut sm.enabled);
-                    });
-                    ui::field(
-                        ui,
-                        tr("Modelo do resumo"),
-                        Some(tr("Modelo de chat que escreve o roteiro falado.")),
-                        |ui| {
-                            ui::text_input(ui, &mut sm.model, "gpt-4o-mini");
-                        },
-                    );
-                    ui::field(
+                    },
+                );
+                ui::field(
+                    ui,
+                    tr("Modelo do resumo"),
+                    Some(tr("Modelo de chat que escreve o roteiro falado.")),
+                    |ui| {
+                        ui::text_input(ui, &mut sm.model, "gpt-4o-mini");
+                    },
+                );
+                ui::field(
                 ui,
                 tr("Prompt do resumo"),
                 Some(tr(
@@ -558,48 +559,47 @@ impl VoicePage {
                     }
                 },
             );
-                    ui::field(
-                        ui,
-                        tr("Modelo de voz (TTS)"),
-                        Some(tr("Modelo de síntese de voz da OpenAI.")),
-                        |ui| {
-                            ui::text_input(ui, &mut sm.tts_model, "gpt-4o-mini-tts");
-                        },
-                    );
-                    ui::field(
-                        ui,
-                        tr("Voz da leitura"),
-                        Some(tr("Vazio = a mesma voz da sessão de voz.")),
-                        |ui| {
-                            let same = tr("mesma da sessão de voz");
-                            let mut opts: Vec<(&str, &str)> = vec![("", same)];
-                            opts.extend(
-                                [
-                                    "alloy", "ash", "ballad", "coral", "echo", "sage", "shimmer",
-                                    "verse", "marin", "cedar",
-                                ]
-                                .iter()
-                                .map(|v| (*v, *v)),
-                            );
-                            ui::select(ui, "summary-voice", &mut sm.voice, &opts);
-                        },
-                    );
-                    ui::field(
-                        ui,
-                        tr("Velocidade"),
-                        Some(tr("1,0 = normal; 0,5 a 2,0.")),
-                        |ui| {
-                            ui.add(
-                                egui::DragValue::new(&mut sm.speed)
-                                    .speed(0.05)
-                                    .range(0.5..=2.0)
-                                    .fixed_decimals(2)
-                                    .suffix("×"),
-                            );
-                        },
-                    );
-                },
-            );
+                ui::field(
+                    ui,
+                    tr("Modelo de voz (TTS)"),
+                    Some(tr("Modelo de síntese de voz da OpenAI.")),
+                    |ui| {
+                        ui::text_input(ui, &mut sm.tts_model, "gpt-4o-mini-tts");
+                    },
+                );
+                ui::field(
+                    ui,
+                    tr("Voz da leitura"),
+                    Some(tr("Vazio = a mesma voz da sessão de voz.")),
+                    |ui| {
+                        let same = tr("mesma da sessão de voz");
+                        let mut opts: Vec<(&str, &str)> = vec![("", same)];
+                        opts.extend(
+                            [
+                                "alloy", "ash", "ballad", "coral", "echo", "sage", "shimmer",
+                                "verse", "marin", "cedar",
+                            ]
+                            .iter()
+                            .map(|v| (*v, *v)),
+                        );
+                        ui::select(ui, "summary-voice", &mut sm.voice, &opts);
+                    },
+                );
+                ui::field(
+                    ui,
+                    tr("Velocidade"),
+                    Some(tr("1,0 = normal; 0,5 a 2,0.")),
+                    |ui| {
+                        ui.add(
+                            egui::DragValue::new(&mut sm.speed)
+                                .speed(0.05)
+                                .range(0.5..=2.0)
+                                .fixed_decimals(2)
+                                .suffix("×"),
+                        );
+                    },
+                );
+            });
         }
         if tab == "pricing" {
             ui::section_help(

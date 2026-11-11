@@ -158,17 +158,18 @@ pub const VOICE_CONFIG: Help = Help {
 };
 
 pub const VOICE_SPEAK: Help = Help {
-    title: "Ouvir um resumo falado das respostas",
-    intro: "Em Threads, cada resposta do agente ganha um botão \"ouvir\" ao lado de \"copiar\". Ao clicar, o servidor pede a um modelo de chat da OpenAI um roteiro fluido (frases corridas, sem código, links, IDs ou marcação) e sintetiza esse roteiro em voz; o app toca no dispositivo de saída escolhido acima. Clique de novo para parar.",
+    title: "Ouvir as respostas: leitura literal ou resumo",
+    intro: "Em Threads, cada resposta do agente ganha dois botões ao lado de \"copiar\". \"ler\" lê o texto exatamente como está escrito (só a marcação do Markdown sai), em streaming: o áudio começa a tocar em segundos enquanto o resto ainda está sendo gerado. \"resumo em áudio\" pede a um modelo de chat da OpenAI um roteiro fluido (frases corridas, sem código, links, IDs ou marcação) e lê esse roteiro. Os dois tocam no dispositivo de saída escolhido acima; clique de novo para parar.",
     steps: &[
         ("Pré-requisitos", "Chave da OpenAI cadastrada e módulo de voz habilitado (a sessão de voz não precisa estar ativa). Sem isso o botão não aparece."),
         ("Ajustar o roteiro", "Edite o Prompt do resumo para mudar tamanho, tom ou o que deve ser omitido. Restaurar padrão volta ao texto original."),
         ("Voz e velocidade", "Por padrão usa a mesma voz da sessão de voz; escolha outra e ajuste a velocidade se preferir."),
     ],
     notes: &[
-        ("Custo", "Duas chamadas por clique: o resumo (tokens do modelo de chat) e o TTS (por caractere do roteiro). Ambas entram na página Custos como voice_summary e voice_tts, estimadas."),
+        ("Custo", "\"ler\": uma chamada de TTS por caractere do texto (voice_read na página Custos). \"resumo em áudio\": duas chamadas, o resumo (tokens do modelo de chat, voice_summary) e o TTS do roteiro (voice_tts). Tudo estimado."),
         ("Uma leitura por vez", "Começar outra resposta interrompe a anterior. O roteiro gerado aparece ao passar o mouse sobre o botão."),
-        ("Ouvir de novo não custa", "O roteiro e o áudio ficam guardados por resposta (memória e disco do app). Clicar de novo toca na hora, sem chamar a OpenAI."),
+        ("Ouvir de novo não custa", "O áudio fica guardado por resposta (memória e disco do app), separado para leitura e resumo. Clicar de novo toca na hora, sem chamar a OpenAI."),
+        ("Textos longos", "A leitura literal parte o texto em pedaços (parágrafo/frase) que cabem na API e emenda tudo num áudio só; pode levar alguns segundos entre pedaços na primeira vez."),
         ("Trocar de modelo", "Pode usar gpt-5-nano, gpt-4.1-mini, tts-1 etc. O servidor ajusta os parâmetros por família (temperatura, esforço de raciocínio, instruções do TTS) e, se a OpenAI recusar algum, remove e repete sozinho."),
         ("Telegram", "O áudio das respostas no Telegram usa o prompt padrão deste resumo, com a voz e a velocidade configuradas na seção Telegram."),
     ],

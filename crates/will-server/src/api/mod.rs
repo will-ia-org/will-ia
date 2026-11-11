@@ -331,6 +331,7 @@ pub fn router(state: App) -> Router {
         )
         .route("/voice/summary", post(integrations::voice_summary))
         .route("/voice/tts", post(integrations::voice_tts))
+        .route("/voice/read", post(integrations::voice_read))
         .route("/voice/audio", get(ws::voice_ws))
         .route("/whatsapp/status", get(integrations::wa_status))
         .route("/whatsapp/pair", post(integrations::wa_pair))

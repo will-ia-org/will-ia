@@ -13,13 +13,17 @@
 //!   poda por retenção e `ToolProvider` com as 16 ferramentas (parâmetro `account`).
 
 pub mod backend;
+pub mod mentions;
 pub mod mock;
 pub mod module;
 #[cfg(feature = "real")]
 pub mod real;
 pub mod tools;
 
-pub use backend::{BackendEvent, IncomingMessage, MessageRef, WhatsAppBackend};
+pub use backend::{
+    BackendEvent, GroupAddressing, GroupMember, GroupMembers, IncomingMessage, MessageRef,
+    WhatsAppBackend,
+};
 pub use mock::{MockAction, MockBackend, MockSent};
 pub use module::{
     is_default_label, BackendFactory, ChatLabel, ConnState, Tts, WaAccount, WhatsAppDeps,

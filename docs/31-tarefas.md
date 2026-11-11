@@ -93,6 +93,12 @@ Configurações: seção `tasks` (`enabled`, `timezone`, `notify_native`, `notif
   Clicar na barra ou na linha abre o formulário (título, descrição, início, fim, prioridade,
   Concluir/Reabrir, Excluir com confirmação).
 - **Concluídas somem por padrão**; o toggle "mostrar concluídas" busca `all`.
+- **Ver: Tudo · Dia · Semana · Mês** (botões entre a ordenação e o toggle; desde 0.1.22, `Scope` em
+  `pages/tasks.rs`, persistido em `ui-prefs.json` → `gantt.scope`): nos três recortes a lista mostra só as
+  tarefas que tocam o período (início antes do fim do período e fim — ou início, sem fim — depois do começo)
+  e a linha do tempo fica **travada**: o começo do período na borda esquerda e o fim na direita (dia =
+  00:00–24:00 local; semana = segunda 00:00 a domingo 24:00; mês = dia 1 ao último), sem arrastar nem zoom.
+  O zoom e a posição salvos não mudam: "Tudo" volta exatamente à visão livre anterior.
 - **Ordenação** (seletor): data de início (padrão; atrasadas primeiro por serem mais antigas), ordem
   alfabética, prioridade (alta → média → baixa, empate pela data). A escolha vai para
   `settings.tasks.sort` (persistida).

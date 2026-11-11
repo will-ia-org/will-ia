@@ -22,6 +22,8 @@ pub struct GanttPrefs {
     /// Hora local (desde a época) na borda esquerda; `None` = seguir o "agora".
     pub view_start: Option<f64>,
     pub show_done: bool,
+    /// Recorte da visão: `""`/`all` tudo · `day` · `week` · `month`.
+    pub scope: String,
 }
 
 fn file() -> PathBuf {
