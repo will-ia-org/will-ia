@@ -1152,4 +1152,79 @@ mod e2e {
         let r = m.sync_calendar(req()).await.unwrap();
         assert_eq!(r.pulled_created, 1, "{r:?}");
     }
+
+    /// Conta os bipes pedidos ao servidor.
+    #[derive(Default)]
+    struct Beeper(AtomicUsize);
+    #[async_trait]
+    impl TaskNotifier for Beeper {
+        async fn notify(&self, _: &str) -> Result<(), String> {
+            Ok(())
+        }
+        fn soon_beep(&self) {
+            self.0.fetch_add(1, Ordering::SeqCst);
+        }
+    }
+
+    #[tokio::test]
+    async fn service_beeps_while_a_task_is_about_to_start() {
+        let beeper = Arc::new(Beeper::default());
+        let mk = |cfg: TasksSettings| {
+            let beeper = beeper.clone();
+            async move {
+                TasksModule::new(
+                    TasksDeps {
+                        storage: Storage::open_memory().await.unwrap(),
+                        bus: EventBus::new(16),
+                        notifier: beeper,
+                        calendar: Arc::new(Fake::default()),
+                    },
+                    cfg,
+                )
+            }
+        };
+        let soon = (Utc::now() + Duration::minutes(10)).to_rfc3339();
+        let input = || TaskInput {
+            title: Some("Reunião".into()),
+            start_at: Some(soon.clone()),
+            ..Default::default()
+        };
+
+        // dentro do corte (30 min): bipa logo e repete no intervalo (1 s)
+        let m = mk(TasksSettings {
+            soon_beep_seconds: 1,
+            ..Default::default()
+        })
+        .await;
+        m.create(input(), "user").await.unwrap();
+        m.start();
+        tokio::time::sleep(std::time::Duration::from_millis(1500)).await;
+        m.stop();
+        assert!(
+            beeper.0.load(Ordering::SeqCst) >= 2,
+            "bipou {}",
+            beeper.0.load(Ordering::SeqCst)
+        );
+
+        // fora do corte (5 min) ou com o som desligado (0 s): silêncio
+        for cfg in [
+            TasksSettings {
+                soon_minutes: 5,
+                soon_beep_seconds: 1,
+                ..Default::default()
+            },
+            TasksSettings {
+                soon_beep_seconds: 0,
+                ..Default::default()
+            },
+        ] {
+            beeper.0.store(0, Ordering::SeqCst);
+            let m = mk(cfg).await;
+            m.create(input(), "user").await.unwrap();
+            m.start();
+            tokio::time::sleep(std::time::Duration::from_millis(400)).await;
+            m.stop();
+            assert_eq!(beeper.0.load(Ordering::SeqCst), 0);
+        }
+    }
 }

@@ -79,7 +79,7 @@ Com `tasks.enabled = false` o provider some do MCP e as chamadas devolvem `Unava
 
 | POST | `/api/tasks/sync-calendar` | `{from, to, calendar_id}` → `SyncReport` |
 
-Configurações: seção `tasks` (`enabled`, `timezone`, `notify_native`, `notify_start`, `notify_overdue`, `sort`, `sync_calendar_id`) por
+Configurações: seção `tasks` (`enabled`, `timezone`, `notify_native`, `notify_start`, `notify_overdue`, `sort`, `sync_calendar_id`, `soon_minutes`, `soon_beep_seconds`) por
 `PUT /api/settings`; `apply_section("tasks")` reaplica no módulo a quente.
 
 ## Painel (app, `pages/tasks.rs`)
@@ -98,6 +98,13 @@ Configurações: seção `tasks` (`enabled`, `timezone`, `notify_native`, `notif
   (contado do fim). Se não couber na janela do lado preferido, vai para o outro; se não couber em nenhum,
   some. Some também enquanto o mouse está na barra (ali entram os horários exatos). As **setas** de
   tarefa fora da janela ganham o mesmo texto ao lado. Atualiza no repaint de 30 s.
+  **Está chegando** (desde 0.1.26): tarefa aberta que começa em **`tasks.soon_minutes` ou menos** (padrão 30; 0 desliga; campo em Configurações › Tarefas; `starting_soon`) tem o
+  rótulo em amarelo com uma pílula translúcida pulsando atrás (ciclo de ~1,6 s; repaint a cada 50 ms só
+  enquanto houver algum na tela), tanto fora da barra quanto ao lado da seta. Só para as que **ainda não
+  começaram**; atrasadas não pulsam. O item **Tarefas** do menu ganha um **badge amarelo pulsante** com a
+  contagem (`TasksPage::soon_count`, `ui::NavBadge::soon`), à esquerda dos badges de atrasadas e em andamento (pulso forte: dois anéis que abrem e somem). O **bipe** é do **serviço** (toca com o app fechado): `TasksModule::beep_loop` conta as tarefas `Task::starts_within` e chama
+  `TaskNotifier::soon_beep` → `will_platform::sound::play_cue(CUE_SOON, volume 0,32)` na saída `realtime.output_device`
+  (ou a padrão), na entrada da primeira tarefa na janela e a cada `tasks.soon_beep_seconds` (padrão 30; 0 desliga).
 - Passar o mouse mostra o **círculo ✓** na ponta da barra (concluir; nas concluídas, ↺ reabrir).
   Clicar na barra ou na linha abre o formulário (título, descrição, início, fim, prioridade,
   Concluir/Reabrir, Excluir com confirmação).

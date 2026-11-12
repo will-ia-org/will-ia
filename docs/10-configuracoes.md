@@ -206,6 +206,8 @@ Detalhes em [24](24-scheduler.md). A página **Agendamentos** (fora de Configura
 | Notificação do sistema (`notify_native`) | bool | true |
 | Avisar no Telegram ao entrar em andamento (`notify_start`) | bool | false |
 | Avisar no Telegram ao entrar em atraso (`notify_overdue`) | bool | false |
+| Destacar no Gantt quando faltar (`soon_minutes`) | minutos, 0–1440 (0 = desligado) | 30 |
+| Bipe enquanto houver tarefa chegando (`soon_beep_seconds`) | segundos, 0–3600 (0 = sem som) | 30 |
 | Ordenação do Gantt (`sort`) | `start` \| `alpha` \| `priority` | `start` (salva pelo seletor da página) |
 - `sync_calendar_id` (vazio): agenda do Google usada por **Sincronizar com o Google Calendar** (vazio = a
   padrão de criação de Google › Agenda). A aba **Google Calendar** da seção traz o seletor de agenda, o período (dois

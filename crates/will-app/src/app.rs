@@ -769,10 +769,19 @@ impl WillApp {
                 if self.snap.principal.as_ref().is_some_and(|p| p.is_admin()) {
                     items.push((Nav::Users, tr("Usuários").into()));
                 }
-                // Badges de Tarefas (atrasadas em vermelho, em andamento em azul):
+                // Badges de Tarefas (prestes a começar em amarelo pulsante, atrasadas
+                // em vermelho, em andamento em azul):
                 // a página carrega a lista em segundo plano mesmo fechada.
                 self.pages.tasks.poll_list(&self.svc);
                 let (overdue, running) = self.pages.tasks.counts();
+                // prestes a começar (amarelo pulsante), pelo corte configurado
+                let soon = self
+                    .pages
+                    .tasks
+                    .soon_count(self.snap.settings.tasks.soon_minutes);
+                if soon > 0 {
+                    ui.ctx().request_repaint_after(Duration::from_millis(50));
+                }
                 // Threads processando (amarelo): a lista é mantida por eventos e
                 // recarregada em segundo plano mesmo com a página fechada.
                 self.pages.threads.poll_list(&self.svc);
@@ -784,14 +793,26 @@ impl WillApp {
                         ui::nav_badges(
                             ui,
                             resp.rect,
-                            &[(overdue, Tone::Danger.color(dark)), (running, pal.accent)],
+                            &[
+                                ui::NavBadge::soon(soon),
+                                ui::NavBadge::solid(overdue, Tone::Danger.color(dark)),
+                                ui::NavBadge::solid(running, pal.accent),
+                            ],
                         );
                     }
                     if n == Nav::Threads {
-                        ui::nav_badges(ui, resp.rect, &[(processing, Tone::Warning.color(dark))]);
+                        ui::nav_badges(
+                            ui,
+                            resp.rect,
+                            &[ui::NavBadge::solid(processing, Tone::Warning.color(dark))],
+                        );
                     }
                     if n == Nav::Approvals {
-                        ui::nav_badges(ui, resp.rect, &[(pending, Tone::Warning.color(dark))]);
+                        ui::nav_badges(
+                            ui,
+                            resp.rect,
+                            &[ui::NavBadge::solid(pending, Tone::Warning.color(dark))],
+                        );
                     }
                     if resp.clicked() {
                         self.nav = n;

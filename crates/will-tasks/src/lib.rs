@@ -25,6 +25,10 @@ use will_storage::Storage;
 
 pub const FAMILY: &str = "tasks";
 const TICK: Duration = Duration::from_secs(30);
+/// Sem tarefa "chegando", de quanto em quanto o laço do bipe confere.
+const BEEP_IDLE: Duration = Duration::from_secs(5);
+/// Teto da espera do laço do bipe (mudança de configuração vale em até isso).
+const BEEP_MAX_WAIT: Duration = Duration::from_secs(10);
 pub(crate) const TITLE_MAX: usize = 120;
 pub(crate) const DESCRIPTION_MAX: usize = 8_000;
 
@@ -33,6 +37,9 @@ pub(crate) const DESCRIPTION_MAX: usize = 8_000;
 pub trait TaskNotifier: Send + Sync {
     /// Texto em HTML básico do Telegram (`<b>`, `<i>`). `Err` = não entregue.
     async fn notify(&self, text: &str) -> Result<(), String>;
+    /// Bipe curto de "tarefa está chegando" na máquina do serviço (o servidor
+    /// toca pela saída de áudio). Padrão: nada.
+    fn soon_beep(&self) {}
 }
 
 pub struct TasksDeps {
@@ -216,6 +223,9 @@ impl TasksModule {
         let token = CancellationToken::new();
         *self.cancel.write() = Some(token.clone());
         let me = self.clone();
+        let beep_token = token.clone();
+        tokio::spawn(async move { me.beep_loop(beep_token).await });
+        let me = self.clone();
         tokio::spawn(async move {
             me.set_status(ModuleStatus::Running);
             tracing::info!(module = FAMILY, status = "running", "laço de tarefas no ar");
@@ -240,6 +250,50 @@ impl TasksModule {
             tokio::select! {
                 _ = token.cancelled() => break,
                 _ = tokio::time::sleep(TICK) => {}
+            }
+        }
+    }
+
+    /// Tarefas abertas que começam em até `soon_minutes` (o "está chegando").
+    async fn soon_count(&self, soon_minutes: u32) -> usize {
+        let Ok(list) = self.deps.storage.list_tasks(false).await else {
+            return 0;
+        };
+        let now = Utc::now();
+        let secs = i64::from(soon_minutes) * 60;
+        list.iter().filter(|t| t.starts_within(now, secs)).count()
+    }
+
+    /// Bipe do "está chegando": toca quando a primeira tarefa entra na janela
+    /// (`soon_minutes`) e repete a cada `soon_beep_seconds` enquanto houver
+    /// alguma. Sai do serviço, então toca com o app fechado. `0` em qualquer
+    /// um dos dois desliga. Sem tarefa na janela, confere a cada [`BEEP_IDLE`].
+    async fn beep_loop(self: Arc<Self>, token: CancellationToken) {
+        let mut last: Option<tokio::time::Instant> = None;
+        loop {
+            let (soon_minutes, every) = {
+                let c = self.cfg.read();
+                (c.soon_minutes, c.soon_beep_seconds)
+            };
+            let mut wait = BEEP_IDLE;
+            if soon_minutes == 0 || every == 0 {
+                last = None;
+            } else {
+                let every = Duration::from_secs(u64::from(every));
+                let due = last.is_none_or(|t| t.elapsed() >= every);
+                if !due {
+                    wait = every.saturating_sub(last.map(|t| t.elapsed()).unwrap_or_default());
+                } else if self.soon_count(soon_minutes).await > 0 {
+                    self.deps.notifier.soon_beep();
+                    last = Some(tokio::time::Instant::now());
+                    wait = every;
+                } else {
+                    last = None;
+                }
+            }
+            tokio::select! {
+                _ = token.cancelled() => break,
+                _ = tokio::time::sleep(wait.clamp(Duration::from_millis(200), BEEP_MAX_WAIT)) => {}
             }
         }
     }

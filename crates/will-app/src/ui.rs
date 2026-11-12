@@ -341,23 +341,29 @@ pub fn nav_item(
         ui.allocate_exact_size(egui::vec2(ui.available_width(), h), egui::Sense::click());
     let dark = ui.visuals().dark_mode;
     let p = palette(dark);
-    let fill = if selected {
-        p.accent.linear_multiply(if dark { 0.26 } else { 0.14 })
-    } else if resp.hovered() {
-        p.card_alt
-    } else {
-        Color32::TRANSPARENT
-    };
-    ui.painter().rect_filled(rect, 6.0, fill);
     if selected {
+        // Mesmo desenho dos cartões de Configurações: faixa de destaque à
+        // esquerda, da altura toda e por dentro do canto arredondado — o item
+        // inteiro na cor de destaque e o fundo (opaco) por cima, deslocado 4 px.
+        let fill = ui
+            .visuals()
+            .panel_fill
+            .lerp_to_gamma(p.accent, if dark { 0.26 } else { 0.14 });
+        ui.painter().rect_filled(rect, 6.0, p.accent);
+        let mut body = rect;
+        body.min.x += 4.0;
         ui.painter().rect_filled(
-            egui::Rect::from_min_size(
-                egui::pos2(rect.left(), rect.top() + 8.0),
-                egui::vec2(3.0, rect.height() - 16.0),
-            ),
-            2.0,
-            p.accent,
+            body,
+            egui::CornerRadius {
+                nw: 3,
+                sw: 3,
+                ne: 6,
+                se: 6,
+            },
+            fill,
         );
+    } else if resp.hovered() {
+        ui.painter().rect_filled(rect, 6.0, p.card_alt);
     }
     let font = if selected {
         medium(14.0)
@@ -381,30 +387,80 @@ pub fn nav_item(
     resp
 }
 
+/// Uma pílula numérica do menu ([`nav_badges`]).
+#[derive(Debug, Clone, Copy)]
+pub struct NavBadge {
+    pub count: usize,
+    pub color: Color32,
+    /// Cor do número (branco nas pílulas escuras; escuro na amarela).
+    pub text: Color32,
+    /// Pulsa (dois anéis que abrem e somem + brilho, ciclo de ~1,2 s). Quem liga
+    /// precisa pedir repaint contínuo enquanto a contagem for > 0.
+    pub pulse: bool,
+}
+
+impl NavBadge {
+    pub fn solid(count: usize, color: Color32) -> Self {
+        Self {
+            count,
+            color,
+            text: Color32::WHITE,
+            pulse: false,
+        }
+    }
+
+    /// Amarela pulsante ("está chegando"), com número escuro para ler.
+    pub fn soon(count: usize) -> Self {
+        Self {
+            count,
+            color: Color32::from_rgb(250, 204, 21),
+            text: Color32::from_rgb(60, 44, 0),
+            pulse: true,
+        }
+    }
+}
+
 /// Pílulas numéricas à direita de um item do menu (ex.: tarefas atrasadas em
 /// vermelho e em andamento em azul). Contagens zero não aparecem.
-pub fn nav_badges(ui: &mut Ui, rect: egui::Rect, badges: &[(usize, Color32)]) {
+pub fn nav_badges(ui: &mut Ui, rect: egui::Rect, badges: &[NavBadge]) {
     let p = ui.painter();
     let font = egui::FontId::proportional(11.0);
+    let time = ui.input(|i| i.time);
     let mut x = rect.right() - 10.0;
-    for (n, color) in badges.iter().rev() {
-        if *n == 0 {
+    for b in badges.iter().rev() {
+        if b.count == 0 {
             continue;
         }
-        let text = n.to_string();
-        let galley = p.layout_no_wrap(text.clone(), font.clone(), Color32::WHITE);
+        let text = b.count.to_string();
+        let galley = p.layout_no_wrap(text.clone(), font.clone(), b.text);
         let w = (galley.size().x + 12.0).max(20.0);
         let r = egui::Rect::from_min_max(
             egui::pos2(x - w, rect.center().y - 9.0),
             egui::pos2(x, rect.center().y + 9.0),
         );
-        p.rect_filled(r, 9.0, *color);
+        let mut fill = b.color;
+        if b.pulse {
+            // onda que nasce na pílula, abre e some (dente de serra, ~1,2 s),
+            // em dois anéis defasados + a pílula que respira forte
+            let cycle = 1.2;
+            for phase in [0.0, 0.5] {
+                let t = ((time / cycle + phase).fract()) as f32;
+                p.rect_filled(
+                    r.expand(7.0 * t),
+                    9.0 + 7.0 * t,
+                    b.color.gamma_multiply(0.55 * (1.0 - t)),
+                );
+            }
+            let wave = ((time * std::f64::consts::TAU / cycle).sin() * 0.5 + 0.5) as f32;
+            fill = b.color.gamma_multiply(0.55 + 0.45 * wave);
+        }
+        p.rect_filled(r, 9.0, fill);
         p.text(
             r.center(),
             egui::Align2::CENTER_CENTER,
             text,
             font.clone(),
-            Color32::WHITE,
+            b.text,
         );
         x = r.left() - 4.0;
     }

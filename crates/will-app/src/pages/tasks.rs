@@ -431,6 +431,33 @@ fn relative_label(r: &Row, now: DateTime<Utc>) -> (String, bool) {
     }
 }
 
+/// Tarefa aberta que ainda não começou e começa em até `soon_secs` (o corte
+/// vem de `settings.tasks.soon_minutes`; `0` = destaque desligado).
+fn starting_soon(r: &Row, now: DateTime<Utc>, soon_secs: i64) -> bool {
+    soon_secs > 0 && !r.done && now < r.start && (r.start - now).num_seconds() <= soon_secs
+}
+
+/// Amarelo do rótulo "está chegando" (mais escuro no tema claro, para ler).
+fn soon_color(dark: bool) -> Color32 {
+    if dark {
+        Color32::from_rgb(250, 204, 21)
+    } else {
+        Color32::from_rgb(176, 122, 0)
+    }
+}
+
+/// Pulso discreto atrás do rótulo "está chegando": pílula amarela translúcida
+/// que respira (~1,6 s por ciclo). `time` = relógio do egui em segundos.
+fn paint_soon_pulse(p: &egui::Painter, text: Rect, time: f64, dark: bool) {
+    let wave = ((time * std::f64::consts::TAU / 1.6).sin() * 0.5 + 0.5) as f32;
+    let alpha = 0.10 + 0.20 * wave;
+    p.rect_filled(
+        text.expand2(Vec2::new(4.0, 2.0)),
+        6.0,
+        soon_color(dark).gamma_multiply(alpha),
+    );
+}
+
 /// Instante UTC → relógio local (fuso das configurações, pelo deslocamento).
 fn local_naive(dt: DateTime<Utc>, offset_minutes: i32) -> NaiveDateTime {
     (dt + chrono::Duration::minutes(i64::from(offset_minutes))).naive_utc()
@@ -674,6 +701,17 @@ impl TasksPage {
             }
         }
         (overdue, running)
+    }
+
+    /// Tarefas abertas que começam em até `soon_minutes` (badge amarelo do
+    /// menu; mesmo corte do rótulo pulsante do Gantt). `0` = desligado.
+    pub fn soon_count(&self, soon_minutes: u32) -> usize {
+        let now = Utc::now();
+        let soon_secs = i64::from(soon_minutes) * 60;
+        self.rows
+            .iter()
+            .filter(|r| starting_soon(r, now, soon_secs))
+            .count()
     }
 
     fn load_prefs(&mut self) {
@@ -1137,6 +1175,10 @@ impl TasksPage {
         let mut pan_delta = 0.0f32;
         let mut wheel_now = false;
         let mut zoom_at: Option<(f32, f32)> = None;
+        // algum rótulo "está chegando" na tela: mantém a animação do pulso
+        let mut any_soon = false;
+        let soon_secs = i64::from(cx.snap.settings.tasks.soon_minutes) * 60;
+        let time = ui.input(|i| i.time);
         egui::ScrollArea::vertical()
             .id_salt("tasks-gantt")
             .scroll_source(egui::scroll_area::ScrollSource {
@@ -1300,7 +1342,16 @@ impl TasksPage {
                         } else {
                             (Pos2::new(ax - 9.0, cy), Align2::RIGHT_CENTER)
                         };
-                        p.with_clip_rect(tl).text(anchor, align, rel, small.clone(), pal.text_weak);
+                        let lp = p.with_clip_rect(tl);
+                        if starting_soon(r, now, soon_secs) {
+                            any_soon = true;
+                            let g = lp.layout_no_wrap(rel, small.clone(), soon_color(dark));
+                            let rect = align.anchor_size(anchor, g.size());
+                            paint_soon_pulse(&lp, rect, time, dark);
+                            lp.galley(rect.min, g, soon_color(dark));
+                        } else {
+                            lp.text(anchor, align, rel, small.clone(), pal.text_weak);
+                        }
                         continue;
                     }
                     let fill = if is_hover { color.gamma_multiply(1.15) } else { color };
@@ -1401,8 +1452,18 @@ impl TasksPage {
                         };
                         let x = [first, second].into_iter().find(|(fits, _)| *fits).map(|(_, x)| x);
                         if let Some(x) = x {
-                            let color = if r.done { pal.text_weak.gamma_multiply(0.75) } else { pal.text_weak };
-                            lp.galley(Pos2::new(x, bar.center().y - g.size().y / 2.0), g, color);
+                            let pos = Pos2::new(x, bar.center().y - g.size().y / 2.0);
+                            let color = if starting_soon(r, now, soon_secs) {
+                                // faltam 30 min ou menos: amarelo com pulso atrás
+                                any_soon = true;
+                                paint_soon_pulse(&lp, Rect::from_min_size(pos, g.size()), time, dark);
+                                soon_color(dark)
+                            } else if r.done {
+                                pal.text_weak.gamma_multiply(0.75)
+                            } else {
+                                pal.text_weak
+                            };
+                            lp.galley(pos, g, color);
                         }
                     }
                     // botão ✓ (concluir) / ↺ (reabrir), sempre visível na ponta da
@@ -1480,6 +1541,9 @@ impl TasksPage {
             );
         }
         self.wheel_over_tl = wheel_now;
+        if any_soon {
+            ui.ctx().request_repaint_after(Duration::from_millis(50));
+        }
         if scoped.is_some() {
             // visão travada no período: nem arrastar nem zoom
             pan_delta = 0.0;
@@ -2235,6 +2299,36 @@ mod tests {
         assert_eq!(relative_short(now, at(20 * 86_400)), "em 2 sem");
         assert_eq!(relative_short(now, at(-70 * 86_400)), "há 1 mês");
         assert_eq!(relative_short(now, at(200 * 86_400)), "em 6 meses");
+    }
+
+    #[test]
+    fn starting_soon_only_for_open_tasks_within_30_min() {
+        let now = Utc.with_ymd_and_hms(2026, 11, 11, 12, 0, 0).unwrap();
+        let m = |n: i64| now + chrono::Duration::minutes(n);
+        let row = |start, done| Row {
+            id: "x".into(),
+            title: "t".into(),
+            description: String::new(),
+            start,
+            end: None,
+            done,
+            skipped: false,
+            priority: 2,
+            start_local: String::new(),
+            end_local: String::new(),
+            linked: false,
+            read_only: false,
+            tags: vec![],
+        };
+        let s = 30 * 60;
+        assert!(starting_soon(&row(m(30), false), now, s));
+        assert!(starting_soon(&row(m(1), false), now, s));
+        assert!(!starting_soon(&row(m(31), false), now, s));
+        assert!(!starting_soon(&row(m(-1), false), now, s));
+        assert!(!starting_soon(&row(m(10), true), now, s));
+        // corte configurável; 0 desliga
+        assert!(starting_soon(&row(m(50), false), now, 60 * 60));
+        assert!(!starting_soon(&row(m(1), false), now, 0));
     }
 
     #[test]

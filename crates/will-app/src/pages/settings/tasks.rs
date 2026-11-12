@@ -406,6 +406,36 @@ impl TasksSettingsPage {
                     ui::toggle(ui, &mut t.notify_overdue);
                 },
             );
+                ui::field(
+                ui,
+                tr("Destacar no Gantt quando faltar (minutos)"),
+                Some(tr(
+                    "A quantos minutos do início o rótulo \"em X\" da tarefa passa a pulsar em amarelo no Gantt, e o menu ganha um badge amarelo com a contagem. Padrão: 30. Use 0 para desligar o destaque.",
+                )),
+                |ui| {
+                    ui.add(
+                        egui::DragValue::new(&mut t.soon_minutes)
+                            .range(0..=1440)
+                            .speed(1.0)
+                            .suffix(" min"),
+                    );
+                },
+            );
+                ui::field(
+                ui,
+                tr("Bipe enquanto houver tarefa chegando (segundos)"),
+                Some(tr(
+                    "Com alguma tarefa dentro do corte acima, o serviço toca um bipe curto a cada tantos segundos nesta máquina (na saída de áudio escolhida em Voz), mesmo com o app fechado. Padrão: 30. Use 0 para desligar o som.",
+                )),
+                |ui| {
+                    ui.add(
+                        egui::DragValue::new(&mut t.soon_beep_seconds)
+                            .range(0..=3600)
+                            .speed(1.0)
+                            .suffix(" s"),
+                    );
+                },
+            );
                 ui.label(
                 egui::RichText::new(tr(
                     "Os avisos usam o destino padrão da seção Telegram (chat padrão ou primeiro chat permitido) e precisam do módulo Telegram no ar.",

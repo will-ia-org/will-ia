@@ -213,6 +213,15 @@ fn strip_accent(c: char) -> char {
 }
 
 impl Task {
+    /// Aberta, ainda não começou e começa em até `secs` ("está chegando";
+    /// `secs <= 0` = nunca).
+    pub fn starts_within(&self, now: DateTime<Utc>, secs: i64) -> bool {
+        secs > 0
+            && self.done_at.is_none()
+            && now < self.start_at
+            && (self.start_at - now).num_seconds() <= secs
+    }
+
     /// Está espelhada num evento do Google Calendar.
     pub fn is_linked(&self) -> bool {
         self.calendar_id.is_some() && self.event_id.is_some()

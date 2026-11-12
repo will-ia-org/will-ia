@@ -6,6 +6,7 @@ pub mod instance;
 #[cfg(target_os = "macos")]
 pub mod macos;
 pub mod process;
+pub mod sound;
 
 use std::path::{Path, PathBuf};
 

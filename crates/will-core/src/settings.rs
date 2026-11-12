@@ -662,6 +662,12 @@ pub struct TasksSettings {
     /// Agenda do Google usada na sincronização (id); vazio = a agenda padrão
     /// de criação configurada em Google › Agenda.
     pub sync_calendar_id: String,
+    /// Gantt: a quantos minutos do início o rótulo "em X" da tarefa passa a
+    /// pulsar em amarelo ("está chegando"). `0` desliga o destaque.
+    pub soon_minutes: u32,
+    /// Enquanto houver tarefa "está chegando", o app toca um bipe curto a
+    /// cada tantos segundos. `0` desliga o som.
+    pub soon_beep_seconds: u32,
 }
 impl Default for TasksSettings {
     fn default() -> Self {
@@ -673,6 +679,8 @@ impl Default for TasksSettings {
             notify_native: true,
             sort: "start".into(),
             sync_calendar_id: String::new(),
+            soon_minutes: 30,
+            soon_beep_seconds: 30,
         }
     }
 }

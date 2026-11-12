@@ -680,6 +680,14 @@ struct TelegramTaskNotifier {
 
 #[async_trait::async_trait]
 impl will_tasks::TaskNotifier for TelegramTaskNotifier {
+    fn soon_beep(&self) {
+        let Some(state) = self.state.upgrade() else {
+            return;
+        };
+        let out = state.settings().realtime.output_device;
+        will_platform::sound::play_cue(out.as_deref(), will_platform::sound::CUE_SOON, 0.32);
+    }
+
     async fn notify(&self, text: &str) -> Result<(), String> {
         let state = self.state.upgrade().ok_or("servidor encerrando")?;
         #[cfg(feature = "telegram")]
