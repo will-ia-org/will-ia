@@ -391,7 +391,7 @@ pub const TASKS: Help = Help {
         ("Prioridade ≠ atraso", "A bandeira (🔴 alta, 🟡 média, 🟢 baixa) é independente do estado: uma tarefa atrasada pode ser de prioridade baixa."),
         ("Fuso", "Datas sem fuso usam o fuso de Configurações › Tarefas (padrão America/Sao_Paulo); a exibição também."),
         ("Ferramentas do agente", "tasks_create, tasks_list (pending/running/overdue/upcoming/done/skipped/all), tasks_get, tasks_update, tasks_delete, tasks_complete, tasks_skip, tasks_reopen. Política padrão: automático."),
-        ("Agenda: detalhes", "Concluída vira \"✓ título\" no Google (reabrir tira o ✓). Evento de dia inteiro vira tarefa 00:00 → 23:59 (e volta como dia inteiro). Evento recorrente entra uma ocorrência por vez. Tarefa sem fim vai com 1 h de duração fictícia; se você mudar o fim no Google, ele passa a valer. Prioridade vai numa propriedade privada do evento."),
+        ("Agenda: detalhes", "Só o que falta fazer fica no Google: concluída ou não realizada tem o evento apagado na sincronização (reabrir cria de novo). Evento de dia inteiro vira tarefa 00:00 → 23:59 (e volta como dia inteiro). Evento recorrente entra uma ocorrência por vez. Tarefa sem fim vai com 1 h de duração fictícia; se você mudar o fim no Google, ele passa a valer. Prioridade vai numa propriedade privada do evento."),
     ],
     code: "",
     links: &[],

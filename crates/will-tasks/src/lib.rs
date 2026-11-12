@@ -26,6 +26,9 @@ use will_storage::Storage;
 pub const FAMILY: &str = "tasks";
 const TICK: Duration = Duration::from_secs(30);
 /// Sem tarefa "chegando", de quanto em quanto o laço do bipe confere.
+/// Espera antes da primeira sincronização automática e passo de conferência.
+const AUTO_SYNC_WARMUP: Duration = Duration::from_secs(90);
+const AUTO_SYNC_POLL: Duration = Duration::from_secs(20);
 const BEEP_IDLE: Duration = Duration::from_secs(5);
 /// Teto da espera do laço do bipe (mudança de configuração vale em até isso).
 const BEEP_MAX_WAIT: Duration = Duration::from_secs(10);
@@ -226,6 +229,9 @@ impl TasksModule {
         let beep_token = token.clone();
         tokio::spawn(async move { me.beep_loop(beep_token).await });
         let me = self.clone();
+        let sync_token = token.clone();
+        tokio::spawn(async move { me.auto_sync_loop(sync_token).await });
+        let me = self.clone();
         tokio::spawn(async move {
             me.set_status(ModuleStatus::Running);
             tracing::info!(module = FAMILY, status = "running", "laço de tarefas no ar");
@@ -294,6 +300,61 @@ impl TasksModule {
             tokio::select! {
                 _ = token.cancelled() => break,
                 _ = tokio::time::sleep(wait.clamp(Duration::from_millis(200), BEEP_MAX_WAIT)) => {}
+            }
+        }
+    }
+
+    /// Sincronização automática com a agenda: a mesma do botão (hoje → +2
+    /// meses, agenda das configurações), a cada `sync_interval_minutes` (0
+    /// desliga). A primeira roda [`AUTO_SYNC_WARMUP`] depois de o serviço subir,
+    /// para o módulo Google estar no ar. Sem conta Google conectada, a rodada
+    /// só registra o motivo e espera a próxima.
+    async fn auto_sync_loop(self: Arc<Self>, token: CancellationToken) {
+        let mut next = tokio::time::Instant::now() + AUTO_SYNC_WARMUP;
+        let mut seen = self.cfg.read().sync_interval_minutes;
+        loop {
+            tokio::select! {
+                _ = token.cancelled() => break,
+                _ = tokio::time::sleep(AUTO_SYNC_POLL) => {}
+            }
+            let minutes = self.cfg.read().sync_interval_minutes;
+            if minutes != seen {
+                // intervalo mudou nas configurações: conta de novo a partir de agora
+                seen = minutes;
+                next = tokio::time::Instant::now() + Duration::from_secs(u64::from(minutes) * 60);
+            }
+            if minutes == 0 || tokio::time::Instant::now() < next {
+                continue;
+            }
+            next = tokio::time::Instant::now() + Duration::from_secs(u64::from(minutes) * 60);
+            match self.sync_calendar(sync::SyncRequest::default()).await {
+                Ok(r) => {
+                    let moved = r.pulled_created
+                        + r.pulled_updated
+                        + r.pulled_deleted
+                        + r.pushed_created
+                        + r.pushed_updated
+                        + r.pushed_deleted;
+                    if moved > 0 {
+                        self.deps.bus.log(
+                            "info",
+                            FAMILY,
+                            format!(
+                                "sincronização automática com \"{}\": agenda → tarefas {} nova(s), {} atualizada(s), {} removida(s); tarefas → agenda {} nova(s), {} atualizada(s), {} removida(s)",
+                                r.calendar,
+                                r.pulled_created,
+                                r.pulled_updated,
+                                r.pulled_deleted,
+                                r.pushed_created,
+                                r.pushed_updated,
+                                r.pushed_deleted
+                            ),
+                        );
+                    }
+                }
+                Err(e) => {
+                    tracing::warn!(module = FAMILY, error = %e, "sincronização automática não rodou")
+                }
             }
         }
     }

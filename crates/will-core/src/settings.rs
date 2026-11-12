@@ -668,6 +668,9 @@ pub struct TasksSettings {
     /// Enquanto houver tarefa "está chegando", o app toca um bipe curto a
     /// cada tantos segundos. `0` desliga o som.
     pub soon_beep_seconds: u32,
+    /// Sincronização automática com a agenda do Google: a cada tantos minutos
+    /// o serviço roda a mesma sincronização do botão. `0` desliga.
+    pub sync_interval_minutes: u32,
 }
 impl Default for TasksSettings {
     fn default() -> Self {
@@ -681,6 +684,7 @@ impl Default for TasksSettings {
             sync_calendar_id: String::new(),
             soon_minutes: 30,
             soon_beep_seconds: 30,
+            sync_interval_minutes: 60,
         }
     }
 }

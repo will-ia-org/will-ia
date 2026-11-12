@@ -11,8 +11,13 @@
 //!
 //! Identidade: a tarefa guarda `calendar_id` + `event_id`; o evento guarda
 //! `extendedProperties.private.will_task_id` (recupera o vínculo após um
-//! restore em outra máquina). Conclusão = prefixo `✓ ` no título do evento
-//! (+ `will_done_at`). Prioridade e "sem fim" vão em propriedades privadas.
+//! restore em outra máquina). Prioridade e "sem fim" vão em propriedades privadas.
+//!
+//! **Só o que falta fazer fica na agenda** (desde 0.1.28): tarefa fechada
+//! (concluída ou não realizada) tem o evento **apagado** na sincronização e
+//! perde o vínculo (continua aqui, como histórico); fechada sem vínculo nunca
+//! vira evento; reabrir cria um evento novo. Evento antigo com `✓ `/`will_done_at`
+//! (formato anterior) é lido como fechado e limpo do mesmo jeito.
 //! Evento de dia inteiro vira tarefa 00:00 → 23:59; tarefa 00:00 → 23:59 volta
 //! como dia inteiro. Ocorrências de evento recorrente entram uma a uma.
 //!
@@ -478,6 +483,10 @@ impl TasksModule {
                 _ => by_task.get(&t.id).map(|e| (e.clone(), None, None)),
             };
             let Some((eid, synced_at, remote_seen)) = known else {
+                // fechada não vai para a agenda
+                if t.is_done() {
+                    continue;
+                }
                 // tarefa nova → evento novo
                 match bridge.insert_event(&cal_id, &event_body(&t, zone)).await {
                     Ok(created) => {
@@ -535,6 +544,11 @@ impl TasksModule {
                                 .push(format!("vínculo de \"{}\": {e}", t.title));
                         }
                     }
+                    if t.is_done() && !ev.read_only {
+                        // fechada que ainda tinha evento (formato antigo "✓ ")
+                        self.drop_closed_event(&cal_id, &eid, &t, &mut rep).await;
+                        continue;
+                    }
                     rep.unchanged += 1;
                     continue;
                 }
@@ -552,6 +566,11 @@ impl TasksModule {
                         .warnings
                         .push(format!("vínculo de \"{}\": {e}", t.title)),
                 }
+                continue;
+            }
+            if push && t.is_done() {
+                // fechou aqui → sai da agenda
+                self.drop_closed_event(&cal_id, &eid, &t, &mut rep).await;
                 continue;
             }
             if push {
@@ -577,7 +596,13 @@ impl TasksModule {
                     .apply_remote_task(t.id, &ev.to_remote_task(link))
                     .await
                 {
-                    Ok(_) => rep.pulled_updated += 1,
+                    Ok(_) => {
+                        rep.pulled_updated += 1;
+                        if ev.done_at.is_some() && !ev.read_only {
+                            // a agenda venceu e o evento está marcado como fechado
+                            self.drop_closed_event(&cal_id, &eid, &t, &mut rep).await;
+                        }
+                    }
                     Err(e) => rep
                         .warnings
                         .push(format!("atualizar tarefa \"{}\": {e}", t.title)),
@@ -608,6 +633,22 @@ impl TasksModule {
                 rep.skipped += 1;
                 continue;
             }
+            // evento já marcado como fechado (formato antigo): entra como
+            // histórico, sem vínculo, e sai da agenda. Se o Google recusar a
+            // exclusão, entra vinculado e a próxima sincronização tenta de novo.
+            let cleaned = r.done_at.is_some()
+                && !r.read_only
+                && match bridge.delete_event(&cal_id, &r.id).await {
+                    Ok(()) => true,
+                    Err(e) => {
+                        rep.warnings
+                            .push(format!("tirar \"{}\" da agenda: {e}", r.title));
+                        false
+                    }
+                };
+            if cleaned {
+                rep.pushed_deleted += 1;
+            }
             let link = link(&cal_id, &r.id, r.updated, r.read_only);
             let new = NewTask {
                 title: will_core::tools::truncate(&r.title, crate::TITLE_MAX),
@@ -618,7 +659,7 @@ impl TasksModule {
                 created_by: "calendar".into(),
                 done_at: r.done_at,
                 skipped: r.skipped,
-                link: Some(link),
+                link: (!cleaned).then_some(link),
                 tags: vec![],
             };
             match storage.insert_task(&new).await {
@@ -650,6 +691,28 @@ impl TasksModule {
         }
         self.deps.bus.emit(will_core::Event::TasksChanged);
         Ok(rep)
+    }
+
+    /// Tarefa fechada não fica na agenda: solta o vínculo ANTES (evento sumido
+    /// com vínculo vivo apagaria a tarefa na próxima rodada) e apaga o evento.
+    /// Se o Google falhar, fica a lápide e a próxima sincronização tenta de novo.
+    async fn drop_closed_event(&self, cal_id: &str, eid: &str, t: &Task, rep: &mut SyncReport) {
+        let storage = &self.deps.storage;
+        if let Err(e) = storage.clear_task_link(t.id).await {
+            rep.warnings
+                .push(format!("soltar vínculo de \"{}\": {e}", t.title));
+            return;
+        }
+        match self.deps.calendar.delete_event(cal_id, eid).await {
+            Ok(()) => rep.pushed_deleted += 1,
+            Err(e) => {
+                rep.warnings
+                    .push(format!("tirar \"{}\" da agenda: {e}", t.title));
+                if let Err(e) = storage.add_task_tombstone(cal_id, eid).await {
+                    tracing::warn!(error = %e, "lápide não gravada");
+                }
+            }
+        }
     }
 
     /// Apaga o evento espelhado de uma tarefa (na exclusão). Se o Google falhar,
@@ -1049,16 +1112,51 @@ mod e2e {
         let r = m.sync_calendar(req()).await.unwrap();
         assert_eq!((r.pulled_created, r.unchanged), (0, 1), "{r:?}");
 
-        // concluir B → "✓ " na agenda; reabrir tira
+        // concluir B → o evento SAI da agenda; a tarefa fica, sem vínculo
         tokio::time::sleep(std::time::Duration::from_millis(20)).await;
         m.set_done(b.task.id, true).await.unwrap();
         let r = m.sync_calendar(req()).await.unwrap();
-        assert_eq!(r.pushed_updated, 1, "{r:?}");
-        assert_eq!(fake.summary("B"), "✓ Dentista (remarcado)");
+        assert_eq!((r.pushed_deleted, r.pushed_updated), (1, 0), "{r:?}");
+        assert!(!fake.events.lock().contains_key("B"));
+        let kept = m.deps.storage.get_task(b.task.id).await.unwrap();
+        assert!(kept.is_done() && kept.event_id.is_none());
+        // repetir não recria o evento nem apaga a tarefa
+        let before = fake.events.lock().len();
+        let r = m.sync_calendar(req()).await.unwrap();
+        assert_eq!(
+            (r.pushed_created, r.pulled_deleted, r.pushed_deleted),
+            (0, 0, 0),
+            "{r:?}"
+        );
+        assert_eq!(fake.events.lock().len(), before);
+        // reabrir → evento novo, sem "✓"
         tokio::time::sleep(std::time::Duration::from_millis(20)).await;
         m.set_done(b.task.id, false).await.unwrap();
-        m.sync_calendar(req()).await.unwrap();
-        assert_eq!(fake.summary("B"), "Dentista (remarcado)");
+        let r = m.sync_calendar(req()).await.unwrap();
+        assert_eq!(r.pushed_created, 1, "{r:?}");
+        let again = m.deps.storage.get_task(b.task.id).await.unwrap();
+        assert_eq!(
+            fake.summary(again.event_id.as_deref().unwrap()),
+            "Dentista (remarcado)"
+        );
+        // não realizada também sai da agenda
+        tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+        m.skip(b.task.id).await.unwrap();
+        let r = m.sync_calendar(req()).await.unwrap();
+        assert_eq!(r.pushed_deleted, 1, "{r:?}");
+        assert!(m
+            .deps
+            .storage
+            .get_task(b.task.id)
+            .await
+            .unwrap()
+            .event_id
+            .is_none());
+        // evento antigo já marcado "✓ " é limpo e entra como histórico
+        fake.put("L", timed("✓ Legado", 14, 9), Utc::now());
+        let r = m.sync_calendar(req()).await.unwrap();
+        assert_eq!((r.pulled_created, r.pushed_deleted), (1, 1), "{r:?}");
+        assert!(!fake.events.lock().contains_key("L"));
         // D (fora da janela) nunca entrou
         assert!(m
             .list("all")

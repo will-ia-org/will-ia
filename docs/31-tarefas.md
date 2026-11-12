@@ -127,6 +127,8 @@ Configurações: seção `tasks` (`enabled`, `timezone`, `notify_native`, `notif
 
 ## Sincronizar com o Google Calendar (botão em Configurações › Tarefas)
 
+**Automática (desde 0.1.28):** além do botão, o serviço roda a mesma sincronização sozinho a cada `tasks.sync_interval_minutes` (padrão 60; 0 desliga), com a janela padrão (hoje → +2 meses) e a agenda das configurações (`TasksModule::auto_sync_loop`). A primeira rodada sai 90 s depois de o serviço subir; mudar o intervalo reinicia a contagem. Só registra no log quando algo mudou; sem conta Google conectada, fica um aviso no log do serviço e tenta de novo no próximo intervalo.
+
 Ação explícita (não é automática) sobre **uma agenda** e **uma janela de datas** (padrão: hoje →
 +2 meses; editável antes de clicar). Crate `will-tasks/sync.rs`; o servidor liga a ponte
 [`CalendarBridge`] ao módulo Google (`GoogleCalendarBridge` → `GoogleModule::{sync_calendar,
@@ -139,7 +141,7 @@ sem política de ferramenta — é o usuário clicando). Decisões de 2026-11-10
 | Identidade (nunca duplica) | a tarefa guarda `calendar_id` + `event_id`; o evento guarda `extendedProperties.private.will_task_id`. Se o vínculo local se perdeu (restore em outra máquina), a propriedade recupera. |
 | Conflito | **última edição vence**: `updated_at > synced_at` ⇒ editada aqui; `updated` do evento ≠ `remote_updated_at` ⇒ editado lá; os dois ⇒ compara `updated_at` × `updated`. |
 | Exclusão | **nos dois sentidos**: evento vinculado sumiu (404/cancelado) ⇒ tarefa apagada na sincronização; tarefa apagada no app/`tasks_delete` ⇒ evento apagado **na hora**; se o Google falhar, lápide em `task_tombstones` (a próxima rodada tenta de novo e não reimporta). |
-| Concluída | título do evento vira `✓ título` (+ `will_done_at`); reabrir tira. Evento com `✓ ` importa já concluída. |
+| Fechada (concluída ou não realizada) | **sai da agenda** (desde 0.1.28): o evento é apagado na sincronização e a tarefa perde o vínculo (fica no app como histórico); fechada sem vínculo nunca vira evento; reabrir cria um evento novo. Evento antigo com `✓ `/`will_done_at` é lido como fechado, importado sem vínculo e apagado. Evento especial (só leitura) fica. Falha ao apagar → lápide. |
 | Não realizada | título vira `✗ título` (+ `will_skipped = "1"`); evento com `✗ ` importa fechada como não realizada. |
 | Prioridade | `will_priority` (high/medium/low) na propriedade privada; evento sem ela = média. |
 | Sem fim | o Google exige fim: envia início + 1 h com `will_open_end = "1"`; na volta, fim igual a início + 1 h com a marca ⇒ sem fim. Se você mudar o fim no Google, ele passa a valer. |

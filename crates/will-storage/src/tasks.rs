@@ -180,6 +180,18 @@ impl Storage {
         Ok(())
     }
 
+    /// Solta o vínculo com o evento (tarefa fechada sai da agenda); não mexe em
+    /// `updated_at`.
+    pub async fn clear_task_link(&self, id: TaskId) -> Result<()> {
+        sqlx::query(
+            "UPDATE tasks SET calendar_id = NULL, event_id = NULL, synced_at = NULL, remote_updated_at = NULL, event_read_only = 0 WHERE id = ?",
+        )
+        .bind(id.to_string())
+        .execute(&self.pool)
+        .await?;
+        Ok(())
+    }
+
     /// Aplica o conteúdo do evento do Google por cima da tarefa (a agenda venceu).
     /// `updated_at` e `synced_at` recebem o mesmo instante, então a tarefa não
     /// conta como "editada localmente" na próxima sincronização. Mudança de

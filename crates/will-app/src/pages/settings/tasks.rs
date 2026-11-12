@@ -311,7 +311,7 @@ impl TasksSettingsPage {
         ui.add_space(4.0);
         ui.label(
             egui::RichText::new(tr(
-                "Como funciona: a tarefa guarda o id do evento e o evento guarda o id da tarefa, então repetir a sincronização nunca duplica. Concluída vira \"✓ título\" na agenda. Apagar de um lado apaga do outro. Evento de dia inteiro vira tarefa 00:00 → 23:59; recorrente entra uma ocorrência por vez. Eventos especiais do Google (aniversário, Gmail, fora do escritório, foco) só entram: editar ou apagar a tarefa não mexe neles.",
+                "Como funciona: a tarefa guarda o id do evento e o evento guarda o id da tarefa, então repetir a sincronização nunca duplica. Só o que falta fazer fica na agenda: concluída ou não realizada tem o evento apagado (a tarefa continua aqui) e reabrir cria o evento de novo. Apagar de um lado apaga do outro. Evento de dia inteiro vira tarefa 00:00 → 23:59; recorrente entra uma ocorrência por vez. Eventos especiais do Google (aniversário, Gmail, fora do escritório, foco) só entram: editar ou apagar a tarefa não mexe neles.",
             ))
             .weak()
             .small(),
@@ -404,6 +404,21 @@ impl TasksSettingsPage {
                 )),
                 |ui| {
                     ui::toggle(ui, &mut t.notify_overdue);
+                },
+            );
+                ui::field(
+                ui,
+                tr("Sincronizar com a agenda sozinho a cada (minutos)"),
+                Some(tr(
+                    "O serviço roda a mesma sincronização do botão (de hoje a 2 meses à frente, na agenda escolhida) a cada tantos minutos, mesmo com o app fechado. Padrão: 60. Use 0 para sincronizar só pelo botão.",
+                )),
+                |ui| {
+                    ui.add(
+                        egui::DragValue::new(&mut t.sync_interval_minutes)
+                            .range(0..=10080)
+                            .speed(1.0)
+                            .suffix(" min"),
+                    );
                 },
             );
                 ui::field(
