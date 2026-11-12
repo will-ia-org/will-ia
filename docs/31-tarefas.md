@@ -90,7 +90,14 @@ Configurações: seção `tasks` (`enabled`, `timezone`, `notify_native`, `notif
 - **Zoom** por rolagem / pinça / botões − + (só quando o ponteiro está sobre o Gantt **e** nada está aberto por cima — dropdown, popup ou modal — senão a rolagem é do que está em cima; meio dia a **2 anos** visíveis; o eixo troca de escala: ≥ 30 px/dia = dias com ticks de hora, ≥ 7 px/dia = semanas seg–dom com o número ISO e os dias embaixo, abaixo disso = meses); **arrastar** o fundo
   navega; rolagem horizontal também; **Hoje** reposiciona (agora a 30 % da largura).
 - Barra com cor do estado; sem fim, a barra vai até o agora com a ponta esvaecida; fora da janela, uma
-  seta na borda indica o lado. Tooltip com título, período, estado, prioridade e descrição.
+  seta na borda indica o lado. Tooltip com título, período, estado, distância relativa, prioridade e descrição.
+- **Quanto falta / há quanto tempo** (desde 0.1.25): texto cinza e curto fora da barra, sem segundos
+  (`relative_short`: "agora", "em 5 min", "há 2 h", "em 3 d", "há 2 sem", "em 1 mês", "há 4 meses"; uma
+  unidade só, arredondada para baixo). Ainda não começou → "em X" à **esquerda** da barra (até o início);
+  em andamento → "há X" à esquerda (desde o início); já acabou ou concluída → "há X" à **direita**
+  (contado do fim). Se não couber na janela do lado preferido, vai para o outro; se não couber em nenhum,
+  some. Some também enquanto o mouse está na barra (ali entram os horários exatos). As **setas** de
+  tarefa fora da janela ganham o mesmo texto ao lado. Atualiza no repaint de 30 s.
 - Passar o mouse mostra o **círculo ✓** na ponta da barra (concluir; nas concluídas, ↺ reabrir).
   Clicar na barra ou na linha abre o formulário (título, descrição, início, fim, prioridade,
   Concluir/Reabrir, Excluir com confirmação).

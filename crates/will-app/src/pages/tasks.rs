@@ -386,6 +386,51 @@ fn fit_text(p: &egui::Painter, text: &str, font: egui::FontId, max_w: f32) -> St
     out
 }
 
+/// Distância humana e curta entre `now` e `at`, sem segundos: "agora",
+/// "em 5 min", "há 2 h", "em 3 d", "há 2 sem", "em 4 meses". Uma unidade só,
+/// sempre a maior que cabe (arredonda para baixo).
+pub(crate) fn relative_short(now: DateTime<Utc>, at: DateTime<Utc>) -> String {
+    let secs = (at - now).num_seconds();
+    let abs = secs.abs();
+    if abs < 60 {
+        return tr("agora").to_string();
+    }
+    let amount = if abs < 3600 {
+        trf("{} min", &[&(abs / 60)])
+    } else if abs < 86_400 {
+        trf("{} h", &[&(abs / 3600)])
+    } else if abs < 7 * 86_400 {
+        trf("{} d", &[&(abs / 86_400)])
+    } else if abs < 60 * 86_400 {
+        trf("{} sem", &[&(abs / (7 * 86_400))])
+    } else if abs < 60 * 86_400 * 2 {
+        tr("1 mês").to_string()
+    } else {
+        trf("{} meses", &[&(abs / (30 * 86_400))])
+    };
+    if secs > 0 {
+        trf("em {}", &[&amount])
+    } else {
+        trf("há {}", &[&amount])
+    }
+}
+
+/// Rótulo relativo da barra e de que lado fica: ainda não começou → "em X"
+/// à **esquerda** (quanto falta); em andamento → "há X" à esquerda (desde o
+/// início); já acabou (ou concluída) → "há X" à **direita**, contado do fim.
+fn relative_label(r: &Row, now: DateTime<Utc>) -> (String, bool) {
+    let ended = r.end.filter(|e| now >= *e);
+    if r.done {
+        (relative_short(now, r.end.unwrap_or(r.start)), false)
+    } else if now < r.start {
+        (relative_short(now, r.start), true)
+    } else if let Some(e) = ended {
+        (relative_short(now, e), false)
+    } else {
+        (relative_short(now, r.start), true)
+    }
+}
+
 /// Instante UTC → relógio local (fuso das configurações, pelo deslocamento).
 fn local_naive(dt: DateTime<Utc>, offset_minutes: i32) -> NaiveDateTime {
     (dt + chrono::Duration::minutes(i64::from(offset_minutes))).naive_utc()
@@ -1248,6 +1293,14 @@ impl TasksPage {
                             color,
                             Stroke::NONE,
                         ));
+                        // quanto falta / há quanto tempo, ao lado da seta
+                        let (rel, _) = relative_label(r, now);
+                        let (anchor, align) = if dir < 0.0 {
+                            (Pos2::new(ax + 9.0, cy), Align2::LEFT_CENTER)
+                        } else {
+                            (Pos2::new(ax - 9.0, cy), Align2::RIGHT_CENTER)
+                        };
+                        p.with_clip_rect(tl).text(anchor, align, rel, small.clone(), pal.text_weak);
                         continue;
                     }
                     let fill = if is_hover { color.gamma_multiply(1.15) } else { color };
@@ -1284,7 +1337,8 @@ impl TasksPage {
                             local_naive(e, self.offset_minutes).format("%d/%m %H:%M")
                         ));
                     }
-                    tip.push_str(&format!("\n{} · {} {}", state.label(), tr("prioridade"), match r.priority { 1 => tr("alta"), 3 => tr("baixa"), _ => tr("média") }));
+                    let (rel, rel_left) = relative_label(r, now);
+                    tip.push_str(&format!("\n{} · {} · {} {}", state.label(), rel, tr("prioridade"), match r.priority { 1 => tr("alta"), 3 => tr("baixa"), _ => tr("média") }));
                     if !r.tags.is_empty() {
                         tip.push_str(&format!("\n{}", r.tags.iter().map(|t| format!("#{t}")).collect::<Vec<_>>().join(" ")));
                     }
@@ -1330,6 +1384,26 @@ impl TasksPage {
                         };
                         lab(&start_txt, bar.left(), true);
                         lab(&end_txt, bar.right(), false);
+                    } else {
+                        // quanto falta / há quanto tempo, fora da barra: do lado
+                        // preferido; se não couber na janela, do outro; senão nada
+                        let lp = p.with_clip_rect(tl);
+                        let g = lp.layout_no_wrap(rel.clone(), small.clone(), pal.text_weak);
+                        let w = g.size().x;
+                        let left_x = bar.left() - 6.0 - w;
+                        let right_x = bar.right() + 6.0;
+                        let fits_left = left_x >= tl.left();
+                        let fits_right = right_x + w <= tl.right();
+                        let (first, second) = if rel_left {
+                            ((fits_left, left_x), (fits_right, right_x))
+                        } else {
+                            ((fits_right, right_x), (fits_left, left_x))
+                        };
+                        let x = [first, second].into_iter().find(|(fits, _)| *fits).map(|(_, x)| x);
+                        if let Some(x) = x {
+                            let color = if r.done { pal.text_weak.gamma_multiply(0.75) } else { pal.text_weak };
+                            lp.galley(Pos2::new(x, bar.center().y - g.size().y / 2.0), g, color);
+                        }
                     }
                     // botão ✓ (concluir) / ↺ (reabrir), sempre visível na ponta da
                     // barra; registrado depois da barra para ficar por cima no hit-test
@@ -2140,5 +2214,67 @@ impl TasksPage {
                 self.act(cx, done_msg, id, kind);
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use chrono::TimeZone;
+
+    #[test]
+    fn relative_short_picks_one_unit_without_seconds() {
+        let now = Utc.with_ymd_and_hms(2026, 11, 11, 12, 0, 0).unwrap();
+        let at = |secs: i64| now + chrono::Duration::seconds(secs);
+        assert_eq!(relative_short(now, at(30)), "agora");
+        assert_eq!(relative_short(now, at(-30)), "agora");
+        assert_eq!(relative_short(now, at(60)), "em 1 min");
+        assert_eq!(relative_short(now, at(-119)), "há 1 min");
+        assert_eq!(relative_short(now, at(3 * 3600 + 1800)), "em 3 h");
+        assert_eq!(relative_short(now, at(-2 * 86_400)), "há 2 d");
+        assert_eq!(relative_short(now, at(20 * 86_400)), "em 2 sem");
+        assert_eq!(relative_short(now, at(-70 * 86_400)), "há 1 mês");
+        assert_eq!(relative_short(now, at(200 * 86_400)), "em 6 meses");
+    }
+
+    #[test]
+    fn relative_label_side_follows_state() {
+        let now = Utc.with_ymd_and_hms(2026, 11, 11, 12, 0, 0).unwrap();
+        let h = |n: i64| now + chrono::Duration::hours(n);
+        let row = |start, end, done| Row {
+            id: "x".into(),
+            title: "t".into(),
+            description: String::new(),
+            start,
+            end,
+            done,
+            skipped: false,
+            priority: 2,
+            start_local: String::new(),
+            end_local: String::new(),
+            linked: false,
+            read_only: false,
+            tags: vec![],
+        };
+        assert_eq!(
+            relative_label(&row(h(2), Some(h(3)), false), now),
+            ("em 2 h".to_string(), true)
+        );
+        assert_eq!(
+            relative_label(&row(h(-1), Some(h(3)), false), now),
+            ("há 1 h".to_string(), true)
+        );
+        assert_eq!(
+            relative_label(&row(h(-5), None, false), now),
+            ("há 5 h".to_string(), true)
+        );
+        assert_eq!(
+            relative_label(&row(h(-5), Some(h(-2)), false), now),
+            ("há 2 h".to_string(), false)
+        );
+        assert_eq!(
+            relative_label(&row(h(-5), Some(h(-2)), true), now),
+            ("há 2 h".to_string(), false)
+        );
     }
 }
