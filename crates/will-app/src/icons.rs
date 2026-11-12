@@ -19,9 +19,11 @@ pub const INFO: MaterialIcon = m::ICON_INFO;
 pub const REFRESH: MaterialIcon = m::ICON_REFRESH;
 pub const SEND: MaterialIcon = m::ICON_SEND;
 pub const MIC: MaterialIcon = m::ICON_MIC;
-pub const RECORD: MaterialIcon = m::ICON_FIBER_MANUAL_RECORD;
 pub const ATTACH: MaterialIcon = m::ICON_ATTACH_FILE;
 pub const ARROW_UPWARD: MaterialIcon = m::ICON_ARROW_UPWARD;
+pub const ARROW_DOWNWARD: MaterialIcon = m::ICON_ARROW_DOWNWARD;
+pub const STOP: MaterialIcon = m::ICON_STOP;
+pub const HOURGLASS: MaterialIcon = m::ICON_HOURGLASS_TOP;
 pub const VISIBILITY: MaterialIcon = m::ICON_VISIBILITY;
 pub const VISIBILITY_OFF: MaterialIcon = m::ICON_VISIBILITY_OFF;
 pub const CONTENT_COPY: MaterialIcon = m::ICON_CONTENT_COPY;
@@ -48,6 +50,9 @@ pub const ALL: &[(&str, MaterialIcon)] = &[
     ("CHEVRON_RIGHT", CHEVRON_RIGHT),
     ("EXPAND_MORE", EXPAND_MORE),
     ("CLOSE", CLOSE),
+    ("ARROW_DOWNWARD", ARROW_DOWNWARD),
+    ("STOP", STOP),
+    ("HOURGLASS", HOURGLASS),
     ("CHECK_CIRCLE", CHECK_CIRCLE),
     ("ERROR", ERROR),
     ("WARNING", WARNING),
@@ -55,7 +60,6 @@ pub const ALL: &[(&str, MaterialIcon)] = &[
     ("REFRESH", REFRESH),
     ("SEND", SEND),
     ("MIC", MIC),
-    ("RECORD", RECORD),
     ("ATTACH", ATTACH),
     ("ARROW_UPWARD", ARROW_UPWARD),
     ("VISIBILITY", VISIBILITY),

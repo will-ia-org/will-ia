@@ -249,6 +249,59 @@ struct Draft {
     files: Vec<std::path::PathBuf>,
 }
 
+/// Lado dos botões quadrados da barra de envio e o vão entre eles.
+const BAR_BTN: f32 = 34.0;
+const BAR_GAP: f32 = 4.0;
+
+/// Botão só de ícone da barra de envio. O estado é dito pela cor: `fill` pinta
+/// o fundo (ação principal, gravando, interromper); sem `fill` o fundo só
+/// aparece ao passar o mouse.
+fn bar_button(
+    ui: &mut egui::Ui,
+    ic: crate::icons::MaterialIcon,
+    fg: egui::Color32,
+    fill: Option<egui::Color32>,
+    enabled: bool,
+    tooltip: &str,
+) -> egui::Response {
+    let sense = if enabled {
+        egui::Sense::click()
+    } else {
+        egui::Sense::hover()
+    };
+    let (rect, r) = ui.allocate_exact_size(egui::vec2(BAR_BTN, BAR_BTN), sense);
+    let hot = enabled && r.hovered();
+    let down = enabled && r.is_pointer_button_down_on();
+    let bg = match fill {
+        Some(f) if hot => f.lerp_to_gamma(egui::Color32::WHITE, 0.12),
+        Some(f) => f,
+        None if hot => ui.visuals().text_color().linear_multiply(0.10),
+        None => egui::Color32::TRANSPARENT,
+    };
+    let rect = if down { rect.shrink(1.0) } else { rect };
+    ui.painter().rect_filled(rect, 9.0, bg);
+    let fg = if !enabled {
+        fg.linear_multiply(0.45)
+    } else if hot && fill.is_none() {
+        ui.visuals().strong_text_color()
+    } else {
+        fg
+    };
+    ui.painter().text(
+        rect.center(),
+        egui::Align2::CENTER_CENTER,
+        ic.codepoint,
+        egui::FontId::new(19.0, ic.font_family()),
+        fg,
+    );
+    let r = if enabled {
+        r.on_hover_cursor(egui::CursorIcon::PointingHand)
+    } else {
+        r
+    };
+    r.on_hover_text(tooltip)
+}
+
 /// Junta a transcrição ao que já estava no rascunho (um espaço entre eles).
 fn merge_dictation(draft: &str, text: &str) -> String {
     let mut out = draft.to_string();
@@ -296,12 +349,14 @@ pub struct ThreadsPage {
     confirm_reset: Option<ThreadId>,
     show_archived: bool,
     focus_input: bool,
-    /// Ditado (botão "Falar" segurado): gravador ativo e transcrição em voo.
+    /// Ditado (botão "Falar", um clique abre e outro envia): gravador ativo e transcrição em voo.
     dictation: Option<crate::voice::audio::Recorder>,
     /// Thread em que o "Falar" foi pressionado: a transcrição vai para ELA,
     /// mesmo que o usuário abra outra thread enquanto o áudio é transcrito.
     dictation_for: Option<ThreadId>,
     dictation_task: Option<(ThreadId, Task<Value>)>,
+    /// Estado dividido com a caixinha flutuante do ditado (outro viewport).
+    dictation_overlay: crate::voice::overlay::DictationShared,
     /// "Ouvir" uma resposta (um por vez): resumo em áudio (resumo → TTS →
     /// reprodução) ou leitura literal em streaming.
     speak: Option<SpeakJob>,
@@ -1121,51 +1176,6 @@ impl ThreadsPage {
             }
             self.trigger_map = map;
         }
-        if let Some((tid, t)) = &self.dictation_task {
-            if let Some(r) = t.take() {
-                let tid = *tid;
-                self.dictation_task = None;
-                match r {
-                    Ok(v) => {
-                        let text = v
-                            .get("text")
-                            .and_then(|t| t.as_str())
-                            .unwrap_or("")
-                            .trim()
-                            .to_string();
-                        if text.is_empty() {
-                            cx.toasts.info(tr("Não entendi nada no áudio."));
-                        } else if self.selected == Some(tid) {
-                            // "Falar" é falar E enviar: a transcrição vai direto pra
-                            // thread, junto com o que já estava no campo. Se um envio
-                            // ainda está em voo, `send` não faz nada e o texto fica no campo.
-                            self.input = merge_dictation(&self.input, &text);
-                            self.focus_input = true;
-                            self.send(cx);
-                        } else {
-                            // O usuário abriu outra thread enquanto transcrevia: a fala
-                            // vai para a thread ORIGINAL (com o rascunho dela), sem
-                            // tocar na caixa da thread aberta.
-                            let d = self.drafts.remove(&tid).unwrap_or_default();
-                            let merged = merge_dictation(&d.text, &text);
-                            if !self.send_to(cx, tid, merged.clone(), d.files.clone()) {
-                                self.drafts.insert(
-                                    tid,
-                                    Draft {
-                                        text: merged,
-                                        files: d.files,
-                                    },
-                                );
-                                cx.toasts.info(tr(
-                                    "A transcrição ficou no rascunho da thread onde você falou.",
-                                ));
-                            }
-                        }
-                    }
-                    Err(e) => cx.toasts.error(trf("Transcrição falhou: {}", &[&e])),
-                }
-            }
-        }
         self.poll_list(cx.svc);
         if let Some(id) = self.selected {
             if self.turns_for != Some(id) || (self.turns.loaded_at.is_none() && !self.turns.busy())
@@ -1293,6 +1303,125 @@ impl ThreadsPage {
     }
 
     /// Envia o que está na caixa para a thread aberta.
+    /// Abre o microfone para a thread `id` (ditado de um clique).
+    fn start_dictation(&mut self, cx: &mut Cx, id: ThreadId, title: String) {
+        let dev = cx.snap.settings.realtime.input_device.clone();
+        let rec = crate::voice::audio::Recorder::start(dev.as_deref());
+        if let Some(e) = &rec.error {
+            cx.toasts.error(e.clone());
+            return;
+        }
+        *self.dictation_overlay.lock() = crate::voice::overlay::DictationState {
+            title,
+            started: Some(std::time::Instant::now()),
+            level: Some(rec.level_handle()),
+            ..Default::default()
+        };
+        self.dictation = Some(rec);
+        self.dictation_for = Some(id);
+    }
+
+    /// Fecha o microfone. Com `send`, manda o áudio transcrever (e a transcrição
+    /// é enviada na thread onde o ditado começou); sem, descarta.
+    fn stop_dictation(&mut self, cx: &mut Cx, send: bool) {
+        let Some(rec) = self.dictation.take() else {
+            return;
+        };
+        let tid = self.dictation_for.take();
+        if !send {
+            return;
+        }
+        if let Some(e) = rec.runtime_error() {
+            cx.toasts.error(trf("Microfone: {}", &[&e]));
+            return;
+        }
+        match (rec.stop(), tid) {
+            (Some(wav), Some(tid)) => {
+                self.dictation_task = Some((
+                    tid,
+                    cx.svc
+                        .call(move |c| async move { c.transcribe(wav, Some("pt")).await }),
+                ));
+            }
+            _ => cx.toasts.info(tr("Gravação muito curta.")),
+        }
+    }
+
+    /// Ciclo do ditado, chamado pelo app a CADA quadro (com qualquer página
+    /// aberta): consome os cliques da caixinha flutuante, entrega a transcrição
+    /// e mantém a caixinha na tela enquanto o microfone estiver aberto.
+    pub fn dictation_tick(&mut self, ctx: &egui::Context, cx: &mut Cx) {
+        if self.dictation.is_some() {
+            let (send, cancel) = {
+                let mut s = self.dictation_overlay.lock();
+                (std::mem::take(&mut s.send), std::mem::take(&mut s.cancel))
+            };
+            let broken = self.dictation.as_ref().and_then(|r| r.runtime_error());
+            if let Some(e) = broken {
+                cx.toasts.error(trf("Microfone: {}", &[&e]));
+                self.stop_dictation(cx, false);
+            } else if cancel {
+                self.stop_dictation(cx, false);
+            } else if send {
+                self.stop_dictation(cx, true);
+            }
+        }
+        if let Some((tid, t)) = &self.dictation_task {
+            if let Some(r) = t.take() {
+                let tid = *tid;
+                self.dictation_task = None;
+                match r {
+                    Ok(v) => {
+                        let text = v
+                            .get("text")
+                            .and_then(|t| t.as_str())
+                            .unwrap_or("")
+                            .trim()
+                            .to_string();
+                        if text.is_empty() {
+                            cx.toasts.info(tr("Não entendi nada no áudio."));
+                        } else if self.selected == Some(tid) {
+                            // "Falar" é falar E enviar: a transcrição vai direto pra
+                            // thread, junto com o que já estava no campo. Se um envio
+                            // ainda está em voo, `send` não faz nada e o texto fica no campo.
+                            self.input = merge_dictation(&self.input, &text);
+                            self.focus_input = true;
+                            self.send(cx);
+                        } else {
+                            // O usuário abriu outra thread enquanto transcrevia: a fala
+                            // vai para a thread ORIGINAL (com o rascunho dela), sem
+                            // tocar na caixa da thread aberta.
+                            let d = self.drafts.remove(&tid).unwrap_or_default();
+                            let merged = merge_dictation(&d.text, &text);
+                            if !self.send_to(cx, tid, merged.clone(), d.files.clone()) {
+                                self.drafts.insert(
+                                    tid,
+                                    Draft {
+                                        text: merged,
+                                        files: d.files,
+                                    },
+                                );
+                                cx.toasts.info(tr(
+                                    "A transcrição ficou no rascunho da thread onde você falou.",
+                                ));
+                            }
+                        }
+                    }
+                    Err(e) => cx.toasts.error(trf("Transcrição falhou: {}", &[&e])),
+                }
+            }
+        }
+        let transcribing = self
+            .dictation_task
+            .as_ref()
+            .is_some_and(|(_, t)| t.pending());
+        if self.dictation.is_some() || transcribing {
+            self.dictation_overlay.lock().transcribing = self.dictation.is_none();
+            crate::voice::overlay::show_dictation(ctx, &self.dictation_overlay);
+            ctx.request_repaint_after(std::time::Duration::from_millis(200));
+        }
+    }
+
     fn send(&mut self, cx: &mut Cx) {
         let Some(id) = self.selected else { return };
         let text = self.input.trim().to_string();
@@ -1775,7 +1904,7 @@ impl ThreadsPage {
             remote: &mut self.remote,
             local: cx.snap.server_is_local,
         };
-        egui::ScrollArea::vertical()
+        let chat = egui::ScrollArea::vertical()
             .id_salt(("chat", t.id))
             .auto_shrink([false, false])
             .max_height(hist_h)
@@ -1921,6 +2050,47 @@ impl ThreadsPage {
                     ui.scroll_to_cursor(Some(egui::Align::BOTTOM));
                 }
             });
+        // Rolou para cima: botão flutuante no canto inferior direito da conversa
+        // que pula de volta para a última mensagem.
+        let hidden_below =
+            chat.content_size.y - chat.inner_rect.height() - chat.state.clamped_offset().y;
+        if hidden_below > 80.0 {
+            let center = chat.inner_rect.right_bottom() - egui::vec2(34.0, 30.0);
+            let area = egui::Area::new(egui::Id::unique(("chat-jump", t.id)))
+                .order(egui::Order::Foreground)
+                .fixed_pos(center - egui::vec2(18.0, 18.0))
+                .show(ui.ctx(), |ui| {
+                    let (rect, r) =
+                        ui.allocate_exact_size(egui::vec2(36.0, 36.0), egui::Sense::click());
+                    let c = rect.center();
+                    let p = ui.painter();
+                    p.circle_filled(
+                        c + egui::vec2(0.0, 1.5),
+                        18.5,
+                        egui::Color32::from_black_alpha(50),
+                    );
+                    p.circle_filled(c, 18.0, if r.hovered() { pal.accent } else { pal.card });
+                    p.circle_stroke(c, 18.0, egui::Stroke::new(1.0, pal.border));
+                    let ic = crate::icons::ARROW_DOWNWARD;
+                    p.text(
+                        c,
+                        egui::Align2::CENTER_CENTER,
+                        ic.codepoint,
+                        egui::FontId::new(20.0, ic.font_family()),
+                        if r.hovered() {
+                            egui::Color32::WHITE
+                        } else {
+                            pal.text
+                        },
+                    );
+                    r.on_hover_cursor(egui::CursorIcon::PointingHand)
+                        .on_hover_text(tr("Ir para a última mensagem"))
+                });
+            if area.inner.clicked() {
+                self.scroll_bottom = true;
+                ui.ctx().request_repaint();
+            }
+        }
         for a in echo_actions {
             self.echo_action(t.id, a);
         }
@@ -2082,7 +2252,15 @@ impl ThreadsPage {
                         ui.add_space(4.0);
                     }
                     ui.horizontal(|ui| {
-                        let btn_w = 92.0 + 76.0;
+                        // Largura reservada = botões que REALMENTE aparecem, para o
+                        // texto nunca passar por baixo deles.
+                        let voice_ready = matches!(
+                            cx.snap.modules.get(&will_core::Module::Realtime),
+                            Some(will_core::ModuleStatus::Running)
+                        );
+                        let running = t.pending > 0 || has_live;
+                        let n_btn = 2.0 + f32::from(voice_ready) + f32::from(running);
+                        let btn_w = n_btn * BAR_BTN + (n_btn - 1.0) * BAR_GAP;
                         let text_w = (ui.available_width() - btn_w - 12.0).max(120.0);
                         let hint = if hovering {
                             tr("Solte os arquivos para anexar.")
@@ -2110,138 +2288,93 @@ impl ThreadsPage {
                             send_now = true;
                         }
                         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                            ui.spacing_mut().item_spacing.x = BAR_GAP;
+                            let danger = egui::Color32::from_rgb(214, 69, 65);
+                            let amber = egui::Color32::from_rgb(220, 160, 40);
+                            // Enviar: o único botão cheio; apagado sem nada para mandar
                             let can = !busy
                                 && (!self.input.trim().is_empty()
                                     || !self.pending_files.is_empty());
-                            let b = egui::Button::new(if busy {
-                                egui::WidgetText::from(
-                                    egui::RichText::new("…").color(egui::Color32::WHITE),
-                                )
-                            } else {
-                                ui::icon_text_colored(
-                                    crate::icons::SEND,
-                                    tr("Enviar"),
-                                    14.0,
-                                    egui::Color32::WHITE,
-                                )
-                            })
-                            .fill(if can {
+                            let send_fill = if can {
                                 pal2.accent
                             } else {
-                                pal2.accent.linear_multiply(0.45)
-                            })
-                            .min_size(egui::vec2(84.0, 34.0));
-                            if ui.add_enabled(can, b).clicked() {
+                                pal2.accent.linear_multiply(0.35)
+                            };
+                            if bar_button(
+                                ui,
+                                if busy {
+                                    crate::icons::HOURGLASS
+                                } else {
+                                    crate::icons::ARROW_UPWARD
+                                },
+                                egui::Color32::WHITE,
+                                Some(send_fill),
+                                can,
+                                tr("Enviar (Ctrl+Enter)"),
+                            )
+                            .clicked()
+                            {
                                 send_now = true;
                             }
-                            // Falar (ditado): segure para gravar; solte para transcrever
-                            // (Whisper via servidor) e ENVIAR direto. Só com o módulo de voz pronto.
-                            let voice_ready = matches!(
-                                cx.snap.modules.get(&will_core::Module::Realtime),
-                                Some(will_core::ModuleStatus::Running)
-                            );
+                            // Falar (ditado): um clique abre o microfone e ele fica
+                            // aberto (dá para trocar de tela); outro clique, ou o Enviar
+                            // da caixinha flutuante, fecha, transcreve e envia.
                             if voice_ready {
                                 let recording = self.dictation.is_some();
+                                // o microfone pode estar aberto para OUTRA thread
+                                let here = recording && self.dictation_for == Some(t.id);
                                 let transcribing = self
                                     .dictation_task
                                     .as_ref()
                                     .is_some_and(|(_, t)| t.pending());
-                                let label = if recording {
-                                    trf(
-                                        "{}s",
-                                        &[&format!(
-                                            "{:.0}",
-                                            self.dictation
-                                                .as_ref()
-                                                .map(|d| d.elapsed_secs())
-                                                .unwrap_or(0.0)
-                                        )],
+                                let (ic, fg, fill) = if here {
+                                    // vermelho "respirando" enquanto ouve
+                                    let k = 0.78
+                                        + 0.22 * (ui.input(|i| i.time) as f32 * 4.0).sin();
+                                    ui.ctx().request_repaint_after(
+                                        std::time::Duration::from_millis(60),
+                                    );
+                                    (
+                                        crate::icons::MIC,
+                                        egui::Color32::WHITE,
+                                        Some(danger.linear_multiply(k)),
                                     )
                                 } else if transcribing {
-                                    tr("…").into()
+                                    (crate::icons::HOURGLASS, amber, None)
                                 } else {
-                                    tr("Falar").into()
+                                    (crate::icons::MIC, pal2.text_weak, None)
                                 };
-                                let color = if recording {
-                                    egui::Color32::WHITE
-                                } else {
-                                    pal2.text
-                                };
-                                let text: egui::WidgetText = if recording {
-                                    ui::icon_text_colored(crate::icons::RECORD, &label, 14.0, color)
+                                let enabled = here || (!busy && !transcribing && !recording);
+                                let tip = if here {
+                                    tr("Ouvindo. Clique para transcrever e enviar.")
                                 } else if transcribing {
-                                    egui::RichText::new(label).color(color).into()
+                                    tr("Transcrevendo…")
                                 } else {
-                                    ui::icon_text_colored(crate::icons::MIC, &label, 14.0, color)
+                                    tr("Clique para falar: o microfone fica aberto mesmo se você trocar de tela. Clique de novo, ou em Enviar na caixinha flutuante, para transcrever (Whisper) e enviar.")
                                 };
-                                let b = egui::Button::new(text)
-                                .fill(if recording {
-                                    egui::Color32::from_rgb(200, 60, 60)
-                                } else {
-                                    pal2.card
-                                })
-                                .min_size(egui::vec2(68.0, 34.0));
-                                let r = ui
-                                    .add_enabled(!busy && !transcribing, b)
-                                    .on_hover_text(tr(
-                                    "Segure para falar; ao soltar, transcreve (Whisper) e envia na hora.",
-                                ));
-                                // Começa ao pressionar sobre o botão; continua
-                                // enquanto o botão do mouse estiver pressionado em
-                                // QUALQUER lugar (não só sobre o botão) e só para ao
-                                // soltar de verdade. `is_pointer_button_down_on` é
-                                // frágil entre quadros (o rótulo muda a cada segundo),
-                                // então a parada usa o estado global do ponteiro.
-                                let pressed_on = r.is_pointer_button_down_on();
-                                let primary_down = ui.input(|i| i.pointer.primary_down());
-                                if pressed_on && !recording && !transcribing {
-                                    let dev = cx.snap.settings.realtime.input_device.clone();
-                                    let rec = crate::voice::audio::Recorder::start(dev.as_deref());
-                                    if let Some(e) = &rec.error {
-                                        cx.toasts.error(e.clone());
+                                if bar_button(ui, ic, fg, fill, enabled, tip).clicked() {
+                                    if here {
+                                        self.stop_dictation(cx, true);
                                     } else {
-                                        self.dictation = Some(rec);
-                                        self.dictation_for = Some(t.id);
+                                        self.start_dictation(cx, t.id, title_of(t));
                                     }
-                                } else if recording && !primary_down {
-                                    if let Some(rec) = self.dictation.take() {
-                                        if let Some(e) = rec.runtime_error() {
-                                            cx.toasts.error(trf("Microfone: {}", &[&e]));
-                                        } else {
-                                            match rec.stop() {
-                                                Some(wav) => {
-                                                    let for_thread =
-                                                        self.dictation_for.take().unwrap_or(t.id);
-                                                    self.dictation_task = Some((
-                                                        for_thread,
-                                                        cx.svc.call(move |c| async move {
-                                                            c.transcribe(wav, Some("pt")).await
-                                                        }),
-                                                    ));
-                                                }
-                                                None => cx.toasts.info(tr("Gravação muito curta.")),
-                                            }
-                                        }
-                                    }
-                                }
-                                if recording || transcribing {
-                                    ui.ctx().request_repaint_after(
-                                        std::time::Duration::from_millis(200),
-                                    );
                                 }
                             }
                             // Anexar: diálogo nativo de arquivos (vários de uma vez)
-                            let a = egui::Button::new(ui::icon_text_colored(
+                            let attach_fg = if self.pending_files.is_empty() {
+                                pal2.text_weak
+                            } else {
+                                pal2.accent
+                            };
+                            if bar_button(
+                                ui,
                                 crate::icons::ATTACH,
-                                tr("Anexar"),
-                                14.0,
-                                pal2.text,
-                            ))
-                            .min_size(egui::vec2(68.0, 34.0));
-                            if ui
-                                .add_enabled(!busy, a)
-                                .on_hover_text(tr("Anexar arquivos (ou arraste para a janela)"))
-                                .clicked()
+                                attach_fg,
+                                None,
+                                !busy,
+                                tr("Anexar arquivos (ou arraste para a janela)"),
+                            )
+                            .clicked()
                             {
                                 if let Some(files) = rfd::FileDialog::new()
                                     .set_title(tr("Anexar arquivos"))
@@ -2255,32 +2388,29 @@ impl ThreadsPage {
                                 }
                             }
                             // Interromper: só com turno em execução, em vermelho
-                            // (à esquerda de Anexar; manda o interrupt ao claude).
-                            if t.pending > 0 || has_live {
+                            // (manda o interrupt ao claude).
+                            if running {
                                 let interrupting = self
                                     .interrupting
                                     .get(&t.id)
                                     .is_some_and(|at| at.elapsed().as_secs() < 20);
-                                let b = egui::Button::new(
-                                    egui::RichText::new(if interrupting {
-                                        tr("interrompendo…")
-                                    } else {
-                                        tr("Interromper")
-                                    })
-                                    .color(egui::Color32::WHITE),
-                                )
-                                .fill(if interrupting {
-                                    egui::Color32::from_rgb(200, 60, 60).linear_multiply(0.55)
+                                let (ic, tip) = if interrupting {
+                                    (crate::icons::HOURGLASS, tr("interrompendo…"))
                                 } else {
-                                    egui::Color32::from_rgb(200, 60, 60)
-                                })
-                                .min_size(egui::vec2(96.0, 34.0));
-                                if ui
-                                    .add_enabled(!interrupting, b)
-                                    .on_hover_text(tr(
-                                        "Para o turno atual (o processo continua vivo); se a mensagem ainda estiver na fila, cancela a fila.",
-                                    ))
-                                    .clicked()
+                                    (
+                                        crate::icons::STOP,
+                                        tr("Interromper: para o turno atual (o processo continua vivo); se a mensagem ainda estiver na fila, cancela a fila."),
+                                    )
+                                };
+                                if bar_button(
+                                    ui,
+                                    ic,
+                                    danger,
+                                    Some(danger.linear_multiply(0.16)),
+                                    !interrupting,
+                                    tip,
+                                )
+                                .clicked()
                                 {
                                     self.action(cx, t.id, "Interromper");
                                 }

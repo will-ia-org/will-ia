@@ -646,7 +646,8 @@ pub struct Recorder {
     pub error: Option<String>,
     /// Erro do stream surgido durante a captura (dispositivo sumiu, formato).
     runtime_error: Arc<Mutex<Option<String>>>,
-    started: Instant,
+    /// Nível do microfone (pico recente, 0..1) como bits de `f32`.
+    level: Arc<std::sync::atomic::AtomicU32>,
 }
 
 impl Recorder {
@@ -654,13 +655,14 @@ impl Recorder {
         let host = audio_host();
         let buf: Arc<Mutex<Vec<i16>>> = Arc::new(Mutex::new(Vec::new()));
         let rt_err: Arc<Mutex<Option<String>>> = Arc::new(Mutex::new(None));
+        let level = Arc::new(std::sync::atomic::AtomicU32::new(0));
         let Some(dev) = find_device(&host, input_name, true) else {
             return Self {
                 _stream: None,
                 buf,
                 error: Some(tr("nenhum dispositivo de entrada").into()),
                 runtime_error: rt_err.clone(),
-                started: Instant::now(),
+                level: level.clone(),
             };
         };
         let cfg = match dev.default_input_config() {
@@ -671,7 +673,7 @@ impl Recorder {
                     buf,
                     error: Some(trf("microfone: {}", &[&e])),
                     runtime_error: rt_err.clone(),
-                    started: Instant::now(),
+                    level: level.clone(),
                 }
             }
         };
@@ -680,6 +682,7 @@ impl Recorder {
         let mut mono: Vec<f32> = Vec::new();
         let mut out: Vec<f32> = Vec::new();
         let b2 = buf.clone();
+        let lv = level.clone();
         let stream = dev.build_input_stream(
             low_latency(&cfg),
             move |data: &[f32], _| {
@@ -693,6 +696,12 @@ impl Recorder {
                 }
                 out.clear();
                 rs.process(&mono, &mut out);
+                let peak = out.iter().fold(0.0f32, |m, s| m.max(s.abs()));
+                let old = f32::from_bits(lv.load(std::sync::atomic::Ordering::Relaxed));
+                lv.store(
+                    peak.max(old * 0.8).to_bits(),
+                    std::sync::atomic::Ordering::Relaxed,
+                );
                 let mut g = b2.lock();
                 for s in &out {
                     g.push((s.clamp(-1.0, 1.0) * 32767.0) as i16);
@@ -715,7 +724,7 @@ impl Recorder {
                     buf,
                     error: err,
                     runtime_error: rt_err.clone(),
-                    started: Instant::now(),
+                    level: level.clone(),
                 }
             }
             Err(e) => Self {
@@ -723,13 +732,14 @@ impl Recorder {
                 buf,
                 error: Some(trf("microfone: {}", &[&e])),
                 runtime_error: rt_err.clone(),
-                started: Instant::now(),
+                level: level.clone(),
             },
         }
     }
 
-    pub fn elapsed_secs(&self) -> f32 {
-        self.started.elapsed().as_secs_f32()
+    /// Alça do nível do microfone, para quem desenha fora do quadro principal.
+    pub fn level_handle(&self) -> Arc<std::sync::atomic::AtomicU32> {
+        self.level.clone()
     }
 
     /// Erro surgido durante a captura (stream caiu), se houver.

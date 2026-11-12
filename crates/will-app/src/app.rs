@@ -859,6 +859,18 @@ impl eframe::App for WillApp {
             return;
         }
 
+        // Ditado ("Falar"): segue vivo com qualquer página aberta.
+        {
+            let mut go: Option<Nav> = None;
+            let mut cx = Cx {
+                svc: &self.svc,
+                snap: &self.snap,
+                toasts: &mut self.toasts,
+                voice: &mut self.voice,
+                go: &mut go,
+            };
+            self.pages.threads.dictation_tick(&ctx, &mut cx);
+        }
         egui::Panel::left("nav")
             .exact_size(232.0)
             .resizable(false)
