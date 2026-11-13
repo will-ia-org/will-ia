@@ -380,6 +380,16 @@ impl VoicePage {
                 );
                 ui::field(
                     ui,
+                    tr("Atalho de falar (ditado na thread)"),
+                    Some(tr(
+                        "Liga o microfone na thread aberta; pressionado de novo, transcreve e envia. É global: funciona com outro programa em foco. Ex.: Ctrl+Space, Ctrl+Shift+M, Alt+F1. Vazio desliga. Não funciona em Wayland.",
+                    )),
+                    |ui| {
+                        ui::text_input(ui, &mut r.dictation_hotkey, "Ctrl+Space");
+                    },
+                );
+                ui::field(
+                    ui,
                     tr("Sinais sonoros"),
                     Some(tr(
                         "Toca um bipe curto ao ligar e desligar a voz e em erro.",

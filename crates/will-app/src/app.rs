@@ -40,6 +40,11 @@ pub fn run(profile: Option<Profile>, visible: bool) -> anyhow::Result<()> {
         .with_icon(crate::icon::egui_icon())
         // Decorações do próprio SO (barra de título, minimizar/maximizar/fechar).
         .with_decorations(true)
+        // A superfície GL é criada com canal alfa só se a janela RAIZ pedir
+        // transparência; sem isso as janelas flutuantes (aprovações, Falar,
+        // voz) ficam com fundo preto atrás dos cantos arredondados. A janela
+        // principal segue opaca: os painéis cobrem a área toda.
+        .with_transparent(cfg!(not(target_os = "linux")))
         .with_visible(visible);
     let options = eframe::NativeOptions {
         viewport,
@@ -138,6 +143,7 @@ pub struct WillApp {
     last_status_refresh: Instant,
     theme_applied: Option<String>,
     hotkey_applied: Option<String>,
+    dictation_hotkey_applied: Option<String>,
     /// Captura agendada (caminho, quadros restantes) para dar tempo à navegação.
     pending_screenshot: Option<(std::path::PathBuf, u8)>,
     /// Recarga das settings do snapshot depois de `SettingsChanged`.
@@ -203,6 +209,7 @@ impl WillApp {
             last_status_refresh: Instant::now() - Duration::from_secs(60),
             theme_applied: None,
             hotkey_applied: None,
+            dictation_hotkey_applied: None,
             pending_screenshot: None,
             settings_task: None,
             telemetry_task: None,
@@ -287,6 +294,23 @@ impl WillApp {
             self.toasts.error(trf("Atalho global: {}", &[e]));
         }
         self.hotkey_applied = Some(hk);
+    }
+
+    /// Atalho global do ditado: só com o módulo Voz ligado (é ele que transcreve).
+    fn apply_dictation_hotkey(&mut self) {
+        let hk = if self.snap.settings.realtime.enabled {
+            self.snap.settings.realtime.dictation_hotkey.clone()
+        } else {
+            String::new()
+        };
+        if self.dictation_hotkey_applied.as_deref() == Some(hk.as_str()) {
+            return;
+        }
+        self.hotkeys.apply_dictation(&hk);
+        if let Some(e) = &self.hotkeys.dictation_error {
+            self.toasts.error(trf("Atalho de falar: {}", &[e]));
+        }
+        self.dictation_hotkey_applied = Some(hk);
     }
 
     fn show_window(&mut self, ctx: &egui::Context) {
@@ -457,6 +481,7 @@ impl WillApp {
                     self.voice.toggle(&self.svc);
                 }
             }
+            UiCommand::DictationToggle => self.pages.threads.request_dictation_toggle(),
             UiCommand::HotkeyUp => {
                 if self.voice.ptt_mode {
                     self.voice.set_ptt(&self.svc, false);
@@ -656,6 +681,7 @@ impl WillApp {
             self.pages.settings.status.refresh(&self.svc);
         }
         self.apply_hotkey();
+        self.apply_dictation_hotkey();
     }
 
     fn nav_panel(&mut self, ui: &mut egui::Ui) {
@@ -870,6 +896,8 @@ impl eframe::App for WillApp {
                 go: &mut go,
             };
             self.pages.threads.dictation_tick(&ctx, &mut cx);
+            // Aprovações pendentes: pilha flutuante visível em qualquer tela.
+            self.pages.approvals.overlay_tick(&ctx, &mut cx);
         }
         egui::Panel::left("nav")
             .exact_size(232.0)
@@ -955,6 +983,14 @@ impl eframe::App for WillApp {
             self.leave_profile();
         }
         self.toasts.show(&ctx);
+    }
+
+    /// Fundo de limpeza totalmente transparente: o padrão do eframe é um preto
+    /// translúcido, que aparecia como um quadrado escuro atrás dos cantos
+    /// arredondados das janelas flutuantes. A janela principal não muda (os
+    /// painéis cobrem tudo).
+    fn clear_color(&self, _visuals: &egui::Visuals) -> [f32; 4] {
+        [0.0, 0.0, 0.0, 0.0]
     }
 
     fn on_exit(&mut self, _gl: Option<&eframe::glow::Context>) {

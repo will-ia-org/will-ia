@@ -315,7 +315,17 @@ fn visuals(dark: bool) -> egui::Visuals {
     w.active.bg_fill = p.accent.linear_multiply(0.6);
     w.active.weak_bg_fill = w.active.bg_fill;
     w.active.bg_stroke = egui::Stroke::new(1.0, p.accent);
-    w.active.fg_stroke = egui::Stroke::new(1.0, Color32::WHITE);
+    // O `fg_stroke` do estado ativo é também a cor de TODO texto "forte"
+    // (`RichText::strong`, negrito e títulos do Markdown), que ignora o
+    // `override_text_color`. Branco fixo sumia no tema claro.
+    w.active.fg_stroke = egui::Stroke::new(
+        1.0,
+        if dark {
+            Color32::WHITE
+        } else {
+            Color32::from_rgb(15, 20, 30)
+        },
+    );
     w.open.bg_fill = w.inactive.bg_fill;
     w.open.weak_bg_fill = w.inactive.weak_bg_fill;
     w.open.bg_stroke = egui::Stroke::new(1.0, p.accent.linear_multiply(0.7));

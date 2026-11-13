@@ -115,6 +115,8 @@ O `mac-notification-sys` (por baixo do `notify-rust`) procura, antes da primeira
 
 ## Instalador (`will-ia-setup`; nos pacotes, `install`)
 
+> **Pacote enxuto (desde 0.1.29):** os pacotes `.zip`/`.tar.gz` da release trazem **só o instalador** (`Install.app` / `install.exe` / `install`), que já contém o servidor e o app. Os binários soltos, `README.md`, `LICENSE`, `docs/` e `packaging/` saíram do pacote (quem abria o binário solto achava que tinha instalado). Onde este documento listar esses arquivos dentro do pacote, vale esta nota. Instalação de sistema no Linux: `.deb`.
+
 Desde a v0.1.5 cada release traz um **terceiro binário**, o instalador por usuário (`docs/27`, ADR-0021): assistente gráfico (ou `--cli`) que grava os dois binários na pasta do usuário, registra o servidor no login (LaunchAgent / autostart ou user unit / chave Run), cria atalhos e, numa atualização, para o que está rodando, troca os binários e religa, preservando a pasta de dados. É o caminho recomendado na máquina pessoal. Desde 2026-10-29 ele **vem dentro do pacote de cada plataforma** (não há mais download separado do instalador): descompacte e abra `Instalar will-ia.app` / `will-ia-setup.exe` / `./will-ia-setup`. Os binários soltos no mesmo pacote servem para instalação manual/de sistema.
 
 ## Ícones

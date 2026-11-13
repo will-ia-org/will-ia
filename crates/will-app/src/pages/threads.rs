@@ -357,6 +357,8 @@ pub struct ThreadsPage {
     dictation_task: Option<(ThreadId, Task<Value>)>,
     /// Estado dividido com a caixinha flutuante do ditado (outro viewport).
     dictation_overlay: crate::voice::overlay::DictationShared,
+    /// O atalho global do ditado foi pressionado (consumido no próximo quadro).
+    dictation_toggle: bool,
     /// "Ouvir" uma resposta (um por vez): resumo em áudio (resumo → TTS →
     /// reprodução) ou leitura literal em streaming.
     speak: Option<SpeakJob>,
@@ -1303,6 +1305,48 @@ impl ThreadsPage {
     }
 
     /// Envia o que está na caixa para a thread aberta.
+    /// Chamado pelo app quando o atalho global do ditado é pressionado.
+    pub fn request_dictation_toggle(&mut self) {
+        self.dictation_toggle = true;
+    }
+
+    /// Atalho do ditado: liga na thread aberta ou, se já estiver ouvindo,
+    /// fecha e envia.
+    fn toggle_dictation_shortcut(&mut self, cx: &mut Cx) {
+        if self.dictation.is_some() {
+            self.stop_dictation(cx, true);
+            return;
+        }
+        if self
+            .dictation_task
+            .as_ref()
+            .is_some_and(|(_, t)| t.pending())
+        {
+            return;
+        }
+        let voice_ready = matches!(
+            cx.snap.modules.get(&will_core::Module::Realtime),
+            Some(will_core::ModuleStatus::Running)
+        );
+        if !voice_ready {
+            cx.toasts
+                .info(tr("O atalho de falar precisa do módulo Voz ligado."));
+            return;
+        }
+        let Some(id) = self.selected else {
+            cx.toasts
+                .info(tr("Abra uma thread antes de usar o atalho de falar."));
+            return;
+        };
+        let title = self
+            .threads
+            .iter()
+            .find(|t| t.id == id)
+            .map(title_of)
+            .unwrap_or_else(|| format!("Thread {}", &id.to_string()[..8]));
+        self.start_dictation(cx, id, title);
+    }
+
     /// Abre o microfone para a thread `id` (ditado de um clique).
     fn start_dictation(&mut self, cx: &mut Cx, id: ThreadId, title: String) {
         let dev = cx.snap.settings.realtime.input_device.clone();
@@ -1351,6 +1395,11 @@ impl ThreadsPage {
     /// aberta): consome os cliques da caixinha flutuante, entrega a transcrição
     /// e mantém a caixinha na tela enquanto o microfone estiver aberto.
     pub fn dictation_tick(&mut self, ctx: &egui::Context, cx: &mut Cx) {
+        // Atalho global (Configurações › Voz): liga o microfone na thread
+        // aberta; de novo, fecha, transcreve e envia. Descartar é só pelo botão.
+        if std::mem::take(&mut self.dictation_toggle) {
+            self.toggle_dictation_shortcut(cx);
+        }
         if self.dictation.is_some() {
             let (send, cancel) = {
                 let mut s = self.dictation_overlay.lock();
@@ -2346,11 +2395,11 @@ impl ThreadsPage {
                                 };
                                 let enabled = here || (!busy && !transcribing && !recording);
                                 let tip = if here {
-                                    tr("Ouvindo. Clique para transcrever e enviar.")
+                                    tr("Ouvindo. Clique (ou repita o atalho) para transcrever e enviar.")
                                 } else if transcribing {
                                     tr("Transcrevendo…")
                                 } else {
-                                    tr("Clique para falar: o microfone fica aberto mesmo se você trocar de tela. Clique de novo, ou em Enviar na caixinha flutuante, para transcrever (Whisper) e enviar.")
+                                    tr("Clique (ou use o atalho de falar, padrão Ctrl+Espaço) para falar: o microfone fica aberto mesmo se você trocar de tela. Clique de novo, repita o atalho ou use Enviar na caixinha flutuante para transcrever (Whisper) e enviar.")
                                 };
                                 if bar_button(ui, ic, fg, fill, enabled, tip).clicked() {
                                     if here {

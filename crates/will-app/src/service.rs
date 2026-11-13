@@ -35,6 +35,8 @@ pub enum UiCommand {
     /// Atalho global pressionado/solto (toggle ou push-to-talk conforme configuração).
     HotkeyDown,
     HotkeyUp,
+    /// Atalho global do ditado pressionado (liga, ou fecha e envia).
+    DictationToggle,
     /// Captura a janela principal em PNG (diagnóstico/desenvolvimento), opcionalmente
     /// navegando antes para a página indicada.
     Screenshot(std::path::PathBuf, Option<String>),

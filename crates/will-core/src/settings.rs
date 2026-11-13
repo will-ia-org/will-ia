@@ -249,6 +249,9 @@ pub struct RealtimeSettings {
     pub voice: String,
     pub activation: String, // toggle | push_to_talk
     pub hotkey: String,
+    /// Atalho global do ditado ("Falar" da thread aberta): liga o microfone e,
+    /// de novo, transcreve e envia. Vazio = sem atalho.
+    pub dictation_hotkey: String,
     pub turn_detection: String, // server_vad | semantic_vad
     pub input_device: Option<String>,
     pub output_device: Option<String>,
@@ -351,6 +354,7 @@ impl Default for RealtimeSettings {
             voice: "alloy".into(),
             activation: "toggle".into(),
             hotkey: "CommandOrControl+Shift+Space".into(),
+            dictation_hotkey: "Control+Space".into(),
             turn_detection: "server_vad".into(),
             input_device: None,
             output_device: None,

@@ -12,6 +12,10 @@ pub struct Hotkeys {
     manager: Option<GlobalHotKeyManager>,
     current: Option<HotKey>,
     pub error: Option<String>,
+    /// Atalho do ditado ("Falar"): registro próprio, ao lado do da voz.
+    dictation: Option<HotKey>,
+    dictation_id: Arc<std::sync::atomic::AtomicU32>,
+    pub dictation_error: Option<String>,
 }
 
 impl Hotkeys {
@@ -24,8 +28,17 @@ impl Hotkeys {
             }
         };
         let weak = Arc::downgrade(svc);
+        let dictation_id = Arc::new(std::sync::atomic::AtomicU32::new(0));
+        let did = dictation_id.clone();
         GlobalHotKeyEvent::set_event_handler(Some(move |e: GlobalHotKeyEvent| {
             if let Some(s) = weak.upgrade() {
+                let d = did.load(std::sync::atomic::Ordering::Relaxed);
+                if d != 0 && e.id() == d {
+                    if e.state() == HotKeyState::Pressed {
+                        s.send_cmd(UiCommand::DictationToggle);
+                    }
+                    return;
+                }
                 match e.state() {
                     HotKeyState::Pressed => s.send_cmd(UiCommand::HotkeyDown),
                     HotKeyState::Released => s.send_cmd(UiCommand::HotkeyUp),
@@ -36,6 +49,9 @@ impl Hotkeys {
             manager,
             current: None,
             error: None,
+            dictation: None,
+            dictation_id,
+            dictation_error: None,
         }
     }
 
@@ -91,6 +107,40 @@ impl Hotkeys {
             },
             Err(e) => {
                 self.error = Some(trf("atalho inválido '{}': {}", &[&text, &e]));
+            }
+        }
+    }
+
+    /// (Re)registra o atalho do ditado. Texto vazio = nenhum.
+    pub fn apply_dictation(&mut self, text: &str) {
+        let Some(m) = &self.manager else { return };
+        if let Some(c) = self.dictation.take() {
+            let _ = m.unregister(c);
+        }
+        self.dictation_id
+            .store(0, std::sync::atomic::Ordering::Relaxed);
+        self.dictation_error = None;
+        let text = text.trim();
+        if text.is_empty() {
+            return;
+        }
+        let norm = Self::normalize(text);
+        match HotKey::from_str(&norm) {
+            Ok(hk) => match m.register(hk) {
+                Ok(()) => {
+                    tracing::info!(hotkey = %norm, "atalho do ditado registrado");
+                    self.dictation_id
+                        .store(hk.id(), std::sync::atomic::Ordering::Relaxed);
+                    self.dictation = Some(hk);
+                }
+                Err(e) => {
+                    self.dictation_error =
+                        Some(trf("não foi possível registrar '{}': {}", &[&text, &e]));
+                    tracing::warn!(error = %e, hotkey = %norm, "registro do atalho do ditado falhou");
+                }
+            },
+            Err(e) => {
+                self.dictation_error = Some(trf("atalho inválido '{}': {}", &[&text, &e]));
             }
         }
     }

@@ -33,7 +33,37 @@ pub struct ApprovalsPage {
     thread_names: HashMap<ThreadId, ThreadSummary>,
     filter_text: String,
     filter_decision: String,
+    /// Estado dividido com a pilha flutuante de pendentes (outro viewport).
+    overlay: OverlayShared,
 }
+
+/// Um pedido pendente pronto para a pilha flutuante.
+struct OverlayCard {
+    id: String,
+    tool: String,
+    summary: String,
+    who: String,
+    origin: Option<String>,
+    requested_at: chrono::DateTime<chrono::Utc>,
+    timeout_secs: u64,
+    /// (rótulo, valor, valor em bloco com rolagem)
+    args: Vec<(String, String, bool)>,
+    busy: bool,
+}
+
+/// O app escreve os cartões; a pilha devolve os cliques (id, decisão) e a
+/// altura que o conteúdo ocupou (a janela se ajusta no quadro seguinte).
+#[derive(Default)]
+struct OverlayState {
+    cards: Vec<OverlayCard>,
+    clicks: Vec<(String, &'static str)>,
+    height: f32,
+}
+
+type OverlayShared = std::sync::Arc<parking_lot::Mutex<OverlayState>>;
+
+const OVERLAY_W: f32 = 400.0;
+const OVERLAY_PAD: f32 = 6.0;
 
 impl ApprovalsPage {
     pub fn on_event(&mut self, ev: &Event) {
@@ -66,7 +96,12 @@ impl ApprovalsPage {
                 }));
         }
         self.history.poll();
+        self.poll_decisions(cx);
+    }
 
+    /// Nomes das threads (para "Pedido por") e decisões em voo. Roda também
+    /// fora da página, pela pilha flutuante.
+    fn poll_decisions(&mut self, cx: &mut Cx) {
         if self.threads.stale(std::time::Duration::from_secs(120)) {
             self.threads
                 .start(cx.svc.call(|c| async move { c.threads().await }));
@@ -145,6 +180,72 @@ impl ApprovalsPage {
     }
 
     // ---------- pendentes ----------
+
+    /// Pilha flutuante de pendentes, chamada pelo app a CADA quadro (com
+    /// qualquer página aberta): aplica os cliques Aprovar/Negar vindos da pilha
+    /// e mantém a janela no topo enquanto houver pedido esperando decisão.
+    pub fn overlay_tick(&mut self, ctx: &egui::Context, cx: &mut Cx) {
+        let clicks = std::mem::take(&mut self.overlay.lock().clicks);
+        for (id, decision) in clicks {
+            if !self.in_flight(&id) {
+                self.send_decision(cx, id, decision);
+            }
+        }
+        if cx.snap.pending_approvals.is_empty() {
+            if !self.decide.is_empty() {
+                self.poll_decisions(cx);
+            }
+            self.overlay.lock().cards.clear();
+            return;
+        }
+        self.poll_decisions(cx);
+        // o mais novo em cima
+        let cards: Vec<OverlayCard> = cx
+            .snap
+            .pending_approvals
+            .iter()
+            .rev()
+            .map(|a| {
+                let id = a.id.to_string();
+                let (who, origin, _) = self.requester(a.thread_id);
+                let args = a
+                    .args_redacted
+                    .as_object()
+                    .map(|o| {
+                        o.iter()
+                            .map(|(k, v)| {
+                                let full = arg_value_text(v);
+                                let block = full.contains('\n') || full.chars().count() > 48;
+                                (
+                                    arg_key_label(k).to_string(),
+                                    ui::ellipsize(&full, 6000),
+                                    block,
+                                )
+                            })
+                            .collect()
+                    })
+                    .unwrap_or_default();
+                OverlayCard {
+                    busy: self.in_flight(&id),
+                    id,
+                    tool: a.tool.clone(),
+                    summary: a.summary.clone(),
+                    who,
+                    origin,
+                    requested_at: a.requested_at,
+                    timeout_secs: a.timeout_secs,
+                    args,
+                }
+            })
+            .collect();
+        let height = {
+            let mut s = self.overlay.lock();
+            s.cards = cards;
+            s.height
+        };
+        show_overlay(ctx, &self.overlay, height);
+        ctx.request_repaint_after(std::time::Duration::from_millis(500));
+    }
 
     fn pending_card(&mut self, ui: &mut egui::Ui, cx: &Cx, a: &ApprovalRequest) {
         let dark = ui.visuals().dark_mode;
@@ -686,6 +787,168 @@ fn args_list(ui: &mut egui::Ui, args: &Value) {
             });
         });
     }
+}
+
+/// Janela flutuante (sempre no topo, sem decoração, canto superior direito da
+/// tela) com um cartão por pedido pendente e os botões Aprovar / Negar.
+fn show_overlay(ctx: &egui::Context, shared: &OverlayShared, measured: f32) {
+    let monitor = ctx
+        .input(|i| i.viewport().monitor_size)
+        .unwrap_or(egui::vec2(1920.0, 1080.0));
+    let max_h = (monitor.y - 160.0).max(240.0);
+    let h = if measured > 0.0 { measured } else { 260.0 }.clamp(120.0, max_h);
+    let size = [OVERLAY_W, h];
+    let builder = egui::ViewportBuilder::default()
+        .with_title(tr("will-ia · aprovações"))
+        .with_inner_size(size)
+        .with_min_inner_size([OVERLAY_W, 120.0])
+        .with_position(egui::pos2((monitor.x - OVERLAY_W - 24.0).max(0.0), 56.0))
+        .with_decorations(false)
+        .with_resizable(false)
+        .with_transparent(cfg!(not(target_os = "linux")))
+        .with_always_on_top()
+        .with_active(false)
+        .with_taskbar(false);
+    let shared = shared.clone();
+    ctx.show_viewport_deferred(
+        egui::ViewportId::from_hash_of("approvals-overlay"),
+        builder,
+        move |ui, _class| {
+            ui.ctx()
+                .request_repaint_after(std::time::Duration::from_millis(500));
+            let dark = ui.visuals().dark_mode;
+            let p = ui::palette(dark);
+            let mut s = shared.lock();
+            let mut clicks: Vec<(String, &'static str)> = Vec::new();
+            let inner_w = OVERLAY_W - 2.0 * OVERLAY_PAD;
+            let out = egui::Frame::new().inner_margin(OVERLAY_PAD).show(ui, |ui| {
+                egui::ScrollArea::vertical()
+                    .id_salt("approvals-overlay-scroll")
+                    .max_height(max_h - 2.0 * OVERLAY_PAD)
+                    .auto_shrink([false, true])
+                    .show(ui, |ui| {
+                        ui.set_width(inner_w);
+                        let n = s.cards.len();
+                        if n > 1 {
+                            ui.label(
+                                RichText::new(trf("{} aprovações pendentes", &[&n]))
+                                    .small()
+                                    .color(Tone::Warning.color(dark)),
+                            );
+                        }
+                        for c in &s.cards {
+                            overlay_card(ui, p, dark, c, &mut clicks);
+                            ui.add_space(6.0);
+                        }
+                    })
+            });
+            s.height = out.inner.content_size.y + 2.0 * OVERLAY_PAD + 2.0;
+            if !clicks.is_empty() {
+                s.clicks.extend(clicks);
+                drop(s);
+                // quem envia a decisão é a janela principal
+                ui.ctx().request_repaint_of(egui::ViewportId::ROOT);
+            }
+        },
+    );
+}
+
+/// Um cartão da pilha flutuante: o que é, quem pediu, o que vai e os botões.
+fn overlay_card(
+    ui: &mut egui::Ui,
+    p: &ui::Palette,
+    dark: bool,
+    c: &OverlayCard,
+    clicks: &mut Vec<(String, &'static str)>,
+) {
+    let elapsed = (chrono::Utc::now() - c.requested_at).num_seconds().max(0) as u64;
+    let left = c.timeout_secs.saturating_sub(elapsed);
+    egui::Frame::new()
+        .fill(p.card_alt)
+        .stroke(egui::Stroke::new(1.5, Tone::Warning.color(dark)))
+        .corner_radius(10.0)
+        .inner_margin(egui::Margin::symmetric(12, 10))
+        .show(ui, |ui| {
+            ui.set_width(ui.available_width());
+            ui.horizontal(|ui| {
+                ui::badge(ui, &tool_label(&c.tool), Tone::Warning);
+                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    let tone = if left < 60 {
+                        Tone::Danger
+                    } else {
+                        Tone::Warning
+                    };
+                    let txt = if left == 0 {
+                        tr("expirando…").to_string()
+                    } else {
+                        trf("expira em {}", &[&fmt_countdown(left)])
+                    };
+                    ui.label(RichText::new(txt).small().color(tone.color(dark)));
+                });
+            });
+            ui.add_space(3.0);
+            ui.add(
+                egui::Label::new(RichText::new(&c.summary).font(ui::medium(14.5)))
+                    .wrap()
+                    .selectable(false),
+            );
+            ui.horizontal_wrapped(|ui| {
+                ui.label(RichText::new(tr("Pedido por")).small().weak());
+                ui.label(RichText::new(&c.who).small());
+                if let Some(o) = &c.origin {
+                    ui.label(RichText::new(format!("· {o}")).small().weak());
+                }
+            });
+            if !c.args.is_empty() {
+                ui.add_space(4.0);
+                ui.separator();
+                for (i, (k, v, block)) in c.args.iter().enumerate() {
+                    if *block {
+                        ui.label(RichText::new(k).small().weak());
+                        egui::Frame::new()
+                            .fill(p.card)
+                            .stroke(egui::Stroke::new(1.0, p.border))
+                            .corner_radius(6.0)
+                            .inner_margin(egui::Margin::symmetric(8, 6))
+                            .show(ui, |ui| {
+                                ui.set_width(ui.available_width());
+                                egui::ScrollArea::vertical()
+                                    .id_salt(("ov-arg", &c.id, i))
+                                    .max_height(130.0)
+                                    .auto_shrink([false, true])
+                                    .show(ui, |ui| {
+                                        ui.set_width(ui.available_width());
+                                        ui.add(
+                                            egui::Label::new(RichText::new(v).small())
+                                                .wrap()
+                                                .selectable(false),
+                                        );
+                                    });
+                            });
+                    } else {
+                        ui.horizontal(|ui| {
+                            ui.label(RichText::new(k).small().weak());
+                            ui.add(egui::Label::new(RichText::new(v).small()).truncate());
+                        });
+                    }
+                }
+            }
+            ui.add_space(8.0);
+            ui.horizontal(|ui| {
+                if c.busy {
+                    ui::busy(ui, tr("enviando decisão…"));
+                }
+                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    let approve = big_button(ui, tr("Aprovar"), p.accent, !c.busy);
+                    let deny = big_button(ui, tr("Negar"), Tone::Danger.color(dark), !c.busy);
+                    if approve.clicked() {
+                        clicks.push((c.id.clone(), "approved"));
+                    } else if deny.clicked() {
+                        clicks.push((c.id.clone(), "denied"));
+                    }
+                });
+            });
+        });
 }
 
 /// Botão grande de decisão (branco sobre `fill`), desabilitado quando `enabled` é falso.

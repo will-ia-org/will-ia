@@ -93,6 +93,8 @@ sistema é gerenciado pelo instalador.
 
 ## Release
 
+> **Pacote enxuto (desde 0.1.29):** os pacotes `.zip`/`.tar.gz` da release trazem **só o instalador** (`Install.app` / `install.exe` / `install`), que já contém o servidor e o app. Os binários soltos, `README.md`, `LICENSE`, `docs/` e `packaging/` saíram do pacote (quem abria o binário solto achava que tinha instalado). Onde este documento listar esses arquivos dentro do pacote, vale esta nota. Instalação de sistema no Linux: `.deb`.
+
 `release.yml` compila `will-ia` + `will-ia-app` e, no mesmo job, `will-setup` com
 `WILL_SETUP_PAYLOAD_DIR=${{ github.workspace }}/target/<triple>/release` (absoluto). Desde 2026-10-29
 **o instalador não é publicado solto**: ele vai **dentro do pacote único de cada plataforma**
