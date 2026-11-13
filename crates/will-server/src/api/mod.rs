@@ -203,6 +203,7 @@ pub fn router(state: App) -> Router {
         .route("/diagnostics", get(system::diagnostics))
         .route("/backup", get(system::backup))
         .route("/backup/info", get(system::backup_info))
+        .route("/backup/key", get(system::backup_key))
         .route(
             "/restore",
             post(system::restore)

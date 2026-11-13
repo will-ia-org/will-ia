@@ -1,6 +1,6 @@
 //! Aba Backup / Restore (Configurações → Geral): baixa um `.zip` com a pasta de
-//! dados da instância conectada (banco, segredos, sessão do WhatsApp, perfil do
-//! navegador opcional) e restaura um `.zip` em outra instância — o serviço
+//! dados da instância conectada (banco, cofre cifrado sem a chave, sessão do
+//! WhatsApp e perfil do navegador opcionais) e restaura um `.zip` em outra instância — o serviço
 //! valida, agenda e reinicia (`docs/10`, RF-CFG-11).
 
 use crate::i18n::{tr, trf};
@@ -13,10 +13,15 @@ use std::path::PathBuf;
 /// Download do backup: `(nome sugerido, bytes)`.
 type BackupTask = Task<(String, Vec<u8>)>;
 
-#[derive(Default)]
 pub struct BackupPage {
     info: Loader<Value>,
     include_browser: bool,
+    include_whatsapp: bool,
+    /// Chave do cofre desta instância (só depois de "Mostrar chave do cofre").
+    key_task: Option<Task<Value>>,
+    vault_key: Option<String>,
+    /// Chave do cofre da máquina de origem, digitada para restaurar.
+    restore_key: String,
     /// (destino escolhido, download em voo)
     backup_task: Option<(PathBuf, BackupTask)>,
     restore_task: Option<Task<Value>>,
@@ -24,6 +29,25 @@ pub struct BackupPage {
     last_backup: Option<PathBuf>,
     restore_sent: bool,
     error: Option<String>,
+}
+
+impl Default for BackupPage {
+    fn default() -> Self {
+        Self {
+            info: Loader::default(),
+            include_browser: false,
+            include_whatsapp: true,
+            key_task: None,
+            vault_key: None,
+            restore_key: String::new(),
+            backup_task: None,
+            restore_task: None,
+            confirm_restore: None,
+            last_backup: None,
+            restore_sent: false,
+            error: None,
+        }
+    }
 }
 
 fn fmt_bytes(b: u64) -> String {
@@ -64,11 +88,24 @@ impl BackupPage {
                 Err(e) => self.error = Some(e),
             }
         }
+        if let Some(t) = &self.key_task {
+            if let Some(r) = t.take() {
+                self.key_task = None;
+                match r {
+                    Ok(v) => {
+                        self.vault_key = Some(ui::s(&v, "key"));
+                        self.error = None;
+                    }
+                    Err(e) => self.error = Some(e),
+                }
+            }
+        }
         if let Some(t) = &self.restore_task {
             if let Some(r) = t.take() {
                 self.restore_task = None;
                 match r {
                     Ok(_) => {
+                        self.restore_key.clear();
                         self.restore_sent = true;
                         self.error = None;
                         self.info.loaded_at = None;
@@ -91,6 +128,10 @@ impl BackupPage {
             .get("browser_bytes")
             .and_then(|v| v.as_u64())
             .unwrap_or(0);
+        let whatsapp_bytes = info
+            .get("whatsapp_bytes")
+            .and_then(|v| v.as_u64())
+            .unwrap_or(0);
         let suggested = ui::s(&info, "suggested_name");
         let pending = ui::b(&info, "restore_pending");
 
@@ -102,8 +143,8 @@ impl BackupPage {
             ui.add_space(4.0);
             for line in [
                 trf("banco de dados (threads, histórico, aprovações, tarefas, agendamentos, configurações) · {}", &[&fmt_bytes(db_bytes)]),
-                tr("cofre de segredos (tokens do Claude, bot do Telegram, chaves de API, contas Google)").to_string(),
-                tr("sessão do WhatsApp, telemetria embutida e identidade da instância").to_string(),
+                tr("cofre de segredos cifrado (tokens do Claude, bot do Telegram, chaves de API, contas Google); a chave do cofre NÃO vai no arquivo").to_string(),
+                tr("telemetria embutida e identidade da instância").to_string(),
             ] {
                 ui.horizontal(|ui| {
                     ui.add_space(8.0);
@@ -123,6 +164,25 @@ impl BackupPage {
                 );
             });
             ui.add_space(8.0);
+            ui.horizontal(|ui| {
+                ui::toggle(ui, &mut self.include_whatsapp);
+                ui.label(trf(
+                    "incluir a sessão do WhatsApp (pareamento) · {}",
+                    &[&fmt_bytes(whatsapp_bytes)],
+                ));
+            });
+            if self.include_whatsapp {
+                ui.horizontal(|ui| {
+                    ui.add_space(8.0);
+                    ui.label(
+                        egui::RichText::new(tr(
+                            "Se a máquina de origem continuar ligada, as duas vão disputar a mesma sessão do WhatsApp.",
+                        ))
+                        .small()
+                        .weak(),
+                    );
+                });
+            }
             ui.horizontal(|ui| {
                 ui::toggle(ui, &mut self.include_browser);
                 ui.label(trf(
@@ -155,7 +215,10 @@ impl BackupPage {
                     }
                     if let Some(dest) = dlg.save_file() {
                         let b = self.include_browser;
-                        let t = cx.svc.call(move |c| async move { c.backup_bytes(b).await });
+                        let w = self.include_whatsapp;
+                        let t = cx
+                            .svc
+                            .call(move |c| async move { c.backup_bytes(b, w).await });
                         self.backup_task = Some((dest, t));
                         self.error = None;
                     }
@@ -185,6 +248,43 @@ impl BackupPage {
             }
         });
 
+        // ---- chave do cofre ----
+        ui::section(ui, tr("Chave do cofre"), |ui| {
+            ui.label(tr(
+                "O backup leva os segredos cifrados, mas não a chave que os abre. Para restaurar em outra máquina, copie a chave daqui e informe lá. Quem tiver o arquivo e a chave lê todos os segredos: guarde os dois separados.",
+            ));
+            ui.add_space(6.0);
+            match self.vault_key.clone() {
+                None => {
+                    ui.horizontal(|ui| {
+                        let busy = self.key_task.is_some();
+                        if ui
+                            .add_enabled(!busy, egui::Button::new(tr("Mostrar chave do cofre")))
+                            .clicked()
+                        {
+                            self.key_task =
+                                Some(cx.svc.call(|c| async move { c.backup_key().await }));
+                        }
+                        if busy {
+                            ui.spinner();
+                        }
+                    });
+                }
+                Some(k) => {
+                    ui.horizontal(|ui| {
+                        ui.label(egui::RichText::new(&k).monospace());
+                        if ui.small_button(tr("Copiar")).clicked() {
+                            ui.ctx().copy_text(k.clone());
+                            cx.toasts.success(tr("Chave do cofre copiada"));
+                        }
+                        if ui.small_button(tr("Ocultar")).clicked() {
+                            self.vault_key = None;
+                        }
+                    });
+                }
+            }
+        });
+
         // ---- restore ----
         ui::section(ui, tr("Restaurar"), |ui| {
             ui.label(tr(
@@ -194,6 +294,21 @@ impl BackupPage {
             ui.label(
                 egui::RichText::new(tr(
                     "Use isto na máquina nova logo após instalar o will-ia. A base de conhecimento precisa estar no caminho configurado (ou ajuste em Base de conhecimento depois).",
+                ))
+                .small()
+                .weak(),
+            );
+            ui.add_space(8.0);
+            ui.label(tr("Chave do cofre da máquina de origem"));
+            ui.add(
+                egui::TextEdit::singleline(&mut self.restore_key)
+                    .password(true)
+                    .desired_width(380.0)
+                    .hint_text(tr("cole a chave mostrada em Backup › Chave do cofre")),
+            );
+            ui.label(
+                egui::RichText::new(tr(
+                    "Pode ficar vazia ao restaurar um backup feito nesta mesma máquina ou um backup antigo (que ainda levava a chave).",
                 ))
                 .small()
                 .weak(),
@@ -249,8 +364,11 @@ impl BackupPage {
                 if ok {
                     match std::fs::read(&p) {
                         Ok(bytes) => {
-                            self.restore_task =
-                                Some(cx.svc.call(move |c| async move { c.restore(bytes).await }));
+                            let key = self.restore_key.clone();
+                            self.restore_task = Some(
+                                cx.svc
+                                    .call(move |c| async move { c.restore(bytes, key).await }),
+                            );
                             self.error = None;
                         }
                         Err(e) => self.error = Some(format!("{}: {e}", p.display())),

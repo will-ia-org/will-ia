@@ -176,6 +176,7 @@ pub async fn start(opts: RunOptions) -> anyhow::Result<ServerHandle> {
 
     let storage = Storage::open(&paths.db_path()).await?;
     storage.reset_running_threads().await?;
+    crate::backup::apply_keep(&paths, &storage).await;
     let settings = storage.load_settings().await?;
     // Em modo portátil o keyring da máquina não serve (o pendrive muda de máquina):
     // segredos vão para `data/secrets.json`.

@@ -18,7 +18,7 @@ pub enum ServiceKind {
     Launchd,
     /// Linux com sessão gráfica: `~/.config/autostart/will-ia.desktop` (servidor residente + bandeja).
     AutostartDesktop,
-    /// Linux sem tela: user unit do systemd (`will-ia serve`, Restart=on-failure).
+    /// Linux sem tela: user unit do systemd (`will-ia serve`, Restart=always).
     SystemdUser,
     /// Windows: `HKCU\Software\Microsoft\Windows\CurrentVersion\Run`.
     RunKey,

@@ -257,6 +257,13 @@ impl MasterKeySource for KeyringMasterKey {
     }
 }
 
+/// Confere se a chave (base64, conteúdo de `secrets.key`) abre o cofre `enc`
+/// (bytes de `secrets.enc`). Usado ao restaurar um backup, que não leva a chave.
+pub fn vault_key_opens(key_b64: &str, enc: &[u8]) -> Result<(), String> {
+    let key = decode_key(key_b64)?;
+    decrypt_map(&key, enc).map(|_| ())
+}
+
 /// Envelope gravado em disco. `ct` é o JSON `{chave: valor}` cifrado.
 #[derive(serde::Serialize, serde::Deserialize)]
 struct Envelope {
@@ -320,6 +327,22 @@ impl EncryptedFileStore {
         };
         *guard = Some(m.clone());
         Ok(m)
+    }
+
+    /// Copia para o cofre os segredos de `extra` que ele ainda não tem.
+    async fn absorb(&self, extra: BTreeMap<String, String>) -> Result<usize, String> {
+        let mut m = self.load().await?;
+        let mut n = 0;
+        for (k, v) in extra {
+            if let std::collections::btree_map::Entry::Vacant(e) = m.entry(k) {
+                e.insert(v);
+                n += 1;
+            }
+        }
+        if n > 0 {
+            self.save(m).await?;
+        }
+        Ok(n)
     }
 
     async fn save(&self, m: BTreeMap<String, String>) -> Result<(), String> {
@@ -440,9 +463,47 @@ impl SecretStore for EncryptedFileStore {
     }
 }
 
-/// Escolhe o backend uma vez: macOS → cofre cifrado com chave-mestra em arquivo
-/// (`FileMasterKey`; o Keychain só é consultado para migrar itens antigos);
-/// outros SOs → keyring por item; sem keyring → arquivo JSON 0600 (com aviso).
+/// Cofres antigos consultados em ordem na migração preguiçosa do cofre cifrado
+/// (keyring do SO e/ou `secrets.json`). Erro de um não impede o seguinte.
+struct LegacyChain(Vec<Arc<dyn SecretStore>>);
+
+#[async_trait::async_trait]
+impl SecretStore for LegacyChain {
+    async fn get(&self, key: &str) -> Result<Option<SecretString>, String> {
+        for s in &self.0 {
+            match s.get(key).await {
+                Ok(Some(v)) => return Ok(Some(v)),
+                Ok(None) => {}
+                Err(e) => {
+                    tracing::debug!(key, backend = s.backend(), error = %e, "cofre antigo não respondeu")
+                }
+            }
+        }
+        Ok(None)
+    }
+    async fn set(&self, _key: &str, _value: &SecretString) -> Result<(), String> {
+        Err("cofre antigo é só de leitura".into())
+    }
+    async fn delete(&self, key: &str) -> Result<(), String> {
+        let mut last = Ok(());
+        for s in &self.0 {
+            if let Err(e) = s.delete(key).await {
+                last = Err(e);
+            }
+        }
+        last
+    }
+    fn backend(&self) -> &'static str {
+        "legado"
+    }
+}
+
+/// Escolhe o backend uma vez. **Em todo SO** o cofre é o mesmo: arquivo cifrado
+/// (`secrets.enc`) com a chave-mestra em arquivo (`secrets.key`), para o backup
+/// de uma máquina abrir em qualquer outra (macOS ⇄ Linux ⇄ Windows). Os cofres
+/// antigos (keyring por item em Linux/Windows, Keychain no macOS) só são lidos
+/// para migrar cada segredo na primeira leitura; `secrets.json` (modo arquivo/
+/// portátil antigo) é absorvido inteiro na subida e apagado. Sem conseguir gravar a chave-mestra → arquivo JSON 0600 (com aviso).
 pub struct AutoSecretStore {
     inner: Arc<dyn SecretStore>,
 }
@@ -454,40 +515,58 @@ impl AutoSecretStore {
         master_key_file: PathBuf,
         force_file: bool,
     ) -> Self {
-        if !force_file {
-            if cfg!(target_os = "macos") {
-                let master = FileMasterKey::new(master_key_file);
-                match master.load_or_create().await {
-                    Ok(_) => {
-                        return Self {
-                            inner: Arc::new(EncryptedFileStore::new(
-                                encrypted_file,
-                                Arc::new(master),
-                                Some(Arc::new(KeyringStore)),
-                            )),
-                        };
-                    }
-                    Err(e) => {
-                        tracing::warn!(error = %e, "chave-mestra em arquivo indisponível; usando arquivo de segredos (0600)");
+        let master = FileMasterKey::new(master_key_file);
+        match master.load_or_create().await {
+            Ok(_) => {
+                let mut legacy: Vec<Arc<dyn SecretStore>> = Vec::new();
+                if !force_file {
+                    // macOS: o Keychain sempre existe. Nos demais, um get de chave
+                    // inexistente testa se há keyring (servidor sem tela não tem).
+                    let keyring_ok =
+                        cfg!(target_os = "macos") || KeyringStore.get("__probe__").await.is_ok();
+                    if keyring_ok {
+                        legacy.push(Arc::new(KeyringStore));
                     }
                 }
-            } else {
-                let probe = KeyringStore;
-                // Um get de chave inexistente testa a disponibilidade do store.
-                match probe.get("__probe__").await {
-                    Ok(_) => {
-                        return Self {
-                            inner: Arc::new(probe),
-                        };
+                let legacy: Option<Arc<dyn SecretStore>> = if legacy.is_empty() {
+                    None
+                } else {
+                    Some(Arc::new(LegacyChain(legacy)))
+                };
+                let store = EncryptedFileStore::new(encrypted_file, Arc::new(master), legacy);
+                // `secrets.json` (modo arquivo/portátil antigo) guarda os valores em
+                // texto: entram todos no cofre de uma vez e o arquivo some.
+                if fallback_file.is_file() {
+                    let plain: Result<BTreeMap<String, String>, String> =
+                        std::fs::read(&fallback_file)
+                            .map_err(|e| e.to_string())
+                            .and_then(|b| serde_json::from_slice(&b).map_err(|e| e.to_string()));
+                    match plain {
+                        Ok(m) => match store.absorb(m).await {
+                            Ok(n) => {
+                                let _ = std::fs::remove_file(&fallback_file);
+                                tracing::info!(
+                                    migrated = n,
+                                    "secrets.json migrado para o cofre cifrado e apagado"
+                                );
+                            }
+                            Err(e) => {
+                                tracing::warn!(error = %e, "não migrei secrets.json para o cofre; arquivo mantido")
+                            }
+                        },
+                        Err(e) => tracing::warn!(error = %e, "secrets.json ilegível; ignorado"),
                     }
-                    Err(e) => {
-                        tracing::warn!(error = %e, "keyring indisponível; usando arquivo de segredos (0600)");
-                    }
+                }
+                Self {
+                    inner: Arc::new(store),
                 }
             }
-        }
-        Self {
-            inner: Arc::new(FileStore::new(fallback_file)),
+            Err(e) => {
+                tracing::warn!(error = %e, "chave-mestra em arquivo indisponível; usando arquivo de segredos (0600)");
+                Self {
+                    inner: Arc::new(FileStore::new(fallback_file)),
+                }
+            }
         }
     }
     pub fn file_only(path: PathBuf) -> Self {
@@ -677,5 +756,70 @@ mod tests {
             .permissions()
             .mode();
         assert_eq!(mode & 0o777, 0o600);
+    }
+    /// Backup de outra máquina/SO: `secrets.enc` + `secrets.key` chegam prontos e
+    /// o cofre automático precisa lê-los (antes, Linux/Windows só olhavam o keyring).
+    #[tokio::test]
+    async fn auto_store_reads_vault_restored_from_another_os() {
+        let dir = tempfile::tempdir().unwrap();
+        let enc = dir.path().join("secrets.enc");
+        let key = dir.path().join("secrets.key");
+        let json = dir.path().join("secrets.json");
+        let k: [u8; KEY_LEN] = [7; KEY_LEN];
+        std::fs::write(&key, BASE64_STANDARD.encode(k)).unwrap();
+        let mut m = BTreeMap::new();
+        m.insert("openai_api_key".to_string(), "sk-do-mac".to_string());
+        std::fs::write(&enc, encrypt_map(&k, &m).unwrap()).unwrap();
+
+        let store = AutoSecretStore::new(json, enc, key, true).await;
+        assert_eq!(
+            store
+                .get("openai_api_key")
+                .await
+                .unwrap()
+                .unwrap()
+                .expose_secret(),
+            "sk-do-mac"
+        );
+        assert!(store.backend().contains("cifrado"));
+    }
+
+    /// Instalação antiga em modo arquivo (`secrets.json`): migra para o cofre comum.
+    #[tokio::test]
+    async fn auto_store_migrates_plain_json_into_vault() {
+        let dir = tempfile::tempdir().unwrap();
+        let enc = dir.path().join("secrets.enc");
+        let key = dir.path().join("secrets.key");
+        let json = dir.path().join("secrets.json");
+        std::fs::write(&json, br#"{"telegram_bot_token":"123:abc"}"#).unwrap();
+
+        let store = AutoSecretStore::new(json.clone(), enc.clone(), key.clone(), true).await;
+        assert_eq!(
+            store
+                .get("telegram_bot_token")
+                .await
+                .unwrap()
+                .unwrap()
+                .expose_secret(),
+            "123:abc"
+        );
+        assert!(enc.is_file() && key.is_file());
+        assert_eq!(store.get("nao_existe").await.unwrap().map(|_| ()), None);
+        // o arquivo em texto some; reabrindo só com o cofre o valor continua lá
+        assert!(!json.exists());
+        let k = std::fs::read_to_string(&key).unwrap();
+        assert!(vault_key_opens(&k, &std::fs::read(&enc).unwrap()).is_ok());
+        let other = BASE64_STANDARD.encode([9u8; KEY_LEN]);
+        assert!(vault_key_opens(&other, &std::fs::read(&enc).unwrap()).is_err());
+        let again = AutoSecretStore::new(json, enc, key, true).await;
+        assert_eq!(
+            again
+                .get("telegram_bot_token")
+                .await
+                .unwrap()
+                .unwrap()
+                .expose_secret(),
+            "123:abc"
+        );
     }
 }

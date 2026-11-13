@@ -4,7 +4,7 @@
 
 | Ativo | Ameaça | Mitigação |
 |---|---|---|
-| Tokens Claude / OpenAI / Telegram | vazamento por arquivo, log, chat | keyring do SO (macOS: cofre cifrado `secrets.enc` + chave-mestra em `secrets.key` 0600, ADR-0024 + adendo — proteção = usuário do SO + FileVault, sem Keychain); mascaramento (`…últimos 4`); redator de logs; nunca em `Settings` JSON |
+| Tokens Claude / OpenAI / Telegram | vazamento por arquivo, log, chat | **cofre comum em todo SO desde 0.1.30**: arquivo cifrado `secrets.enc` (XChaCha20-Poly1305) + chave-mestra em `secrets.key` 0600 (keyring do SO e `secrets.json` só como origem de migração; o backup leva o cofre **sem** a chave — `docs/10` Backup); histórico: keyring do SO (macOS: cofre cifrado `secrets.enc` + chave-mestra em `secrets.key` 0600, ADR-0024 + adendo — proteção = usuário do SO + FileVault, sem Keychain); mascaramento (`…últimos 4`); redator de logs; nunca em `Settings` JSON |
 | Base de conhecimento (arquivos pessoais) | agente edita/apaga além do esperado | modo `acceptEdits` + allowlist por padrão; bloqueio de pastas perigosas (home, raiz); aviso em `bypassPermissions` |
 | Máquina do usuário | execução arbitrária via tool Bash | allowlist restringe Bash a `tools/`; bypass só com confirmação |
 | Bot do Telegram | terceiros falam com o cérebro | deny-by-default: chat **e** user allowlist; só `/start` responde fora |

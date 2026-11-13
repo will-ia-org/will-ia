@@ -664,11 +664,18 @@ impl Client {
         self.get("backup/info").await
     }
     /// Baixa o `.zip` do backup: `(nome sugerido, bytes)`.
-    pub async fn backup_bytes(&self, include_browser: bool) -> Result<(String, Vec<u8>), String> {
+    pub async fn backup_bytes(
+        &self,
+        include_browser: bool,
+        include_whatsapp: bool,
+    ) -> Result<(String, Vec<u8>), String> {
         let url = format!(
             "{}{}",
             self.url("backup"),
-            query_string(&[("browser", include_browser.to_string())])
+            query_string(&[
+                ("browser", include_browser.to_string()),
+                ("whatsapp", include_whatsapp.to_string()),
+            ])
         );
         let resp = self
             .http
@@ -695,13 +702,19 @@ impl Client {
         }
         Ok((name, bytes.to_vec()))
     }
+    /// Chave do cofre da instância (`{ key }`); o backup não a leva.
+    pub async fn backup_key(&self) -> ApiResult {
+        self.get("backup/key").await
+    }
     /// Sobe um `.zip` de backup; o serviço valida, agenda e reinicia.
-    pub async fn restore(&self, bytes: Vec<u8>) -> ApiResult {
+    /// `vault_key`: chave do cofre da máquina de origem (vazia = tenta a daqui).
+    pub async fn restore(&self, bytes: Vec<u8>, vault_key: String) -> ApiResult {
         Self::finish(
             self.http
                 .post(self.url("restore"))
                 .bearer_auth(&self.token)
                 .header("content-type", "application/zip")
+                .header("x-vault-key", vault_key.trim())
                 .timeout(std::time::Duration::from_secs(600))
                 .body(bytes)
                 .send()

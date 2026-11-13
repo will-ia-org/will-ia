@@ -151,7 +151,7 @@ Desde 2026-10-29 a release publica **um pacote por SO (e por arquitetura no macO
 Arquivos em `packaging/`:
 
 - `packaging/linux/will-ia.desktop`: entrada de menu do **app** (`Exec=will-ia-app --show`, `StartupWMClass=will-ia`). O autostart do **servidor** é outra entrada em `~/.config/autostart/` com `Exec=will-ia` (gerada por "Iniciar com o sistema").
-- `packaging/systemd/will-ia.service` (**user unit** do servidor, não system unit): `ExecStart=/usr/bin/will-ia serve` (headless: sem bandeja, SIGTERM limpo), `Restart=on-failure`, `WantedBy=default.target`. Instalação: `systemctl --user enable --now will-ia`; em servidor sem sessão, `loginctl enable-linger $USER` e `--file-secrets`. Numa máquina com desktop, a alternativa é o autostart da sessão rodar `will-ia` sem argumentos (residente + bandeja).
+- `packaging/systemd/will-ia.service` (**user unit** do servidor, não system unit): `ExecStart=/usr/bin/will-ia serve` (headless: sem bandeja, SIGTERM limpo), `Restart=always`, `WantedBy=default.target`. Instalação: `systemctl --user enable --now will-ia`; em servidor sem sessão, `loginctl enable-linger $USER` e `--file-secrets`. Numa máquina com desktop, a alternativa é o autostart da sessão rodar `will-ia` sem argumentos (residente + bandeja).
 - `packaging/macos/`: `Info.plist` (`CFBundleExecutable` = `will-ia-app`), ícone `.icns`, script de `.dmg`, Login Item para autostart do servidor; notarização (`notarytool`) quando houver certificado Developer ID.
 - `packaging/windows/`: script Inno Setup ou `wix/` para `cargo-wix` (os dois `.exe`); autostart do servidor via `HKCU\Software\Microsoft\Windows\CurrentVersion\Run`.
 - `packaging/portable/`: `will-ia.sh`, `will-ia.cmd`, `README.md` (seção "Modo portátil").

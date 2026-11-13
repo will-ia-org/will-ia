@@ -576,7 +576,7 @@ pub fn install_service(plan: &Plan, enable: bool, log: &Log<'_>) -> Result<(), S
             std::fs::create_dir_all(p.parent().unwrap_or(Path::new(".")))
                 .map_err(|e| e.to_string())?;
             let body = format!(
-                "[Unit]\nDescription=will-ia — servidor (Claude Code + Telegram + MCP + agendamentos)\nAfter=network-online.target\nWants=network-online.target\n\n[Service]\nType=simple\nExecStart={} serve\nRestart=on-failure\nRestartSec=3\nEnvironment=RUST_LOG=info\nEnvironment=PATH={}\n\n[Install]\nWantedBy=default.target\n",
+                "[Unit]\nDescription=will-ia — servidor (Claude Code + Telegram + MCP + agendamentos)\nAfter=network-online.target\nWants=network-online.target\n\n[Service]\nType=simple\nExecStart={} serve\nRestart=always\nRestartSec=3\nEnvironment=RUST_LOG=info\nEnvironment=PATH={}\n\n[Install]\nWantedBy=default.target\n",
                 plan.server_path.display(),
                 env_path_for_service()
             );

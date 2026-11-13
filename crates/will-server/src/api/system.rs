@@ -341,6 +341,8 @@ fn ui_cmd(state: App, cmd: &str) -> ApiResult<Value> {
 pub struct BackupQuery {
     /// Incluir o perfil do navegador (grande).
     pub browser: Option<bool>,
+    /// Incluir a sessão do WhatsApp (padrão: sim, como sempre foi).
+    pub whatsapp: Option<bool>,
 }
 
 /// O que entra no backup e quanto pesa o perfil do navegador.
@@ -359,9 +361,26 @@ pub async fn backup_info(State(state): State<App>) -> ApiResult<Value> {
         "data_dir": state.paths.data_dir,
         "db_bytes": db_bytes,
         "browser_bytes": browser_bytes,
+        "whatsapp_bytes": crate::backup::dir_size(
+            &state.paths.data_dir.join(crate::backup::WHATSAPP_DIR)
+        ),
         "suggested_name": crate::backup::suggested_name(),
         "restore_pending": pending,
     })))
+}
+
+/// Chave do cofre desta instância (conteúdo de `secrets.key`). O backup não a
+/// leva: quem restaura em outra máquina informa esta chave. Só admin.
+pub async fn backup_key(State(state): State<App>) -> ApiResult<Value> {
+    let key = tokio::fs::read_to_string(state.paths.master_key_file())
+        .await
+        .map_err(|e| {
+            bad(format!(
+                "esta instância não tem chave de cofre em arquivo: {e}"
+            ))
+        })?;
+    tracing::warn!("chave do cofre exibida (Backup › Chave do cofre)");
+    Ok(Json(json!({ "key": key.trim() })))
 }
 
 /// Gera e devolve o `.zip` (streaming).
@@ -370,7 +389,8 @@ pub async fn backup(
     Query(q): Query<BackupQuery>,
 ) -> Result<axum::response::Response, ApiError> {
     let include_browser = q.browser.unwrap_or(false);
-    let (path, manifest) = crate::backup::build(&state, include_browser)
+    let include_whatsapp = q.whatsapp.unwrap_or(true);
+    let (path, manifest) = crate::backup::build(&state, include_browser, include_whatsapp)
         .await
         .map_err(super::internal)?;
     let file = tokio::fs::File::open(&path)
@@ -396,16 +416,49 @@ pub async fn backup(
 }
 
 /// Recebe o `.zip`, valida, agenda a restauração e reinicia o serviço.
-pub async fn restore(State(state): State<App>, body: axum::body::Bytes) -> ApiResult<Value> {
+pub async fn restore(
+    State(state): State<App>,
+    axum::Extension(me): axum::Extension<will_core::auth::Principal>,
+    headers: axum::http::HeaderMap,
+    body: axum::body::Bytes,
+) -> ApiResult<Value> {
+    // chave do cofre da máquina de origem (o backup não a leva)
+    let vault_key = headers
+        .get("x-vault-key")
+        .and_then(|v| v.to_str().ok())
+        .map(str::to_string);
     if body.is_empty() {
         return Err(bad("arquivo vazio"));
     }
+    // o que é desta máquina e precisa sobreviver: rede e a conta de quem restaura
+    let user = match &me.user_id {
+        Some(id) => state.storage.get_user(id).await.ok(),
+        None => None,
+    };
+    let keep = crate::backup::Keep {
+        network: state.settings().network.clone(),
+        user: user.map(|u| crate::backup::KeepUser {
+            id: u.id,
+            username: u.username,
+            name: u.name,
+            email: u.email,
+            password_hash: u.password_hash,
+            role: u.role,
+            must_change_password: u.must_change_password,
+        }),
+    };
     let paths = state.paths.clone();
     let bytes = body.to_vec();
-    let m = tokio::task::spawn_blocking(move || crate::backup::stage(&paths, &bytes))
-        .await
-        .map_err(|e| super::internal(e.to_string()))?
-        .map_err(bad)?;
+    let m = tokio::task::spawn_blocking(move || {
+        let m = crate::backup::stage(&paths, &bytes, vault_key.as_deref())?;
+        if let Err(e) = crate::backup::write_keep(&paths, &keep) {
+            tracing::warn!(error = %e, "não gravei restore-keep.json; rede e conta virão do backup");
+        }
+        Ok::<_, String>(m)
+    })
+    .await
+    .map_err(|e| super::internal(e.to_string()))?
+    .map_err(bad)?;
     state.bus.log(
         "warn",
         "server",

@@ -28,7 +28,7 @@ Wants=network-online.target
 [Service]
 Type=simple
 ExecStart=/usr/bin/will-ia serve
-Restart=on-failure
+Restart=always
 RestartSec=3
 Environment=RUST_LOG=info
 
