@@ -179,6 +179,30 @@ impl VoiceController {
         self.stop_task = Some(svc.call(|c| async move { c.voice_stop().await }));
     }
 
+    /// Encerra a voz ao sair ou trocar de servidor, **sem avisos**: o pedido de
+    /// parar só vai se havia sessão, e o resultado é ignorado. Antes, toda troca
+    /// de servidor chamava [`Self::stop`], que sempre pedia `voice_stop` e mostrava
+    /// "Sessão de voz encerrada." ou, com a conexão já trocada, "sem conexão com
+    /// o servidor" mesmo conectando com sucesso.
+    pub fn shutdown(&mut self, svc: &Arc<Service>) {
+        let was_active = self.session_active || self.pipeline.is_some();
+        self.pipeline = None;
+        self.ptt_down = false;
+        if let Some(t) = self.ctrl_task.take() {
+            t.abort();
+        }
+        self.ctrl_rx = None;
+        self.link = None;
+        self.start_task = None;
+        self.stop_task = None;
+        self.session_active = false;
+        self.state = "stopped".into();
+        if was_active {
+            self.cue(audio::CUE_OFF);
+            let _ = svc.call(|c| async move { c.voice_stop().await });
+        }
+    }
+
     pub fn toggle(&mut self, svc: &Arc<Service>) {
         if self.session_active || self.pipeline.is_some() {
             self.stop(svc);

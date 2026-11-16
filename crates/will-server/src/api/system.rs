@@ -343,6 +343,38 @@ pub struct BackupQuery {
     pub browser: Option<bool>,
     /// Incluir a sessão do WhatsApp (padrão: sim, como sempre foi).
     pub whatsapp: Option<bool>,
+    /// Incluir a pasta da base de conhecimento (padrão: não).
+    pub kb: Option<bool>,
+    /// Com `kb`: levar também o que o git ignora (padrão: não).
+    pub kb_all: Option<bool>,
+}
+
+/// Tamanho da base de conhecimento, inteira e sem o que o git ignora. Separado
+/// de `backup/info` porque varrer a pasta pode levar vários segundos.
+pub async fn backup_kb_size(State(state): State<App>) -> ApiResult<Value> {
+    let Some(path) = state.kb_path().filter(|p| p.is_dir()) else {
+        return Ok(Json(json!({ "path": null })));
+    };
+    let p = path.clone();
+    let (all, kept) = tokio::task::spawn_blocking(move || {
+        let size = |skip_ignored| {
+            crate::backup::kb_size(&crate::backup::KbSource {
+                path: p.clone(),
+                skip_ignored,
+            })
+        };
+        (size(false), size(true))
+    })
+    .await
+    .map_err(|e| internal(e.to_string()))?;
+    Ok(Json(json!({
+        "path": path,
+        "files_all": all.0,
+        "bytes_all": all.1,
+        "files": kept.0,
+        "bytes": kept.1,
+        "git": path.join(".git").exists(),
+    })))
 }
 
 /// O que entra no backup e quanto pesa o perfil do navegador.
@@ -388,11 +420,23 @@ pub async fn backup(
     State(state): State<App>,
     Query(q): Query<BackupQuery>,
 ) -> Result<axum::response::Response, ApiError> {
-    let include_browser = q.browser.unwrap_or(false);
-    let include_whatsapp = q.whatsapp.unwrap_or(true);
-    let (path, manifest) = crate::backup::build(&state, include_browser, include_whatsapp)
-        .await
-        .map_err(super::internal)?;
+    let kb = if q.kb.unwrap_or(false) {
+        let path = state
+            .kb_path()
+            .ok_or_else(|| bad("pasta da base de conhecimento não configurada"))?;
+        Some(crate::backup::KbSource {
+            path,
+            skip_ignored: !q.kb_all.unwrap_or(false),
+        })
+    } else {
+        None
+    };
+    let include = crate::backup::Include {
+        browser: q.browser.unwrap_or(false),
+        whatsapp: q.whatsapp.unwrap_or(true),
+        kb,
+    };
+    let (path, manifest) = crate::backup::build(&state, include).await.map_err(bad)?;
     let file = tokio::fs::File::open(&path)
         .await
         .map_err(|e| super::internal(e.to_string()))?;
@@ -420,14 +464,49 @@ pub async fn restore(
     State(state): State<App>,
     axum::Extension(me): axum::Extension<will_core::auth::Principal>,
     headers: axum::http::HeaderMap,
-    body: axum::body::Bytes,
+    body: axum::body::Body,
 ) -> ApiResult<Value> {
     // chave do cofre da máquina de origem (o backup não a leva)
     let vault_key = headers
         .get("x-vault-key")
         .and_then(|v| v.to_str().ok())
         .map(str::to_string);
-    if body.is_empty() {
+    // direto para o disco: com a base de conhecimento o arquivo passa de GBs
+    let part = crate::backup::part_path(&state.paths);
+    let received = {
+        use futures::StreamExt;
+        use tokio::io::AsyncWriteExt;
+        let mut out = tokio::fs::File::create(&part)
+            .await
+            .map_err(|e| internal(format!("{}: {e}", part.display())))?;
+        let mut stream = body.into_data_stream();
+        let mut total = 0u64;
+        let mut failed: Option<String> = None;
+        while let Some(chunk) = stream.next().await {
+            let r = match chunk {
+                Ok(c) => {
+                    total += c.len() as u64;
+                    out.write_all(&c).await.map_err(|e| e.to_string())
+                }
+                Err(e) => Err(format!("envio interrompido: {e}")),
+            };
+            if let Err(e) = r {
+                failed = Some(e);
+                break;
+            }
+        }
+        if failed.is_none() {
+            failed = out.flush().await.err().map(|e| e.to_string());
+        }
+        drop(out);
+        if let Some(e) = failed {
+            let _ = tokio::fs::remove_file(&part).await;
+            return Err(bad(e));
+        }
+        total
+    };
+    if received == 0 {
+        let _ = tokio::fs::remove_file(&part).await;
         return Err(bad("arquivo vazio"));
     }
     // o que é desta máquina e precisa sobreviver: rede e a conta de quem restaura
@@ -437,6 +516,7 @@ pub async fn restore(
     };
     let keep = crate::backup::Keep {
         network: state.settings().network.clone(),
+        kb_path: state.settings().kb.path.clone(),
         user: user.map(|u| crate::backup::KeepUser {
             id: u.id,
             username: u.username,
@@ -448,9 +528,10 @@ pub async fn restore(
         }),
     };
     let paths = state.paths.clone();
-    let bytes = body.to_vec();
+    // backup com a base de conhecimento só entra se houver pasta de base válida aqui
+    let local_kb = state.kb_path();
     let m = tokio::task::spawn_blocking(move || {
-        let m = crate::backup::stage(&paths, &bytes, vault_key.as_deref())?;
+        let m = crate::backup::stage_part(&paths, vault_key.as_deref(), local_kb.as_deref())?;
         if let Err(e) = crate::backup::write_keep(&paths, &keep) {
             tracing::warn!(error = %e, "não gravei restore-keep.json; rede e conta virão do backup");
         }

@@ -3,9 +3,10 @@
 //! O backup é um `.zip` com um snapshot consistente do banco (`VACUUM INTO`),
 //! o cofre de segredos (`secrets.enc` + `secrets.key`, ou `secrets.json`), a
 //! sessão do WhatsApp, `telemetry-defaults.json`, `instance-id`, `app.ron` e,
-//! opcionalmente, o perfil do navegador. **Não** leva a base de conhecimento
-//! (workspace), logs, caches, chaves de assinatura do instalador nem arquivos
-//! da máquina (`api-port`, `instance.lock`, `install-manifest.json`,
+//! opcionalmente, o perfil do navegador e a **base de conhecimento** (a pasta
+//! inteira, sob `kb/` no zip; por padrão sem o que o `.gitignore` ignora).
+//! **Não** leva logs, caches, chaves de assinatura do instalador nem arquivos da
+//! máquina (`api-port`, `instance.lock`, `install-manifest.json`,
 //! `ui-session.token`).
 //!
 //! Restaurar = subir o `.zip` (`POST /api/restore`): ele é validado e fica como
@@ -47,6 +48,27 @@ pub const PENDING_KEY: &str = "restore-vault.key";
 pub const WHATSAPP_DIR: &str = "whatsapp";
 /// Pasta opcional (grande): perfil do Chrome do agent-browser.
 pub const BROWSER_DIR: &str = "browser-profile";
+/// Prefixo, dentro do zip, da base de conhecimento (opcional).
+pub const KB_DIR: &str = "kb";
+/// Marca que a restauração trouxe a base de conhecimento (lido por [`apply_keep`]).
+pub const PENDING_KB: &str = "restore-kb-path";
+
+/// Base de conhecimento a levar no backup.
+#[derive(Debug, Clone)]
+pub struct KbSource {
+    pub path: PathBuf,
+    /// Deixa de fora o que o git ignora (`.gitignore`): caches, `node_modules`…
+    /// Só vale se a pasta for um repositório git; o `.git` vai sempre.
+    pub skip_ignored: bool,
+}
+
+/// O que é opcional no backup.
+#[derive(Debug, Clone, Default)]
+pub struct Include {
+    pub browser: bool,
+    pub whatsapp: bool,
+    pub kb: Option<KbSource>,
+}
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct Manifest {
@@ -59,6 +81,14 @@ pub struct Manifest {
     /// Backups anteriores a esta opção sempre levavam a sessão.
     #[serde(default = "yes")]
     pub include_whatsapp: bool,
+    /// A base de conhecimento veio junto (em `kb/`).
+    #[serde(default)]
+    pub include_kb: bool,
+    /// Caminho da base na máquina de origem (para restaurar no mesmo lugar).
+    #[serde(default)]
+    pub kb_path: Option<String>,
+    #[serde(default)]
+    pub kb_skip_ignored: bool,
     pub files: usize,
     pub bytes: u64,
 }
@@ -92,12 +122,75 @@ pub fn dir_size(p: &Path) -> u64 {
     total
 }
 
+fn kb_walk(src: &KbSource) -> ignore::Walk {
+    ignore::WalkBuilder::new(&src.path)
+        .hidden(false)
+        .parents(false)
+        .ignore(false)
+        .git_ignore(src.skip_ignored)
+        .git_global(src.skip_ignored)
+        .git_exclude(src.skip_ignored)
+        .follow_links(false)
+        .sort_by_file_name(|a, b| a.cmp(b))
+        .build()
+}
+
+/// `(arquivos, bytes)` do que entraria no backup da base de conhecimento.
+pub fn kb_size(src: &KbSource) -> (u64, u64) {
+    let (mut files, mut bytes) = (0u64, 0u64);
+    for e in kb_walk(src).flatten() {
+        if let Ok(md) = fs::symlink_metadata(e.path()) {
+            if md.is_file() {
+                files += 1;
+                bytes += md.len();
+            }
+        }
+    }
+    (files, bytes)
+}
+
+fn add_kb<W: Write + std::io::Seek>(
+    zip: &mut ZipWriter<W>,
+    src: &KbSource,
+    files: &mut usize,
+    bytes: &mut u64,
+) -> Result<(), String> {
+    for e in kb_walk(src) {
+        let e = match e {
+            Ok(e) => e,
+            Err(err) => {
+                tracing::warn!(error = %err, "backup: item da base de conhecimento pulado");
+                continue;
+            }
+        };
+        let Ok(rel) = e.path().strip_prefix(&src.path) else {
+            continue;
+        };
+        if rel.as_os_str().is_empty() {
+            continue;
+        }
+        let rel = rel
+            .components()
+            .map(|c| c.as_os_str().to_string_lossy())
+            .collect::<Vec<_>>()
+            .join("/");
+        let name = format!("{KB_DIR}/{rel}");
+        let Ok(md) = fs::symlink_metadata(e.path()) else {
+            continue;
+        };
+        if md.is_dir() {
+            // pastas vazias também voltam
+            zip.add_directory(name, SimpleFileOptions::default())
+                .map_err(|e| e.to_string())?;
+        } else if md.is_file() {
+            add_file(zip, e.path(), &name, files, bytes)?;
+        }
+    }
+    Ok(())
+}
+
 /// Gera o zip em `cache_dir` e devolve o caminho + manifesto.
-pub async fn build(
-    state: &AppState,
-    include_browser: bool,
-    include_whatsapp: bool,
-) -> Result<(PathBuf, Manifest), String> {
+pub async fn build(state: &AppState, include: Include) -> Result<(PathBuf, Manifest), String> {
     let paths = state.paths.clone();
     fs::create_dir_all(&paths.cache_dir).map_err(|e| e.to_string())?;
     cleanup_old(&paths.cache_dir);
@@ -117,20 +210,29 @@ pub async fn build(
     let data_dir = paths.data_dir.clone();
     let out2 = out.clone();
     let snap2 = snap.clone();
+    if let Some(kb) = &include.kb {
+        if !kb.path.is_dir() {
+            let _ = fs::remove_file(&snap);
+            return Err(format!(
+                "a pasta da base de conhecimento não existe: {}",
+                kb.path.display()
+            ));
+        }
+    }
     let manifest = tokio::task::spawn_blocking(move || {
-        write_zip(
-            &data_dir,
-            &snap2,
-            &out2,
-            include_browser,
-            include_whatsapp,
-            instance_id,
-        )
+        write_zip(&data_dir, &snap2, &out2, &include, instance_id)
     })
     .await
-    .map_err(|e| e.to_string())??;
+    .map_err(|e| e.to_string())?;
     let _ = fs::remove_file(&snap);
-    tracing::info!(path = %out.display(), files = manifest.files, bytes = manifest.bytes, include_browser, include_whatsapp, "backup gerado");
+    let manifest = match manifest {
+        Ok(m) => m,
+        Err(e) => {
+            let _ = fs::remove_file(&out);
+            return Err(e);
+        }
+    };
+    tracing::info!(path = %out.display(), files = manifest.files, bytes = manifest.bytes, include_browser = manifest.include_browser, include_whatsapp = manifest.include_whatsapp, include_kb = manifest.include_kb, "backup gerado");
     Ok((out, manifest))
 }
 
@@ -138,10 +240,10 @@ fn write_zip(
     data_dir: &Path,
     snap: &Path,
     out: &Path,
-    include_browser: bool,
-    include_whatsapp: bool,
+    include: &Include,
     instance_id: Option<String>,
 ) -> Result<Manifest, String> {
+    let (include_browser, include_whatsapp) = (include.browser, include.whatsapp);
     let file = fs::File::create(out).map_err(|e| e.to_string())?;
     let mut zip = ZipWriter::new(std::io::BufWriter::new(file));
     let mut files = 0usize;
@@ -166,6 +268,9 @@ fn write_zip(
             add_dir(&mut zip, &p, d, &mut files, &mut bytes)?;
         }
     }
+    if let Some(kb) = &include.kb {
+        add_kb(&mut zip, kb, &mut files, &mut bytes)?;
+    }
     let manifest = Manifest {
         format: FORMAT,
         version: env!("CARGO_PKG_VERSION").to_string(),
@@ -174,6 +279,12 @@ fn write_zip(
         instance_id,
         include_browser,
         include_whatsapp,
+        include_kb: include.kb.is_some(),
+        kb_path: include
+            .kb
+            .as_ref()
+            .map(|k| k.path.to_string_lossy().to_string()),
+        kb_skip_ignored: include.kb.as_ref().is_some_and(|k| k.skip_ignored),
         files,
         bytes,
     };
@@ -200,6 +311,12 @@ fn add_file<W: Write + std::io::Seek>(
     let mut opts = SimpleFileOptions::default().compression_method(CompressionMethod::Deflated);
     if md.len() >= 3 * 1024 * 1024 * 1024 {
         opts = opts.large_file(true);
+    }
+    #[cfg(unix)]
+    {
+        // scripts da base de conhecimento precisam voltar executáveis
+        use std::os::unix::fs::PermissionsExt;
+        opts = opts.unix_permissions(md.permissions().mode() & 0o777);
     }
     let mut f = match fs::File::open(path) {
         Ok(f) => f,
@@ -338,10 +455,50 @@ fn write_0600(p: &Path, body: &[u8]) -> Result<(), String> {
 
 /// Grava os bytes recebidos como `restore-pending.zip` (depois de validar).
 /// `vault_key`: chave do cofre da máquina de origem (o backup não a leva).
-pub fn stage(paths: &AppPaths, bytes: &[u8], vault_key: Option<&str>) -> Result<Manifest, String> {
-    let part = paths.data_dir.join(format!("{PENDING}.part"));
+/// `local_kb`: pasta da base de conhecimento configurada nesta máquina.
+pub fn stage(
+    paths: &AppPaths,
+    bytes: &[u8],
+    vault_key: Option<&str>,
+    local_kb: Option<&Path>,
+) -> Result<Manifest, String> {
+    let part = part_path(paths);
     fs::write(&part, bytes).map_err(|e| e.to_string())?;
-    let checked = inspect(&part).and_then(|m| Ok((m, resolve_vault_key(paths, &part, vault_key)?)));
+    stage_part(paths, vault_key, local_kb)
+}
+
+/// Onde o upload da restauração é gravado antes de ser validado.
+pub fn part_path(paths: &AppPaths) -> PathBuf {
+    paths.data_dir.join(format!("{PENDING}.part"))
+}
+
+/// Backup com a base de conhecimento só entra onde já existe uma pasta de base
+/// configurada e válida: é nela que os arquivos são restaurados.
+fn require_local_kb(m: &Manifest, local_kb: Option<&Path>) -> Result<(), String> {
+    if !m.include_kb {
+        return Ok(());
+    }
+    match local_kb {
+        Some(p) if p.is_dir() => Ok(()),
+        Some(p) => Err(format!(
+            "este backup traz a base de conhecimento, mas a pasta configurada nesta instância não existe ({}): corrija em Base de conhecimento e restaure de novo",
+            p.display()
+        )),
+        None => Err("este backup traz a base de conhecimento, mas esta instância não tem pasta de base configurada: configure em Base de conhecimento e restaure de novo".into()),
+    }
+}
+
+/// Valida o arquivo já gravado em [`part_path`] e o agenda (ou o apaga, se inválido).
+pub fn stage_part(
+    paths: &AppPaths,
+    vault_key: Option<&str>,
+    local_kb: Option<&Path>,
+) -> Result<Manifest, String> {
+    let part = part_path(paths);
+    let checked = inspect(&part).and_then(|m| {
+        require_local_kb(&m, local_kb)?;
+        Ok((m, resolve_vault_key(paths, &part, vault_key)?))
+    });
     let (m, key) = match checked {
         Ok(v) => v,
         Err(e) => {
@@ -374,6 +531,10 @@ pub struct Keep {
     pub network: will_core::settings::NetworkSettings,
     #[serde(default)]
     pub user: Option<KeepUser>,
+    /// Pasta da base de conhecimento configurada nesta máquina (como está nas
+    /// configurações): é para lá que vai a base que vier no backup.
+    #[serde(default)]
+    pub kb_path: Option<String>,
 }
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
@@ -393,26 +554,60 @@ pub fn write_keep(paths: &AppPaths, keep: &Keep) -> Result<(), String> {
     write_0600(&paths.data_dir.join(KEEP), &body)
 }
 
-/// Depois de abrir o banco: reaplica rede e conta guardadas em `restore-keep.json`.
+/// Depois de abrir o banco restaurado: reaplica o que é desta máquina (rede e
+/// conta, de `restore-keep.json`), aponta a base de conhecimento para onde ela
+/// foi extraída e desfaz caminhos da origem que não existem aqui.
 pub async fn apply_keep(paths: &AppPaths, storage: &will_storage::Storage) {
+    let kb_file = paths.data_dir.join(PENDING_KB);
+    let kb_restored = kb_file.is_file();
+    let _ = fs::remove_file(&kb_file);
     let p = paths.data_dir.join(KEEP);
-    let Ok(raw) = fs::read(&p) else { return };
-    let _ = fs::remove_file(&p);
-    let keep: Keep = match serde_json::from_slice(&raw) {
-        Ok(k) => k,
-        Err(e) => {
-            tracing::warn!(error = %e, "restore-keep.json ilegível; ignorado");
-            return;
+    let keep: Option<Keep> = match fs::read(&p) {
+        Ok(raw) => {
+            let _ = fs::remove_file(&p);
+            match serde_json::from_slice(&raw) {
+                Ok(k) => Some(k),
+                Err(e) => {
+                    tracing::warn!(error = %e, "restore-keep.json ilegível; ignorado");
+                    None
+                }
+            }
         }
+        Err(_) => None,
     };
+    let Some(keep) = keep else { return };
+    // a base restaurada ficou na pasta desta máquina, não na da origem
+    let kb = keep.kb_path.clone().filter(|_| kb_restored);
     match storage.load_settings().await {
         Ok(mut s) => {
-            s.network = keep.network;
-            match storage.save_settings(&s).await {
-                Ok(()) => {
-                    tracing::info!(bind = %s.network.bind, tls = s.network.tls, "restauração: rede desta máquina mantida")
+            s.network = keep.network.clone();
+            tracing::info!(bind = %s.network.bind, tls = s.network.tls, "restauração: rede desta máquina mantida");
+            if let Some(kb) = &kb {
+                tracing::info!(path = %kb, "restauração: base de conhecimento restaurada na pasta desta máquina");
+                s.kb.path = Some(kb.clone());
+            }
+            // sem base no backup: se a pasta da origem não existe aqui e a desta
+            // máquina existe, fica a desta máquina
+            if kb.is_none() {
+                let exists = |p: &Option<String>| {
+                    p.as_deref()
+                        .is_some_and(|p| paths.resolve_user_path(p).is_dir())
+                };
+                if !exists(&s.kb.path) && exists(&keep.kb_path) {
+                    tracing::info!(
+                        "restauração: pasta da base de conhecimento desta máquina mantida"
+                    );
+                    s.kb.path = keep.kb_path.clone();
                 }
-                Err(e) => tracing::warn!(error = %e, "restauração: não consegui manter a rede"),
+            }
+            // backup de outro sistema: o caminho do `claude` de lá não existe aqui
+            let bin = Path::new(&s.engine.claude_bin);
+            if bin.is_absolute() && !bin.exists() {
+                tracing::warn!(bin = %bin.display(), "restauração: binário do claude da origem não existe aqui; voltando a `claude` (PATH)");
+                s.engine.claude_bin = "claude".into();
+            }
+            if let Err(e) = storage.save_settings(&s).await {
+                tracing::warn!(error = %e, "restauração: não consegui gravar as configurações desta máquina");
             }
         }
         Err(e) => tracing::warn!(error = %e, "restauração: não li as configurações restauradas"),
@@ -482,6 +677,22 @@ pub fn apply_pending(paths: &AppPaths) -> Option<Result<Manifest, String>> {
 fn apply(paths: &AppPaths, pending: &Path) -> Result<Manifest, String> {
     let manifest = inspect(pending)?;
     let data = &paths.data_dir;
+    // base de conhecimento: vai para a pasta configurada nesta máquina (conferida
+    // ao agendar); a que estiver lá sai do caminho, renomeada ao lado
+    let kb_target = if manifest.include_kb {
+        let target = fs::read(data.join(KEEP))
+            .ok()
+            .and_then(|raw| serde_json::from_slice::<Keep>(&raw).ok())
+            .and_then(|k| k.kb_path)
+            .map(|p| p.trim().to_string())
+            .filter(|p| !p.is_empty())
+            .map(|p| paths.resolve_user_path(&p))
+            .filter(|p| p.is_dir())
+            .ok_or("o backup traz a base de conhecimento e esta instância não tem pasta de base configurada e válida")?;
+        Some(target)
+    } else {
+        None
+    };
     let keep = data.join("old").join(format!("restore-{}", now_tag()));
     fs::create_dir_all(&keep).map_err(|e| e.to_string())?;
     // guarda o que vai ser substituído
@@ -504,6 +715,22 @@ fn apply(paths: &AppPaths, pending: &Path) -> Result<Manifest, String> {
             fs::rename(&p, keep.join(t)).map_err(|e| format!("guardar {t}: {e}"))?;
         }
     }
+    if let Some(target) = &kb_target {
+        let has_content = fs::read_dir(target)
+            .map(|mut d| d.next().is_some())
+            .unwrap_or(false);
+        if has_content {
+            let name = target
+                .file_name()
+                .map(|n| n.to_string_lossy().to_string())
+                .unwrap_or_else(|| KB_DIR.to_string());
+            let aside = target.with_file_name(format!("{name}.antes-restore-{}", now_tag()));
+            fs::rename(target, &aside)
+                .map_err(|e| format!("guardar a base de conhecimento atual: {e}"))?;
+            tracing::warn!(from = %target.display(), to = %aside.display(), "restauração: base de conhecimento atual guardada");
+        }
+        fs::create_dir_all(target).map_err(|e| format!("{}: {e}", target.display()))?;
+    }
     // extrai
     let f = fs::File::open(pending).map_err(|e| e.to_string())?;
     let mut ar = ZipArchive::new(f).map_err(|e| e.to_string())?;
@@ -521,7 +748,13 @@ fn apply(paths: &AppPaths, pending: &Path) -> Result<Manifest, String> {
         } else {
             rel
         };
-        let dest = data.join(&rel);
+        let in_kb = rel.starts_with(KB_DIR);
+        let dest = match (&kb_target, rel.strip_prefix(KB_DIR)) {
+            (Some(t), Ok(sub)) => t.join(sub),
+            // `kb/` num backup que diz não levar a base: não espalha na pasta de dados
+            (None, Ok(_)) => continue,
+            _ => data.join(&rel),
+        };
         if entry.is_dir() {
             fs::create_dir_all(&dest).map_err(|e| e.to_string())?;
             continue;
@@ -532,6 +765,15 @@ fn apply(paths: &AppPaths, pending: &Path) -> Result<Manifest, String> {
         let mut out = fs::File::create(&dest).map_err(|e| format!("{}: {e}", dest.display()))?;
         std::io::copy(&mut entry, &mut out).map_err(|e| format!("{}: {e}", dest.display()))?;
         #[cfg(unix)]
+        if in_kb {
+            use std::os::unix::fs::PermissionsExt;
+            if let Some(mode) = entry.unix_mode() {
+                let _ = fs::set_permissions(&dest, fs::Permissions::from_mode(mode & 0o777));
+            }
+        }
+        #[cfg(not(unix))]
+        let _ = in_kb;
+        #[cfg(unix)]
         if rel.starts_with("secrets") {
             use std::os::unix::fs::PermissionsExt;
             let _ = fs::set_permissions(&dest, fs::Permissions::from_mode(0o600));
@@ -541,6 +783,10 @@ fn apply(paths: &AppPaths, pending: &Path) -> Result<Manifest, String> {
     let key_file = data.join(PENDING_KEY);
     if key_file.is_file() && !data.join(VAULT_KEY).exists() {
         fs::rename(&key_file, data.join(VAULT_KEY)).map_err(|e| format!("chave do cofre: {e}"))?;
+    }
+    if kb_target.is_some() {
+        // as configurações restauradas apontam para a pasta da origem
+        fs::write(data.join(PENDING_KB), b"1").map_err(|e| e.to_string())?;
     }
     Ok(manifest)
 }
@@ -597,15 +843,11 @@ mod tests {
         let snap = p.cache_dir.join("snap.db");
         fs::write(&snap, b"sqlite-A").unwrap();
         let zip_path = p.cache_dir.join("b.zip");
-        let m = write_zip(
-            &p.data_dir,
-            &snap,
-            &zip_path,
-            false,
-            true,
-            Some("inst".into()),
-        )
-        .unwrap();
+        let inc = Include {
+            whatsapp: true,
+            ..Default::default()
+        };
+        let m = write_zip(&p.data_dir, &snap, &zip_path, &inc, Some("inst".into())).unwrap();
         assert_eq!(m.format, FORMAT);
         assert!(m.files >= 3, "{m:?}");
         assert_eq!(
@@ -629,14 +871,14 @@ mod tests {
         fs::write(p.data_dir.join("whatsapp/acc/session"), b"wa-B").unwrap();
         let bytes = fs::read(&zip_path).unwrap();
         // sem a chave (a daqui é outra) e com chave errada: recusa e não agenda
-        let e = stage(&p, &bytes, None).unwrap_err();
+        let e = stage(&p, &bytes, None, None).unwrap_err();
         assert!(e.contains("precisa da chave"), "{e}");
-        let e = stage(&p, &bytes, Some(&key_b)).unwrap_err();
+        let e = stage(&p, &bytes, Some(&key_b), None).unwrap_err();
         assert!(e.contains("não abre"), "{e}");
         assert!(!p.data_dir.join(PENDING).exists());
         assert!(!p.data_dir.join(PENDING_KEY).exists());
         // com a chave da origem: agenda e aplica
-        stage(&p, &bytes, Some(&format!("  {key_a}\n"))).unwrap();
+        stage(&p, &bytes, Some(&format!("  {key_a}\n")), None).unwrap();
         assert!(p.data_dir.join(PENDING).is_file());
         let r = apply_pending(&p).expect("havia pendência");
         r.unwrap();
@@ -673,7 +915,7 @@ mod tests {
         // restaurar na própria máquina: a chave daqui abre, não precisa informar
         // (`old/restore-<segundo>` do passo anterior sai para não colidir no teste)
         fs::remove_dir_all(p.data_dir.join("old")).unwrap();
-        stage(&p, &bytes, None).unwrap();
+        stage(&p, &bytes, None, None).unwrap();
         apply_pending(&p).unwrap().unwrap();
         assert_eq!(fs::read(p.data_dir.join("secrets.enc")).unwrap(), enc_a);
     }
@@ -689,13 +931,13 @@ mod tests {
         let snap = p.cache_dir.join("snap.db");
         fs::write(&snap, b"sqlite-A").unwrap();
         let zip_path = p.cache_dir.join("b.zip");
-        let m = write_zip(&p.data_dir, &snap, &zip_path, false, false, None).unwrap();
+        let m = write_zip(&p.data_dir, &snap, &zip_path, &Include::default(), None).unwrap();
         assert!(!m.include_whatsapp);
         let mut ar = ZipArchive::new(fs::File::open(&zip_path).unwrap()).unwrap();
         assert!(ar.by_name("whatsapp/acc/session").is_err());
         drop(ar);
         fs::write(p.data_dir.join("whatsapp/acc/session"), b"wa-destino").unwrap();
-        stage(&p, &fs::read(&zip_path).unwrap(), None).unwrap();
+        stage(&p, &fs::read(&zip_path).unwrap(), None, None).unwrap();
         apply_pending(&p).unwrap().unwrap();
         assert_eq!(
             fs::read(p.data_dir.join("whatsapp/acc/session")).unwrap(),
@@ -714,11 +956,134 @@ mod tests {
         let tmp = tempfile::tempdir().unwrap();
         let p = paths(tmp.path());
         fs::create_dir_all(&p.data_dir).unwrap();
-        let e = stage(&p, b"not a zip", None).unwrap_err();
+        let e = stage(&p, b"not a zip", None, None).unwrap_err();
         assert!(e.contains("zip"), "{e}");
         assert!(!p.data_dir.join(PENDING).exists());
         assert!(!p.data_dir.join(format!("{PENDING}.part")).exists());
     }
+    /// A base de conhecimento vai no zip (sem o que o git ignora) e só restaura
+    /// onde há pasta de base configurada e válida; a que estava lá fica ao lado.
+    #[tokio::test]
+    async fn kb_goes_in_backup_and_comes_back() {
+        let tmp = tempfile::tempdir().unwrap();
+        let p = paths(tmp.path());
+        fs::create_dir_all(&p.data_dir).unwrap();
+        fs::create_dir_all(&p.cache_dir).unwrap();
+        let kb = tmp.path().join("origem-kb");
+        fs::create_dir_all(kb.join(".git")).unwrap();
+        fs::create_dir_all(kb.join("notas")).unwrap();
+        fs::create_dir_all(kb.join("cache")).unwrap();
+        fs::create_dir_all(kb.join("vazia")).unwrap();
+        fs::write(kb.join(".git/HEAD"), b"ref").unwrap();
+        fs::write(kb.join(".gitignore"), b"cache/\n").unwrap();
+        fs::write(kb.join("notas/a.md"), b"nota").unwrap();
+        fs::write(kb.join("cache/grande.bin"), b"regeneravel").unwrap();
+        fs::write(kb.join("rodar.sh"), b"#!/bin/sh").unwrap();
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            fs::set_permissions(kb.join("rodar.sh"), fs::Permissions::from_mode(0o755)).unwrap();
+        }
+        let src = |skip_ignored| KbSource {
+            path: kb.clone(),
+            skip_ignored,
+        };
+        assert_eq!(kb_size(&src(false)).0, 5);
+        assert_eq!(kb_size(&src(true)).0, 4);
+        let snap = p.cache_dir.join("snap.db");
+        fs::write(&snap, b"sqlite-A").unwrap();
+        let zip_path = p.cache_dir.join("b.zip");
+        let inc = Include {
+            kb: Some(src(true)),
+            ..Default::default()
+        };
+        let m = write_zip(&p.data_dir, &snap, &zip_path, &inc, None).unwrap();
+        assert!(m.include_kb && m.kb_skip_ignored);
+        let mut ar = ZipArchive::new(fs::File::open(&zip_path).unwrap()).unwrap();
+        assert!(ar.by_name("kb/notas/a.md").is_ok());
+        assert!(ar.by_name("kb/.git/HEAD").is_ok());
+        assert!(ar.by_name("kb/cache/grande.bin").is_err());
+        drop(ar);
+        // a pasta inteira, quando pedido
+        let all = p.cache_dir.join("all.zip");
+        let inc_all = Include {
+            kb: Some(src(false)),
+            ..Default::default()
+        };
+        write_zip(&p.data_dir, &snap, &all, &inc_all, None).unwrap();
+        let mut ar = ZipArchive::new(fs::File::open(&all).unwrap()).unwrap();
+        assert!(ar.by_name("kb/cache/grande.bin").is_ok());
+        drop(ar);
+
+        // destino sem base configurada, ou com pasta que não existe: barra e não agenda
+        let bytes = fs::read(&zip_path).unwrap();
+        let dest = tmp.path().join("destino-kb");
+        let e = stage(&p, &bytes, None, None).unwrap_err();
+        assert!(e.contains("não tem pasta de base configurada"), "{e}");
+        let e = stage(&p, &bytes, None, Some(&dest)).unwrap_err();
+        assert!(e.contains("não existe"), "{e}");
+        assert!(!p.data_dir.join(PENDING).exists());
+        assert!(!part_path(&p).exists());
+
+        // destino com base configurada e válida: a do backup entra no lugar dela
+        fs::create_dir_all(&dest).unwrap();
+        fs::write(dest.join("antiga.md"), b"antiga").unwrap();
+        write_keep(
+            &p,
+            &Keep {
+                network: Default::default(),
+                user: None,
+                kb_path: Some(dest.to_string_lossy().to_string()),
+            },
+        )
+        .unwrap();
+        stage(&p, &bytes, None, Some(&dest)).unwrap();
+        apply_pending(&p).unwrap().unwrap();
+        assert_eq!(fs::read(dest.join("notas/a.md")).unwrap(), b"nota");
+        assert!(dest.join(".git/HEAD").is_file());
+        assert!(dest.join("vazia").is_dir());
+        assert!(!dest.join("antiga.md").exists());
+        assert!(
+            !p.data_dir.join(KB_DIR).exists(),
+            "kb/ não vaza para os dados"
+        );
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let mode = fs::metadata(dest.join("rodar.sh"))
+                .unwrap()
+                .permissions()
+                .mode();
+            assert_eq!(mode & 0o111, 0o111, "script volta executável");
+        }
+        let aside: Vec<_> = fs::read_dir(tmp.path())
+            .unwrap()
+            .flatten()
+            .filter(|e| {
+                e.file_name()
+                    .to_string_lossy()
+                    .starts_with("destino-kb.antes-restore-")
+            })
+            .collect();
+        assert_eq!(aside.len(), 1);
+        assert!(aside[0].path().join("antiga.md").is_file());
+
+        // banco aberto: a configuração passa a apontar para a pasta restaurada e
+        // o caminho do claude da outra máquina volta ao padrão
+        let storage = will_storage::Storage::open(&tmp.path().join("s.db"))
+            .await
+            .unwrap();
+        let mut s = storage.load_settings().await.unwrap();
+        s.kb.path = Some("/Users/outro/kb".into());
+        s.engine.claude_bin = "/caminho/que/nao/existe/claude".into();
+        storage.save_settings(&s).await.unwrap();
+        apply_keep(&p, &storage).await;
+        let s = storage.load_settings().await.unwrap();
+        assert_eq!(s.kb.path.as_deref(), Some(dest.to_string_lossy().as_ref()));
+        assert_eq!(s.engine.claude_bin, "claude");
+        assert!(!p.data_dir.join(PENDING_KB).exists());
+    }
+
     /// Restaurar backup de outra máquina não pode trancar quem restaurou:
     /// a rede daqui e a conta de quem pediu voltam depois de abrir o banco.
     #[tokio::test]
@@ -762,6 +1127,7 @@ mod tests {
             &Keep {
                 network: network.clone(),
                 user: Some(user("admin", "hash-daqui")),
+                kb_path: None,
             },
         )
         .unwrap();
@@ -779,6 +1145,7 @@ mod tests {
             &Keep {
                 network,
                 user: Some(user("will", "hash-will")),
+                kb_path: None,
             },
         )
         .unwrap();

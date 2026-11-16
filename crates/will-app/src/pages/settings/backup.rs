@@ -1,6 +1,6 @@
 //! Aba Backup / Restore (Configurações → Geral): baixa um `.zip` com a pasta de
 //! dados da instância conectada (banco, cofre cifrado sem a chave, sessão do
-//! WhatsApp e perfil do navegador opcionais) e restaura um `.zip` em outra instância — o serviço
+//! WhatsApp, perfil do navegador e base de conhecimento opcionais) e restaura um `.zip` em outra instância — o serviço
 //! valida, agenda e reinicia (`docs/10`, RF-CFG-11).
 
 use crate::i18n::{tr, trf};
@@ -10,13 +10,18 @@ use crate::ui::{self, Tone};
 use serde_json::Value;
 use std::path::PathBuf;
 
-/// Download do backup: `(nome sugerido, bytes)`.
-type BackupTask = Task<(String, Vec<u8>)>;
+/// Download do backup direto para o arquivo: bytes gravados.
+type BackupTask = Task<u64>;
 
 pub struct BackupPage {
     info: Loader<Value>,
+    /// Tamanho da base de conhecimento (varredura lenta, à parte de `info`).
+    kb_size: Loader<Value>,
     include_browser: bool,
     include_whatsapp: bool,
+    include_kb: bool,
+    /// Com a base: deixa de fora o que o git ignora (caches, `node_modules`…).
+    kb_skip_ignored: bool,
     /// Chave do cofre desta instância (só depois de "Mostrar chave do cofre").
     key_task: Option<Task<Value>>,
     vault_key: Option<String>,
@@ -35,8 +40,11 @@ impl Default for BackupPage {
     fn default() -> Self {
         Self {
             info: Loader::default(),
+            kb_size: Loader::default(),
             include_browser: false,
             include_whatsapp: true,
+            include_kb: false,
+            kb_skip_ignored: true,
             key_task: None,
             vault_key: None,
             restore_key: String::new(),
@@ -67,7 +75,12 @@ impl BackupPage {
                 .start(cx.svc.call(|c| async move { c.backup_info().await }));
         }
         self.info.poll();
-        let mut done: Option<Result<(String, Vec<u8>), String>> = None;
+        if self.kb_size.stale(std::time::Duration::from_secs(600)) {
+            self.kb_size
+                .start(cx.svc.call(|c| async move { c.backup_kb_size().await }));
+        }
+        self.kb_size.poll();
+        let mut done: Option<Result<u64, String>> = None;
         if let Some((_, t)) = &self.backup_task {
             if let Some(r) = t.take() {
                 done = Some(r);
@@ -76,15 +89,12 @@ impl BackupPage {
         if let Some(r) = done {
             let (dest, _) = self.backup_task.take().expect("tarefa de backup");
             match r {
-                Ok((_, bytes)) => match std::fs::write(&dest, &bytes) {
-                    Ok(()) => {
-                        cx.toasts
-                            .success(trf("Backup salvo ({})", &[&fmt_bytes(bytes.len() as u64)]));
-                        self.last_backup = Some(dest);
-                        self.error = None;
-                    }
-                    Err(e) => self.error = Some(format!("{}: {e}", dest.display())),
-                },
+                Ok(bytes) => {
+                    cx.toasts
+                        .success(trf("Backup salvo ({})", &[&fmt_bytes(bytes)]));
+                    self.last_backup = Some(dest);
+                    self.error = None;
+                }
                 Err(e) => self.error = Some(e),
             }
         }
@@ -132,6 +142,12 @@ impl BackupPage {
             .get("whatsapp_bytes")
             .and_then(|v| v.as_u64())
             .unwrap_or(0);
+        let kb = self.kb_size.data.clone().unwrap_or(Value::Null);
+        let kb_path = ui::s(&kb, "path");
+        let kb_u64 = |k: &str| kb.get(k).and_then(|v| v.as_u64()).unwrap_or(0);
+        let (kb_bytes, kb_bytes_all) = (kb_u64("bytes"), kb_u64("bytes_all"));
+        let kb_git = ui::b(&kb, "git");
+        let kb_measured = self.kb_size.data.is_some();
         let suggested = ui::s(&info, "suggested_name");
         let pending = ui::b(&info, "restore_pending");
 
@@ -157,7 +173,7 @@ impl BackupPage {
                 ui::dot(ui, Tone::Neutral);
                 ui.label(
                     egui::RichText::new(tr(
-                        "NÃO entra: a base de conhecimento (workspace), logs, caches e arquivos da máquina (porta, lock, manifesto da instalação).",
+                        "NÃO entra: logs, caches e arquivos da máquina (porta, lock, manifesto da instalação). A base de conhecimento só entra se você ligar a opção abaixo.",
                     ))
                     .small()
                     .weak(),
@@ -190,6 +206,52 @@ impl BackupPage {
                     &[&fmt_bytes(browser_bytes)],
                 ));
             });
+            let kb_ready = !kb_path.is_empty();
+            if !kb_ready {
+                self.include_kb = false;
+            }
+            ui.horizontal(|ui| {
+                ui.add_enabled_ui(kb_ready, |ui| ui::toggle(ui, &mut self.include_kb));
+                let size = if self.kb_skip_ignored && kb_git {
+                    kb_bytes
+                } else {
+                    kb_bytes_all
+                };
+                ui.label(if kb_ready {
+                    trf(
+                        "incluir a base de conhecimento (a pasta inteira) · {}",
+                        &[&fmt_bytes(size)],
+                    )
+                } else if kb_measured {
+                    tr("incluir a base de conhecimento · nenhuma pasta configurada nesta instância")
+                        .to_string()
+                } else {
+                    tr("incluir a base de conhecimento · medindo a pasta…").to_string()
+                });
+            });
+            if self.include_kb {
+                let note = |ui: &mut egui::Ui, text: String| {
+                    ui.horizontal_wrapped(|ui| {
+                        ui.add_space(8.0);
+                        ui.label(egui::RichText::new(text).small().weak());
+                    });
+                };
+                note(ui, trf("Pasta: {}", &[&kb_path]));
+                if kb_git {
+                    ui.horizontal(|ui| {
+                        ui.add_space(8.0);
+                        ui::toggle(ui, &mut self.kb_skip_ignored);
+                        ui.label(trf(
+                            "deixar de fora o que o .gitignore ignora (caches, node_modules) · {} em vez de {}",
+                            &[&fmt_bytes(kb_bytes), &fmt_bytes(kb_bytes_all)],
+                        ));
+                    });
+                }
+                note(
+                    ui,
+                    tr("Os arquivos da base vão em texto claro dentro do zip (a chave do cofre não os protege). Para restaurar, o destino precisa ter a pasta da Base de conhecimento já configurada e existente: é nela que os arquivos entram, e o que estiver lá é renomeado, não apagado. Sem pasta válida, a restauração é barrada.").to_string(),
+                );
+            }
             ui.add_space(8.0);
             ui.horizontal(|ui| {
                 let busy = self.backup_task.is_some();
@@ -214,11 +276,16 @@ impl BackupPage {
                         dlg = dlg.set_directory(if dl.is_dir() { dl } else { home });
                     }
                     if let Some(dest) = dlg.save_file() {
-                        let b = self.include_browser;
-                        let w = self.include_whatsapp;
+                        let opts = will_client::BackupOptions {
+                            browser: self.include_browser,
+                            whatsapp: self.include_whatsapp,
+                            kb: self.include_kb,
+                            kb_all: !(self.kb_skip_ignored && kb_git),
+                        };
+                        let to = dest.clone();
                         let t = cx
                             .svc
-                            .call(move |c| async move { c.backup_bytes(b, w).await });
+                            .call(move |c| async move { c.backup_to_file(to, opts).await });
                         self.backup_task = Some((dest, t));
                         self.error = None;
                     }
@@ -293,7 +360,7 @@ impl BackupPage {
             ui.add_space(4.0);
             ui.label(
                 egui::RichText::new(tr(
-                    "Use isto na máquina nova logo após instalar o will-ia. A base de conhecimento precisa estar no caminho configurado (ou ajuste em Base de conhecimento depois).",
+                    "Use isto na máquina nova logo após instalar o will-ia. Se o backup traz a base de conhecimento, configure antes a pasta em Base de conhecimento nesta instância: sem pasta válida a restauração é barrada. Se não traz, a base precisa estar no caminho configurado (ou ajuste depois).",
                 ))
                 .small()
                 .weak(),
@@ -352,7 +419,7 @@ impl BackupPage {
             let c = ui::Confirm {
                 title: tr("Restaurar este backup?").into(),
                 body: trf(
-                    "Os dados atuais desta instância serão substituídos por {} e o serviço vai reiniciar. Threads, aprovações, tarefas, segredos e sessão do WhatsApp passam a ser os do arquivo.",
+                    "Os dados atuais desta instância serão substituídos por {} e o serviço vai reiniciar. Threads, aprovações, tarefas, segredos e sessão do WhatsApp passam a ser os do arquivo. Se o backup trouxe a base de conhecimento, a pasta atual da base é renomeada e a do arquivo entra no lugar.",
                     &[&p.display()],
                 ),
                 confirm_label: tr("Restaurar e reiniciar").into(),
@@ -362,17 +429,12 @@ impl BackupPage {
             if let Some(ok) = ui::confirm_modal(ui.ctx(), &c) {
                 self.confirm_restore = None;
                 if ok {
-                    match std::fs::read(&p) {
-                        Ok(bytes) => {
-                            let key = self.restore_key.clone();
-                            self.restore_task = Some(
-                                cx.svc
-                                    .call(move |c| async move { c.restore(bytes, key).await }),
-                            );
-                            self.error = None;
-                        }
-                        Err(e) => self.error = Some(format!("{}: {e}", p.display())),
-                    }
+                    let key = self.restore_key.clone();
+                    self.restore_task = Some(
+                        cx.svc
+                            .call(move |c| async move { c.restore_file(p, key).await }),
+                    );
+                    self.error = None;
                 }
             }
         }

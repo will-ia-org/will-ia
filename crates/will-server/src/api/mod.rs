@@ -204,10 +204,11 @@ pub fn router(state: App) -> Router {
         .route("/backup", get(system::backup))
         .route("/backup/info", get(system::backup_info))
         .route("/backup/key", get(system::backup_key))
+        .route("/backup/kb-size", get(system::backup_kb_size))
+        // o corpo vai em streaming para o disco (sem teto: a base de conhecimento passa de GBs)
         .route(
             "/restore",
-            post(system::restore)
-                .layer(axum::extract::DefaultBodyLimit::max(2 * 1024 * 1024 * 1024)),
+            post(system::restore).layer(axum::extract::DefaultBodyLimit::disable()),
         )
         .route("/ui/show", post(system::ui_show))
         .route("/ui/screenshot", post(system::ui_screenshot))

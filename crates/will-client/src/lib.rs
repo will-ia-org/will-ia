@@ -663,60 +663,107 @@ impl Client {
     pub async fn backup_info(&self) -> ApiResult {
         self.get("backup/info").await
     }
-    /// Baixa o `.zip` do backup: `(nome sugerido, bytes)`.
-    pub async fn backup_bytes(
+    /// Tamanho da base de conhecimento (inteira e sem o que o git ignora).
+    pub async fn backup_kb_size(&self) -> ApiResult {
+        self.get("backup/kb-size").await
+    }
+    /// Baixa o `.zip` do backup direto para `dest` (streaming; com a base de
+    /// conhecimento ele passa de GBs). Devolve os bytes gravados.
+    pub async fn backup_to_file(
         &self,
-        include_browser: bool,
-        include_whatsapp: bool,
-    ) -> Result<(String, Vec<u8>), String> {
+        dest: std::path::PathBuf,
+        opts: BackupOptions,
+    ) -> Result<u64, String> {
+        use tokio::io::AsyncWriteExt;
         let url = format!(
             "{}{}",
             self.url("backup"),
             query_string(&[
-                ("browser", include_browser.to_string()),
-                ("whatsapp", include_whatsapp.to_string()),
+                ("browser", opts.browser.to_string()),
+                ("whatsapp", opts.whatsapp.to_string()),
+                ("kb", opts.kb.to_string()),
+                ("kb_all", opts.kb_all.to_string()),
             ])
         );
-        let resp = self
+        let mut resp = self
             .http
             .get(url)
             .bearer_auth(&self.token)
+            .timeout(LONG_TRANSFER)
             .send()
             .await
             .map_err(|e| transport_error(&e))?;
         let status = resp.status();
-        let name = resp
-            .headers()
-            .get("x-backup-name")
-            .and_then(|v| v.to_str().ok())
-            .unwrap_or("will-ia-backup.zip")
-            .to_string();
-        let bytes = resp.bytes().await.map_err(|e| e.to_string())?;
         if !status.is_success() {
-            let text = String::from_utf8_lossy(&bytes).to_string();
+            let text = resp.text().await.unwrap_or_default();
             let msg = serde_json::from_str::<Value>(&text)
                 .ok()
                 .and_then(|v| v.get("error").and_then(|e| e.as_str()).map(str::to_string))
                 .unwrap_or_else(|| format!("HTTP {status}"));
             return Err(msg);
         }
-        Ok((name, bytes.to_vec()))
+        let mut part = dest.clone().into_os_string();
+        part.push(".part");
+        let part = std::path::PathBuf::from(part);
+        let io = |p: &std::path::Path, e: std::io::Error| format!("{}: {e}", p.display());
+        let mut out = tokio::fs::File::create(&part)
+            .await
+            .map_err(|e| io(&part, e))?;
+        let mut total = 0u64;
+        let r: Result<(), String> = async {
+            while let Some(chunk) = resp.chunk().await.map_err(|e| transport_error(&e))? {
+                total += chunk.len() as u64;
+                out.write_all(&chunk).await.map_err(|e| io(&part, e))?;
+            }
+            out.flush().await.map_err(|e| io(&part, e))
+        }
+        .await;
+        drop(out);
+        if let Err(e) = r {
+            let _ = tokio::fs::remove_file(&part).await;
+            return Err(e);
+        }
+        tokio::fs::rename(&part, &dest)
+            .await
+            .map_err(|e| io(&dest, e))?;
+        Ok(total)
     }
     /// Chave do cofre da instância (`{ key }`); o backup não a leva.
     pub async fn backup_key(&self) -> ApiResult {
         self.get("backup/key").await
     }
-    /// Sobe um `.zip` de backup; o serviço valida, agenda e reinicia.
-    /// `vault_key`: chave do cofre da máquina de origem (vazia = tenta a daqui).
-    pub async fn restore(&self, bytes: Vec<u8>, vault_key: String) -> ApiResult {
+    /// Sobe um `.zip` de backup (streaming do disco); o serviço valida, agenda e
+    /// reinicia. `vault_key`: chave do cofre da máquina de origem (vazia = tenta a daqui).
+    pub async fn restore_file(&self, path: std::path::PathBuf, vault_key: String) -> ApiResult {
+        use tokio::io::AsyncReadExt;
+        let file = tokio::fs::File::open(&path)
+            .await
+            .map_err(|e| format!("{}: {e}", path.display()))?;
+        let len = file
+            .metadata()
+            .await
+            .map_err(|e| format!("{}: {e}", path.display()))?
+            .len();
+        let stream = futures::stream::unfold(file, |mut f| async move {
+            let mut buf = vec![0u8; 1024 * 1024];
+            match f.read(&mut buf).await {
+                Ok(0) => None,
+                Ok(n) => {
+                    buf.truncate(n);
+                    Some((Ok::<_, std::io::Error>(bytes::Bytes::from(buf)), f))
+                }
+                Err(e) => Some((Err(e), f)),
+            }
+        });
         Self::finish(
             self.http
                 .post(self.url("restore"))
                 .bearer_auth(&self.token)
                 .header("content-type", "application/zip")
+                .header("content-length", len)
                 .header("x-vault-key", vault_key.trim())
-                .timeout(std::time::Duration::from_secs(600))
-                .body(bytes)
+                .timeout(LONG_TRANSFER)
+                .body(reqwest::Body::wrap_stream(stream))
                 .send()
                 .await,
         )
@@ -1109,6 +1156,20 @@ impl Client {
 
 /// `?a=1&b=x%20y` (vazio quando não há valores); codifica tudo fora de
 /// `A-Za-z0-9-_.~`.
+/// Prazo de download/upload de backup (com a base de conhecimento são GBs).
+const LONG_TRANSFER: std::time::Duration = std::time::Duration::from_secs(12 * 3600);
+
+/// O que é opcional no backup (`GET /api/backup`).
+#[derive(Debug, Clone, Copy, Default)]
+pub struct BackupOptions {
+    pub browser: bool,
+    pub whatsapp: bool,
+    /// A pasta da base de conhecimento.
+    pub kb: bool,
+    /// Com `kb`: também o que o git ignora (caches, `node_modules`…).
+    pub kb_all: bool,
+}
+
 pub fn query_string(query: &[(&str, String)]) -> String {
     let mut out = String::new();
     for (k, v) in query.iter().filter(|(_, v)| !v.is_empty()) {

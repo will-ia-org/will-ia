@@ -251,7 +251,7 @@ impl WillApp {
                 }
             }
         }
-        self.voice.stop(&self.svc);
+        self.voice.shutdown(&self.svc);
         self.svc.disconnect();
         self.snap = Snapshot::default();
         self.pages = Pages::default();
@@ -453,7 +453,7 @@ impl WillApp {
         match cmd {
             UiCommand::Show => self.show_window(ctx),
             UiCommand::Connect(profile) => {
-                self.voice.stop(&self.svc);
+                self.voice.shutdown(&self.svc);
                 self.svc.connect(profile.clone());
                 self.snap = Snapshot {
                     api_url: profile.url.clone(),
