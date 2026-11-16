@@ -64,6 +64,9 @@ struct Row {
     read_only: bool,
     /// Etiquetas normalizadas.
     tags: Vec<String>,
+    /// Valor a pagar/receber em centavos (opcional; os dois = faixa).
+    value_min: Option<i64>,
+    value_max: Option<i64>,
 }
 
 impl Row {
@@ -101,7 +104,19 @@ impl Row {
                         .collect()
                 })
                 .unwrap_or_default(),
+            value_min: v.get("value_min_cents").and_then(|x| x.as_i64()),
+            value_max: v.get("value_max_cents").and_then(|x| x.as_i64()),
         })
+    }
+
+    fn has_value(&self) -> bool {
+        self.value_min.is_some() || self.value_max.is_some()
+    }
+
+    /// Valor curto para a lista e a barra: `R$ 1K` ou `R$ 1K / 2K`.
+    fn value_short(&self) -> Option<String> {
+        will_core::task::money_range_short(self.value_min, self.value_max)
+            .map(|v| format!("R$ {v}"))
     }
 
     fn state(&self, now: DateTime<Utc>) -> State {
@@ -118,6 +133,55 @@ impl Row {
         } else {
             State::Running
         }
+    }
+}
+
+/// Soma dos valores de um grupo de tarefas: piso (mínimos) e teto (máximos).
+/// Tarefa com um valor só entra com ele nos dois.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+struct ValueSum {
+    min: i64,
+    max: i64,
+    count: usize,
+}
+
+impl ValueSum {
+    fn add(&mut self, r: &Row) {
+        let (Some(lo), Some(hi)) = (r.value_min.or(r.value_max), r.value_max.or(r.value_min))
+        else {
+            return;
+        };
+        self.min += lo.min(hi);
+        self.max += hi.max(lo);
+        self.count += 1;
+    }
+
+    fn short(&self) -> String {
+        will_core::task::money_range_short(Some(self.min), Some(self.max))
+            .map(|v| format!("R$ {v}"))
+            .unwrap_or_default()
+    }
+
+    fn full(&self) -> String {
+        will_core::task::money_range_full(Some(self.min), Some(self.max)).unwrap_or_default()
+    }
+}
+
+/// Totais do que há a providenciar: hoje, na semana, no mês e o que já venceu.
+#[derive(Debug, Clone, Copy, Default)]
+struct ValueTotals {
+    day: ValueSum,
+    week: ValueSum,
+    month: ValueSum,
+    overdue: ValueSum,
+}
+
+/// Centavos → texto editável no formulário (`1500` ou `1500,50`).
+fn money_edit(cents: Option<i64>) -> String {
+    match cents {
+        Some(c) if c.rem_euclid(100) == 0 => format!("{}", c / 100),
+        Some(c) => format!("{},{:02}", c / 100, c % 100),
+        None => String::new(),
     }
 }
 
@@ -138,6 +202,9 @@ struct Form {
     /// Etiquetas já normalizadas (chips) e o que está sendo digitado.
     tags: Vec<String>,
     tag_input: String,
+    /// Valor mínimo e máximo como digitados (reais; vazio = sem valor).
+    value_min: String,
+    value_max: String,
     done: bool,
     skipped: bool,
     /// Espelhada no Google Calendar (só informativo no cabeçalho).
@@ -200,6 +267,8 @@ impl Form {
             priority: "medium".into(),
             tags: Vec::new(),
             tag_input: String::new(),
+            value_min: String::new(),
+            value_max: String::new(),
             done: false,
             skipped: false,
             linked: false,
@@ -254,6 +323,8 @@ impl Form {
         f.done = r.done;
         f.skipped = r.skipped;
         f.tags = r.tags.clone();
+        f.value_min = money_edit(r.value_min);
+        f.value_max = money_edit(r.value_max);
         f
     }
 
@@ -310,6 +381,16 @@ impl Form {
                 tags.push(t);
             }
         }
+        // valor: confere aqui para o erro aparecer sem ida ao servidor
+        let vmin = will_core::task::parse_money(&self.value_min)
+            .map_err(|e| format!("{}: {e}", tr("Valor mínimo")))?;
+        let vmax = will_core::task::parse_money(&self.value_max)
+            .map_err(|e| format!("{}: {e}", tr("Valor máximo")))?;
+        if let (Some(a), Some(b)) = (vmin, vmax) {
+            if a > b {
+                return Err(tr("O valor mínimo não pode ser maior que o máximo.").into());
+            }
+        }
         Ok(json!({
             "title": self.title.trim(),
             "description": self.description.trim(),
@@ -317,6 +398,9 @@ impl Form {
             "end_at": end,
             "priority": self.priority,
             "tags": tags,
+            // texto em reais; vazio limpa
+            "value_min": self.value_min.trim(),
+            "value_max": self.value_max.trim(),
         }))
     }
 }
@@ -826,6 +910,92 @@ impl TasksPage {
         ))
     }
 
+    /// Totais das tarefas **abertas** com valor (respeita o filtro de tags):
+    /// o que toca hoje, a semana e o mês atuais (mesma regra do recorte
+    /// Dia/Semana/Mês) e o que já está atrasado. `None` se nenhuma tem valor.
+    fn value_totals(&self, now: DateTime<Utc>) -> Option<ValueTotals> {
+        let now_h = local_hours(now, self.offset_minutes);
+        let range = |sc: Scope| {
+            sc.range(now_h).map(|(s, e)| {
+                (
+                    utc_of_local_hours(s, self.offset_minutes),
+                    utc_of_local_hours(e, self.offset_minutes),
+                )
+            })
+        };
+        let (day, week, month) = (range(Scope::Day), range(Scope::Week), range(Scope::Month));
+        let touches = |r: &Row, range: Option<(DateTime<Utc>, DateTime<Utc>)>| {
+            range.is_some_and(|(s, e)| r.start < e && r.end.unwrap_or(r.start) >= s)
+        };
+        let mut t = ValueTotals::default();
+        let mut any = false;
+        for r in self.rows.iter().filter(|r| {
+            !r.done
+                && r.has_value()
+                && (self.tag_filter.is_empty()
+                    || r.tags.iter().any(|t| self.tag_filter.contains(t)))
+        }) {
+            any = true;
+            if touches(r, day) {
+                t.day.add(r);
+            }
+            if touches(r, week) {
+                t.week.add(r);
+            }
+            if touches(r, month) {
+                t.month.add(r);
+            }
+            if r.state(now) == State::Overdue {
+                t.overdue.add(r);
+            }
+        }
+        any.then_some(t)
+    }
+
+    /// Totalizador no fim da linha da legenda: "A providenciar: hoje · semana
+    /// · mês" (+ atrasado, em vermelho). Devolve a largura que vai ocupar.
+    fn totals_ui(ui: &mut egui::Ui, t: &ValueTotals, dark: bool, pal: &ui::Palette) {
+        let chip = |ui: &mut egui::Ui, label: &str, sum: &ValueSum, color: Color32| {
+            let text = if sum.count == 0 {
+                "–".to_string()
+            } else {
+                sum.short()
+            };
+            let hover = if sum.count == 0 {
+                tr("Nenhuma tarefa aberta com valor neste período.").to_string()
+            } else {
+                trf("{} · {} tarefa(s) com valor", &[&sum.full(), &sum.count])
+            };
+            egui::Frame::new()
+                .fill(pal.card)
+                .stroke(Stroke::new(1.0, pal.border))
+                .corner_radius(9.0)
+                .inner_margin(egui::Margin::symmetric(8, 1))
+                .show(ui, |ui| {
+                    ui.spacing_mut().item_spacing.x = 5.0;
+                    // direita → esquerda: o valor entra primeiro
+                    ui.label(
+                        egui::RichText::new(text)
+                            .font(ui::semibold(12.0))
+                            .color(color),
+                    );
+                    ui.label(egui::RichText::new(label).small().weak());
+                })
+                .response
+                .on_hover_text(hover);
+        };
+        if t.overdue.count > 0 {
+            chip(ui, tr("atrasado"), &t.overdue, Tone::Danger.color(dark));
+        }
+        chip(ui, tr("mês"), &t.month, pal.text);
+        chip(ui, tr("semana"), &t.week, pal.text);
+        chip(ui, tr("hoje"), &t.day, pal.text);
+        ui.label(egui::RichText::new(tr("A providenciar:")).small().weak())
+            .on_hover_text(tr(
+                "Soma dos valores das tarefas abertas (respeita o filtro de tags). Com faixa, mostra mínimo / máximo.",
+            ));
+    }
+
     fn sorted_rows(&self, now: DateTime<Utc>) -> Vec<Row> {
         let range = self.scope_range_utc(now);
         let mut rows: Vec<Row> = self
@@ -1098,13 +1268,26 @@ impl TasksPage {
                 ui.label(egui::RichText::new(label).small().weak());
                 ui.add_space(6.0);
             }
-            ui.label(
-                egui::RichText::new(tr(
-                    "· roda do mouse sobre as barras = zoom · arraste para navegar · clique na barra para editar",
-                ))
-                .small()
-                .weak(),
-            );
+            let hint = egui::RichText::new(tr(
+                "· roda do mouse sobre as barras = zoom · arraste para navegar · clique na barra para editar",
+            ))
+            .small()
+            .weak();
+            match self.value_totals(now) {
+                // totalizador na ponta direita; a dica ocupa o que sobrar no meio
+                Some(t) => {
+                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                        Self::totals_ui(ui, &t, dark, pal);
+                        ui.add_space(8.0);
+                        ui.with_layout(egui::Layout::left_to_right(egui::Align::Center), |ui| {
+                            ui.add(egui::Label::new(hint).truncate());
+                        });
+                    });
+                }
+                None => {
+                    ui.label(hint);
+                }
+            }
         });
         if let Some(e) = &self.list.error {
             ui::error_text(ui, e);
@@ -1163,6 +1346,24 @@ impl TasksPage {
                 ui::medium(12.0),
                 pal.text_weak,
             );
+            // topo da coluna de valor: soma das tarefas abertas que estão na lista
+            let mut sum = ValueSum::default();
+            for r in rows.iter().filter(|r| !r.done) {
+                sum.add(r);
+            }
+            if sum.count > 0 {
+                let list_header = Rect::from_min_max(
+                    header.min,
+                    Pos2::new(header.left() + list_w, header.bottom()),
+                );
+                p.with_clip_rect(list_header).text(
+                    Pos2::new(list_header.right() - 10.0, header.center().y),
+                    Align2::RIGHT_CENTER,
+                    sum.short(),
+                    ui::semibold(12.0),
+                    pal.text,
+                );
+            }
             self.paint_time_axis(&p, tl_header, view_start, zoom, now_h, pal, dark, true);
         }
 
@@ -1236,6 +1437,15 @@ impl TasksPage {
                 let x_of = |h: f64| -> f32 { tl.left() + ((h - view_start) as f32) * zoom };
                 let font = ui::medium(12.5);
                 let small = egui::FontId::proportional(11.0);
+                let value_font = ui::medium(11.5);
+                // coluna de valor da lista: larga o bastante para o maior valor
+                // (zero se nenhuma tarefa da lista tem valor)
+                let value_col_w = rows
+                    .iter()
+                    .filter_map(|r| r.value_short())
+                    .map(|t| p.layout_no_wrap(t, value_font.clone(), Color32::WHITE).size().x + 14.0)
+                    .fold(0.0f32, f32::max)
+                    .min((list_w - 110.0).max(0.0));
                 for (i, r) in rows.iter().enumerate() {
                     let y = area.top() + i as f32 * ROW_H;
                     let row_rect = Rect::from_min_size(Pos2::new(area.left(), y), Vec2::new(area.width(), ROW_H));
@@ -1259,7 +1469,7 @@ impl TasksPage {
                     p.circle_filled(Pos2::new(area.left() + 30.0, y + ROW_H / 2.0), 3.5, color);
                     let title_color = if r.done { pal.text_weak } else { pal.text };
                     // título cortado só quando encosta na borda da lista (acompanha o divisor)
-                    let title_max_w = (list_w - 40.0 - 10.0).max(20.0);
+                    let title_max_w = (list_w - 40.0 - 10.0 - value_col_w).max(20.0);
                     let title = fit_text(&p, &r.title, font.clone(), title_max_w);
                     let title_color = if r.done {
                         pal.text_weak.gamma_multiply(0.75)
@@ -1286,7 +1496,7 @@ impl TasksPage {
                     // tags depois do título, no que sobrar de largura
                     if !r.tags.is_empty() {
                         let tags_x = tr_rect.right() + 8.0;
-                        let room = list_rect.right() - 6.0 - tags_x;
+                        let room = list_rect.right() - 6.0 - value_col_w - tags_x;
                         if room > 24.0 {
                             let text = r.tags.iter().map(|t| format!("#{t}")).collect::<Vec<_>>().join(" ");
                             let text = fit_text(&p, &text, small.clone(), room);
@@ -1298,6 +1508,17 @@ impl TasksPage {
                                 pal.text_weak,
                             );
                         }
+                    }
+                    // coluna de valor, alinhada à direita da lista
+                    let value_txt = r.value_short();
+                    if let (Some(v), true) = (&value_txt, value_col_w > 0.0) {
+                        p.with_clip_rect(list_rect).text(
+                            Pos2::new(list_rect.right() - 8.0, y + ROW_H / 2.0),
+                            Align2::RIGHT_CENTER,
+                            v,
+                            value_font.clone(),
+                            if r.done { pal.text_weak.gamma_multiply(0.75) } else { pal.text },
+                        );
                     }
                     let list_resp = ui.interact(list_rect, ui.scope_id().with(("task-row", &r.id)), Sense::click());
                     if list_resp.hovered() {
@@ -1393,6 +1614,9 @@ impl TasksPage {
                     if !r.tags.is_empty() {
                         tip.push_str(&format!("\n{}", r.tags.iter().map(|t| format!("#{t}")).collect::<Vec<_>>().join(" ")));
                     }
+                    if let Some(v) = will_core::task::money_range_full(r.value_min, r.value_max) {
+                        tip.push_str(&format!("\n{} {}", tr("valor"), v));
+                    }
                     if !r.description.trim().is_empty() {
                         tip.push_str("\n\n");
                         tip.push_str(&ui::ellipsize(r.description.trim(), 240));
@@ -1439,10 +1663,42 @@ impl TasksPage {
                         // quanto falta / há quanto tempo, fora da barra: do lado
                         // preferido; se não couber na janela, do outro; senão nada
                         let lp = p.with_clip_rect(tl);
+                        // valor em evidência: pílula colada na barra (à direita;
+                        // sem espaço, à esquerda). O "em X / há X" vai depois dela.
+                        let (mut pad_l, mut pad_r) = (0.0f32, 0.0f32);
+                        if let Some(v) = &value_txt {
+                            let vcolor = if r.done { pal.text_weak } else { pal.text };
+                            let vg = lp.layout_no_wrap(v.clone(), value_font.clone(), vcolor);
+                            let vw = vg.size().x + 12.0;
+                            let vh = (vg.size().y + 4.0).min(ROW_H - 8.0);
+                            let right = bar.right() + 6.0;
+                            let left = bar.left() - 6.0 - vw;
+                            let vx = if right + vw <= tl.right() {
+                                pad_r = vw + 2.0;
+                                Some(right)
+                            } else if left >= tl.left() {
+                                pad_l = vw + 2.0;
+                                Some(left)
+                            } else {
+                                None
+                            };
+                            if let Some(vx) = vx {
+                                let rr = Rect::from_min_size(
+                                    Pos2::new(vx, bar.center().y - vh / 2.0),
+                                    Vec2::new(vw, vh),
+                                );
+                                lp.rect(rr, vh / 2.0, pal.card, Stroke::new(1.0, pal.border), egui::StrokeKind::Inside);
+                                lp.galley(
+                                    Pos2::new(rr.left() + 6.0, rr.center().y - vg.size().y / 2.0),
+                                    vg,
+                                    vcolor,
+                                );
+                            }
+                        }
                         let g = lp.layout_no_wrap(rel.clone(), small.clone(), pal.text_weak);
                         let w = g.size().x;
-                        let left_x = bar.left() - 6.0 - w;
-                        let right_x = bar.right() + 6.0;
+                        let left_x = bar.left() - 6.0 - w - pad_l;
+                        let right_x = bar.right() + 6.0 + pad_r;
                         let fits_left = left_x >= tl.left();
                         let fits_right = right_x + w <= tl.right();
                         let (first, second) = if rel_left {
@@ -2086,6 +2342,42 @@ impl TasksPage {
                     });
                     ui::field(
                         ui,
+                        tr("Valor"),
+                        Some(tr("Opcional, em reais: o que há a pagar ou receber. Um campo só = valor certo; os dois = estimativa (mínimo / máximo).")),
+                        |ui| {
+                            ui.horizontal(|ui| {
+                                ui.label(egui::RichText::new("R$").weak());
+                                ui.add(
+                                    egui::TextEdit::singleline(&mut f.value_min)
+                                        .hint_text(tr("mínimo"))
+                                        .desired_width(120.0),
+                                );
+                                ui.label(egui::RichText::new("/").weak());
+                                ui.add(
+                                    egui::TextEdit::singleline(&mut f.value_max)
+                                        .hint_text(tr("máximo"))
+                                        .desired_width(120.0),
+                                );
+                                // prévia de como aparece no Gantt
+                                let min = will_core::task::parse_money(&f.value_min);
+                                let max = will_core::task::parse_money(&f.value_max);
+                                if let (Ok(a), Ok(b)) = (min, max) {
+                                    if let Some(full) = will_core::task::money_range_full(a, b) {
+                                        let short = will_core::task::money_range_short(a, b)
+                                            .unwrap_or_default();
+                                        ui.add_space(6.0);
+                                        ui.label(
+                                            egui::RichText::new(format!("→ R$ {short}  ({full})"))
+                                                .small()
+                                                .weak(),
+                                        );
+                                    }
+                                }
+                            });
+                        },
+                    );
+                    ui::field(
+                        ui,
                         tr("Tags"),
                         Some(tr("Digite e Enter (ou vírgula) para adicionar. Vira minúsculas sem acento; espaço vira traço.")),
                         |ui| {
@@ -2319,6 +2611,8 @@ mod tests {
             linked: false,
             read_only: false,
             tags: vec![],
+            value_min: None,
+            value_max: None,
         };
         let s = 30 * 60;
         assert!(starting_soon(&row(m(30), false), now, s));
@@ -2349,6 +2643,8 @@ mod tests {
             linked: false,
             read_only: false,
             tags: vec![],
+            value_min: None,
+            value_max: None,
         };
         assert_eq!(
             relative_label(&row(h(2), Some(h(3)), false), now),

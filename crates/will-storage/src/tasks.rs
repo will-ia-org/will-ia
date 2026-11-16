@@ -19,6 +19,9 @@ pub struct NewTask {
     pub link: Option<TaskLink>,
     /// Já normalizadas (`will_core::task::normalize_tags`).
     pub tags: Vec<String>,
+    /// Valor em centavos (opcional).
+    pub value_min_cents: Option<i64>,
+    pub value_max_cents: Option<i64>,
 }
 
 /// Vínculo com um evento do Google Calendar.
@@ -58,6 +61,9 @@ pub struct TaskPatch {
     pub priority: Option<TaskPriority>,
     /// Substitui a lista inteira (já normalizada).
     pub tags: Option<Vec<String>>,
+    /// Valor em centavos; `Some(None)` limpa.
+    pub value_min_cents: Option<Option<i64>>,
+    pub value_max_cents: Option<Option<i64>>,
 }
 
 fn tags_json(tags: &[String]) -> String {
@@ -94,6 +100,8 @@ fn row_to_task(r: &sqlx::sqlite::SqliteRow) -> Option<Task> {
         remote_updated_at: opt_dt(r, "remote_updated_at"),
         event_read_only: r.get::<i64, _>("event_read_only") != 0,
         tags: parse_tags(&r.get::<String, _>("tags")),
+        value_min_cents: r.get::<Option<i64>, _>("value_min_cents"),
+        value_max_cents: r.get::<Option<i64>, _>("value_max_cents"),
     })
 }
 
@@ -108,8 +116,8 @@ impl Storage {
         let marks = n.done_at.map(|_| fmt(ts));
         sqlx::query(
             "INSERT INTO tasks (id, title, description, start_at, end_at, done_at, skipped, priority, created_by, created_at, updated_at, \
-             notified_start_at, notified_overdue_at, calendar_id, event_id, synced_at, remote_updated_at, event_read_only, tags) \
-             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+             notified_start_at, notified_overdue_at, calendar_id, event_id, synced_at, remote_updated_at, event_read_only, tags, value_min_cents, value_max_cents) \
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
         )
         .bind(id.to_string())
         .bind(&n.title)
@@ -130,6 +138,8 @@ impl Storage {
         .bind(n.link.as_ref().map(|l| fmt(l.remote_updated_at)))
         .bind(n.link.as_ref().is_some_and(|l| l.read_only))
         .bind(tags_json(&n.tags))
+        .bind(n.value_min_cents)
+        .bind(n.value_max_cents)
         .execute(&self.pool)
         .await?;
         self.get_task(id).await
@@ -323,10 +333,12 @@ impl Storage {
         };
         let priority = p.priority.unwrap_or(cur.priority);
         let tags = p.tags.clone().unwrap_or(cur.tags);
+        let value_min = p.value_min_cents.unwrap_or(cur.value_min_cents);
+        let value_max = p.value_max_cents.unwrap_or(cur.value_max_cents);
         // mudou o período → as marcas de aviso voltam a valer
         let reset_marks = p.start_at.is_some() || p.end_at.is_some();
         sqlx::query(
-            "UPDATE tasks SET title = ?, description = ?, start_at = ?, end_at = ?, priority = ?, tags = ?, updated_at = ?, \
+            "UPDATE tasks SET title = ?, description = ?, start_at = ?, end_at = ?, priority = ?, tags = ?, value_min_cents = ?, value_max_cents = ?, updated_at = ?, \
              notified_start_at = CASE WHEN ? THEN NULL ELSE notified_start_at END, \
              notified_overdue_at = CASE WHEN ? THEN NULL ELSE notified_overdue_at END \
              WHERE id = ?",
@@ -337,6 +349,8 @@ impl Storage {
         .bind(end_at.map(fmt))
         .bind(i64::from(priority.rank()))
         .bind(tags_json(&tags))
+        .bind(value_min)
+        .bind(value_max)
         .bind(fmt(now()))
         .bind(reset_marks)
         .bind(reset_marks)

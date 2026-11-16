@@ -2314,17 +2314,22 @@ impl ThreadsPage {
                         let hint = if hovering {
                             tr("Solte os arquivos para anexar.")
                         } else if !self.pending_files.is_empty() {
-                            tr("Comentário opcional sobre os anexos. Ctrl+Enter envia.")
+                            tr("Comentário opcional sobre os anexos. Enter envia; Shift+Enter quebra a linha.")
                         } else if t.pending > 0 {
-                            tr("Turno em andamento: a mensagem entra no meio. Ctrl+Enter envia.")
+                            tr("Turno em andamento: a mensagem entra no meio. Enter envia; Shift+Enter quebra a linha.")
                         } else {
-                            tr("Mensagem para o Claude. Ctrl+Enter envia.")
+                            tr("Mensagem para o Claude. Enter envia; Shift+Enter quebra a linha.")
                         };
                         let r = ui.add_sized(
                             [text_w, 54.0],
                             egui::TextEdit::multiline(&mut self.input).margin(crate::ui::input_margin())
                                 .frame(egui::Frame::NONE)
                                 .desired_rows(2)
+                                // chat: Enter envia; só Shift+Enter quebra a linha
+                                .return_key(Some(egui::KeyboardShortcut::new(
+                                    egui::Modifiers::SHIFT,
+                                    egui::Key::Enter,
+                                )))
                                 .hint_text(hint),
                         );
                         if self.focus_input {
@@ -2332,7 +2337,7 @@ impl ThreadsPage {
                             self.focus_input = false;
                         }
                         if r.has_focus()
-                            && ui.input(|i| i.key_pressed(egui::Key::Enter) && i.modifiers.command)
+                            && ui.input(|i| i.key_pressed(egui::Key::Enter) && !i.modifiers.shift)
                         {
                             send_now = true;
                         }
@@ -2359,7 +2364,7 @@ impl ThreadsPage {
                                 egui::Color32::WHITE,
                                 Some(send_fill),
                                 can,
-                                tr("Enviar (Ctrl+Enter)"),
+                                tr("Enviar (Enter)"),
                             )
                             .clicked()
                             {

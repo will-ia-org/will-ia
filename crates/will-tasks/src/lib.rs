@@ -68,6 +68,32 @@ pub struct TaskInput {
     /// Etiquetas (texto livre; normalizadas ao salvar). Na edição, substitui a lista.
     #[serde(default)]
     pub tags: Option<Vec<String>>,
+    /// Valor a pagar/receber em reais (opcional): número (`1500`, `99.9`) ou
+    /// texto (`"1.500,50"`, `"1,5k"`). Na edição, `""` ou `0` limpa.
+    #[serde(default)]
+    pub value_min: Option<serde_json::Value>,
+    #[serde(default)]
+    pub value_max: Option<serde_json::Value>,
+}
+
+/// Campo de valor da entrada → centavos. `None` = campo ausente (não mexe);
+/// `Some(None)` = limpar.
+fn money_arg(v: Option<&serde_json::Value>, label: &str) -> Result<Option<Option<i64>>, String> {
+    use serde_json::Value;
+    let r = match v {
+        None | Some(Value::Null) => return Ok(None),
+        Some(Value::Number(n)) => will_core::task::money_from_reais(n.as_f64().unwrap_or(f64::NAN)),
+        Some(Value::String(s)) => will_core::task::parse_money(s),
+        Some(_) => Err("use um número ou texto".into()),
+    };
+    r.map(Some).map_err(|e| format!("{label}: {e}"))
+}
+
+fn check_value_range(min: Option<i64>, max: Option<i64>) -> Result<(), String> {
+    match (min, max) {
+        (Some(a), Some(b)) if a > b => Err("o valor mínimo não pode ser maior que o máximo".into()),
+        _ => Ok(()),
+    }
 }
 
 /// Tarefa + campos derivados: estado, rótulos e horários no fuso configurado.
@@ -547,6 +573,9 @@ impl TasksModule {
         };
         Self::check_range(start_at, end_at)?;
         let priority = Self::parse_priority(input.priority.as_deref())?.unwrap_or_default();
+        let value_min = money_arg(input.value_min.as_ref(), "valor mínimo")?.flatten();
+        let value_max = money_arg(input.value_max.as_ref(), "valor máximo")?.flatten();
+        check_value_range(value_min, value_max)?;
         let t = self
             .deps
             .storage
@@ -561,6 +590,8 @@ impl TasksModule {
                 skipped: false,
                 link: None,
                 tags: will_core::task::normalize_tags(input.tags.unwrap_or_default()),
+                value_min_cents: value_min,
+                value_max_cents: value_max,
             })
             .await
             .map_err(|e| e.to_string())?;
@@ -664,6 +695,12 @@ impl TasksModule {
         if let Some(tags) = input.tags {
             p.tags = Some(will_core::task::normalize_tags(tags));
         }
+        p.value_min_cents = money_arg(input.value_min.as_ref(), "valor mínimo")?;
+        p.value_max_cents = money_arg(input.value_max.as_ref(), "valor máximo")?;
+        check_value_range(
+            p.value_min_cents.unwrap_or(cur.value_min_cents),
+            p.value_max_cents.unwrap_or(cur.value_max_cents),
+        )?;
         let start = p.start_at.unwrap_or(cur.start_at);
         let end = match p.end_at {
             Some(e) => e,

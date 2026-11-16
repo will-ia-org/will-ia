@@ -661,6 +661,8 @@ impl TasksModule {
                 skipped: r.skipped,
                 link: (!cleaned).then_some(link),
                 tags: vec![],
+                value_min_cents: None,
+                value_max_cents: None,
             };
             match storage.insert_task(&new).await {
                 Ok(_) => rep.pulled_created += 1,
@@ -774,6 +776,8 @@ mod tests {
             remote_updated_at: None,
             event_read_only: false,
             tags: vec![],
+            value_min_cents: None,
+            value_max_cents: None,
         }
     }
 

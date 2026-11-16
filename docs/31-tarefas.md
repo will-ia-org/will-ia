@@ -15,6 +15,7 @@ página `pages/tasks.rs`, seção Configurações › Tarefas.
 | `end_at` | instante UTC opcional | precisa ser depois do início; `""` na edição limpa |
 | `priority` | `high` (1) · `medium` (2, padrão) · `low` (3) | aceita alta/média/baixa e 1/2/3 na entrada |
 | `tags` | lista de strings (JSON na coluna `tags`, migration 0013) | **normalizadas** ao salvar (`will_core::task::normalize_tag`): minúsculas, sem acento (`ç`→`c`), separadores/espaços viram `-`, só `[a-z0-9._-]`, ≤ 40 chars, sem repetição; na edição a lista é substituída inteira (`[]` limpa). Não vão para o Google Calendar |
+| `value_min_cents` · `value_max_cents` | inteiro em **centavos**, opcional (migration 0015) | valor a pagar/receber. Só um preenchido = valor certo; os dois = faixa (mínimo ≤ máximo). Entrada (`TaskInput.value_min` / `value_max`) em **reais**: número (`1500`, `99.9`) ou texto (`"1.500,50"`, `"1,5k"`); na edição `""` ou `0` limpa. Não vão para o Google Calendar |
 | `done_at` | instante opcional | fechada: `tasks_complete` / botão ✓ (concluída) ou `tasks_skip` / botão Não realizada; `tasks_reopen` limpa |
 | `skipped` | bool | com `done_at`: fechada como **não realizada** (faltou/desistiu) — some da tela como a concluída, mas não conta como feita |
 | `notified_start_at`, `notified_overdue_at` | instantes | marcas do laço (um aviso por transição) |
@@ -59,10 +60,10 @@ reabrir zera só a de atraso. Qualquer transição emite `Event::TasksChanged` (
 
 | Ferramenta | Entrada | Efeito |
 |---|---|---|
-| `tasks_create` | `title`, `start_at` (obrig.), `description`, `end_at`, `priority`, `tags[]` | cria |
+| `tasks_create` | `title`, `start_at` (obrig.), `description`, `end_at`, `priority`, `tags[]`, `value_min`, `value_max` | cria |
 | `tasks_list` | `filter`: `pending` (padrão) · `running` · `overdue` · `upcoming` · `done` · `skipped` · `all`; `tags[]` = só tarefas com **qualquer** uma delas | lista `TaskView`s + `timezone` + `tags` (todas em uso, ordem alfabética) + `filter_tags` |
 | `tasks_get` | `id` (completo ou prefixo único ≥ 4) | detalha |
-| `tasks_update` | `id` + campos (só os enviados mudam; `end_at: ""` limpa; `tags` substitui a lista) | altera |
+| `tasks_update` | `id` + campos (só os enviados mudam; `end_at: ""` limpa; `tags` substitui a lista; `value_min`/`value_max` `""` ou `0` limpa) | altera |
 | `tasks_delete` | `id` | remove |
 | `tasks_complete` / `tasks_skip` / `tasks_reopen` | `id` | conclui / fecha como não realizada / reabre |
 
@@ -109,6 +110,13 @@ Configurações: seção `tasks` (`enabled`, `timezone`, `notify_native`, `notif
   Clicar na barra ou na linha abre o formulário (título, descrição, início, fim, prioridade,
   Concluir/Reabrir, Excluir com confirmação).
 - **Concluídas somem por padrão**; o toggle "mostrar concluídas" busca `all`.
+- **Valor** (desde 0.1.32): campos "mínimo / máximo" na aba Detalhes (com prévia). No Gantt o valor aparece
+  **abreviado** (`will_core::task::money_short`: abaixo de mil por extenso com centavos se houver, `100`, `99,90`;
+  de mil para cima `1K`, `1,25K`, `12,5K`, `250K`, `1,2M`; faixa = `R$ 1K / 2K`) em três lugares: coluna à direita
+  da lista (o topo da coluna soma as tarefas abertas visíveis), pílula colada na barra (à direita; sem espaço, à
+  esquerda; some no hover, que mostra início/fim) e a dica da barra (valor completo). **Totalizador** na ponta
+  direita da legenda: "A providenciar: hoje · semana · mês" (+ "atrasado" em vermelho), somando só tarefas
+  **abertas** com valor que tocam o período (mesma regra do recorte Dia/Semana/Mês), respeitando o filtro de tags.
 - **Tags** (desde 0.1.23): campo no formulário (chips; digitar + Enter ou vírgula adiciona, prévia da forma
   normalizada enquanto digita, × remove), `#tag` em cinza depois do título na lista e no tooltip da barra, e um
   combo de **múltipla escolha** depois de "mostrar concluídas" (com **busca** no topo, que filtra a lista enquanto digita e zera ao fechar; lista com rolagem) com todas as tags em uso (`tags` da resposta de

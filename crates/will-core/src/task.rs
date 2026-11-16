@@ -137,6 +137,161 @@ pub struct Task {
     /// sem acento, espaço vira `-`. Sem duplicatas, na ordem em que entraram.
     #[serde(default)]
     pub tags: Vec<String>,
+    /// Valor estimado a pagar/receber, em **centavos** (opcional). Com os dois,
+    /// é uma faixa (mínimo–máximo); com um só, é o valor da tarefa.
+    #[serde(default)]
+    pub value_min_cents: Option<i64>,
+    #[serde(default)]
+    pub value_max_cents: Option<i64>,
+}
+
+/// Maior valor aceito numa tarefa (R$ 1 trilhão), em centavos.
+pub const MONEY_MAX_CENTS: i64 = 100_000_000_000_000;
+
+/// Lê um valor digitado em reais e devolve **centavos**. Aceita `1500`,
+/// `1.500`, `1.500,50`, `1500.5`, `R$ 99,90`, `1,5k`, `2M`. Vazio ou zero =
+/// `None` (sem valor). Negativo ou texto que não é número = erro.
+pub fn parse_money(raw: &str) -> Result<Option<i64>, String> {
+    let bad = || {
+        format!(
+            "valor inválido \"{}\": use algo como 1500, 1.500,50 ou 1,5k",
+            raw.trim()
+        )
+    };
+    let mut s: String = raw
+        .trim()
+        .trim_start_matches("R$")
+        .trim_start_matches("r$")
+        .chars()
+        .filter(|c| !c.is_whitespace())
+        .collect();
+    if s.is_empty() {
+        return Ok(None);
+    }
+    let mult = match s.chars().last() {
+        Some('k' | 'K') => 1_000.0,
+        Some('m' | 'M') => 1_000_000.0,
+        _ => 1.0,
+    };
+    if mult > 1.0 {
+        s.pop();
+    }
+    if s.starts_with('-') {
+        return Err("o valor não pode ser negativo".into());
+    }
+    let normalized = if s.contains(',') {
+        // vírgula decimal: os pontos são separador de milhar
+        s.replace('.', "").replace(',', ".")
+    } else if s.contains('.') {
+        let mut parts = s.split('.');
+        let head = parts.next().unwrap_or("");
+        let groups: Vec<&str> = parts.collect();
+        // "1.500" / "12.345.678" = milhar; "1.5" / "1234.56" = decimal
+        if !head.is_empty() && head.len() <= 3 && groups.iter().all(|g| g.len() == 3) {
+            s.replace('.', "")
+        } else {
+            s.clone()
+        }
+    } else {
+        s.clone()
+    };
+    if normalized.is_empty() || !normalized.chars().all(|c| c.is_ascii_digit() || c == '.') {
+        return Err(bad());
+    }
+    let v: f64 = normalized.parse().map_err(|_| bad())?;
+    money_from_reais(v * mult)
+}
+
+/// Reais (número) → centavos. Zero = `None`; negativo ou absurdo = erro.
+pub fn money_from_reais(v: f64) -> Result<Option<i64>, String> {
+    if !v.is_finite() {
+        return Err("valor inválido".into());
+    }
+    if v < 0.0 {
+        return Err("o valor não pode ser negativo".into());
+    }
+    let cents = (v * 100.0).round();
+    if cents > MONEY_MAX_CENTS as f64 {
+        return Err("valor alto demais".into());
+    }
+    let cents = cents as i64;
+    Ok((cents > 0).then_some(cents))
+}
+
+/// Número com vírgula decimal, até `decimals` casas, sem zeros sobrando
+/// (trunca, não arredonda para cima: 1.999 não vira "2K").
+fn trimmed_decimal(v: f64, decimals: u32) -> String {
+    let f = 10f64.powi(decimals as i32);
+    let t = (v * f + 1e-6).floor() / f;
+    let s = format!("{t:.*}", decimals as usize);
+    let s = if s.contains('.') {
+        s.trim_end_matches('0').trim_end_matches('.').to_string()
+    } else {
+        s
+    };
+    s.replace('.', ",")
+}
+
+/// Valor curto para caber no Gantt (sem "R$"): abaixo de mil, por extenso
+/// (`100`, `99,90`); de mil para cima, abreviado (`1K`, `1,25K`, `12,5K`,
+/// `250K`, `1,2M`).
+pub fn money_short(cents: i64) -> String {
+    let cents = cents.max(0);
+    let reais = cents as f64 / 100.0;
+    if cents < 100_000 {
+        return if cents.rem_euclid(100) == 0 {
+            format!("{}", cents / 100)
+        } else {
+            format!("{},{:02}", cents / 100, cents % 100)
+        };
+    }
+    let (v, unit) = if reais < 1_000_000.0 {
+        (reais / 1_000.0, "K")
+    } else if reais < 1_000_000_000.0 {
+        (reais / 1_000_000.0, "M")
+    } else {
+        (reais / 1_000_000_000.0, "B")
+    };
+    let decimals = if v < 10.0 {
+        2
+    } else if v < 100.0 {
+        1
+    } else {
+        0
+    };
+    format!("{}{unit}", trimmed_decimal(v, decimals))
+}
+
+/// Valor completo em reais: `R$ 1.234,56`.
+pub fn money_full(cents: i64) -> String {
+    let cents = cents.max(0);
+    let int = (cents / 100).to_string();
+    let mut grouped = String::new();
+    for (i, c) in int.chars().enumerate() {
+        if i > 0 && (int.len() - i).is_multiple_of(3) {
+            grouped.push('.');
+        }
+        grouped.push(c);
+    }
+    format!("R$ {grouped},{:02}", cents % 100)
+}
+
+/// Faixa curta: `1K` (um valor só, ou os dois iguais) ou `1K / 2K`.
+pub fn money_range_short(min: Option<i64>, max: Option<i64>) -> Option<String> {
+    match (min, max) {
+        (Some(a), Some(b)) if a != b => Some(format!("{} / {}", money_short(a), money_short(b))),
+        (Some(a), _) | (None, Some(a)) => Some(money_short(a)),
+        (None, None) => None,
+    }
+}
+
+/// Faixa completa: `R$ 1.000,00` ou `R$ 1.000,00 a R$ 2.000,00`.
+pub fn money_range_full(min: Option<i64>, max: Option<i64>) -> Option<String> {
+    match (min, max) {
+        (Some(a), Some(b)) if a != b => Some(format!("{} a {}", money_full(a), money_full(b))),
+        (Some(a), _) | (None, Some(a)) => Some(money_full(a)),
+        (None, None) => None,
+    }
 }
 
 /// Tamanho máximo de uma tag depois de normalizada.
@@ -222,6 +377,11 @@ impl Task {
             && (self.start_at - now).num_seconds() <= secs
     }
 
+    /// Tem valor a pagar/receber (mínimo, máximo ou os dois).
+    pub fn has_value(&self) -> bool {
+        self.value_min_cents.is_some() || self.value_max_cents.is_some()
+    }
+
     /// Está espelhada num evento do Google Calendar.
     pub fn is_linked(&self) -> bool {
         self.calendar_id.is_some() && self.event_id.is_some()
@@ -275,6 +435,8 @@ mod tests {
             calendar_id: None,
             event_id: None,
             tags: vec![],
+            value_min_cents: None,
+            value_max_cents: None,
             synced_at: None,
             remote_updated_at: None,
             event_read_only: false,
@@ -304,6 +466,46 @@ mod tests {
         assert_eq!(TaskPriority::parse("low"), Some(TaskPriority::Low));
         assert_eq!(TaskPriority::parse("urgente"), None);
         assert_eq!(TaskPriority::from_rank(3), TaskPriority::Low);
+    }
+
+    #[test]
+    fn money_parses_and_abbreviates() {
+        assert_eq!(parse_money(""), Ok(None));
+        assert_eq!(parse_money("0"), Ok(None));
+        assert_eq!(parse_money("1500"), Ok(Some(150_000)));
+        assert_eq!(parse_money("1.500"), Ok(Some(150_000)));
+        assert_eq!(parse_money("R$ 1.500,50"), Ok(Some(150_050)));
+        assert_eq!(parse_money("1500.5"), Ok(Some(150_050)));
+        assert_eq!(parse_money("99,9"), Ok(Some(9_990)));
+        assert_eq!(parse_money("1,5k"), Ok(Some(150_000)));
+        assert_eq!(parse_money("2M"), Ok(Some(200_000_000)));
+        assert!(parse_money("-10").is_err());
+        assert!(parse_money("abc").is_err());
+
+        assert_eq!(money_short(1_000), "10");
+        assert_eq!(money_short(10_000), "100");
+        assert_eq!(money_short(9_990), "99,90");
+        assert_eq!(money_short(100_000), "1K");
+        assert_eq!(money_short(125_000), "1,25K");
+        assert_eq!(money_short(199_999), "1,99K");
+        assert_eq!(money_short(1_250_000), "12,5K");
+        assert_eq!(money_short(25_000_000), "250K");
+        assert_eq!(money_short(120_000_000), "1,2M");
+        assert_eq!(money_full(123_456), "R$ 1.234,56");
+        assert_eq!(money_full(990), "R$ 9,90");
+        assert_eq!(
+            money_range_short(Some(100_000), Some(200_000)).as_deref(),
+            Some("1K / 2K")
+        );
+        assert_eq!(
+            money_range_short(None, Some(50_000)).as_deref(),
+            Some("500")
+        );
+        assert_eq!(
+            money_range_short(Some(5_000), Some(5_000)).as_deref(),
+            Some("50")
+        );
+        assert_eq!(money_range_short(None, None), None);
     }
 
     #[test]
