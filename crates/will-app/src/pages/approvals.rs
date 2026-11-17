@@ -49,6 +49,8 @@ struct OverlayCard {
     /// (rótulo, valor, valor em bloco com rolagem)
     args: Vec<(String, String, bool)>,
     busy: bool,
+    /// Destinatários que dá para passar a confiar (ver [`trust_names`]).
+    trust: Option<String>,
 }
 
 /// O app escreve os cartões; a pilha devolve os cliques (id, decisão) e a
@@ -58,6 +60,56 @@ struct OverlayState {
     cards: Vec<OverlayCard>,
     clicks: Vec<(String, &'static str)>,
     height: f32,
+}
+
+/// Decisão interna "aprovar e sempre confiar" (vira `approved` + `trust`).
+const APPROVE_TRUST: &str = "approved_trust";
+
+/// Nomes dos destinatários que o pedido oferece para confiar (`None` = o
+/// pedido não oferece: política sem lista ou destinatário indeterminado).
+fn trust_names(a: &ApprovalRequest) -> Option<String> {
+    let offer = a.trust.as_ref()?;
+    let names: Vec<&str> = offer
+        .recipients
+        .iter()
+        .map(|r| {
+            if r.label.trim().is_empty() {
+                r.key.as_str()
+            } else {
+                r.label.as_str()
+            }
+        })
+        .collect();
+    (!names.is_empty()).then(|| names.join(", "))
+}
+
+/// Botão secundário "Aprovar e sempre confiar em …" (linha própria, acima
+/// dos botões de decisão). `true` = clicado.
+fn trust_button(ui: &mut egui::Ui, names: &str, enabled: bool) -> bool {
+    // Dentro de `horizontal`: é ele que limita a altura da linha. Um
+    // `with_layout` direto num layout vertical ocuparia toda a altura que
+    // sobra e empurraria os botões de decisão para fora do cartão.
+    ui.horizontal(|ui| {
+        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+            ui.add_enabled(
+                enabled,
+                egui::Button::new(
+                    RichText::new(trf(
+                        "Aprovar e sempre confiar em {}",
+                        &[&ui::ellipsize(names, 40)],
+                    ))
+                    .small(),
+                ),
+            )
+            .on_hover_text(trf(
+                "Aprova este pedido e inclui {} nos destinatários confiáveis: as próximas ações para eles saem sem confirmação. Dá para remover em Configurações › Servidor MCP › Destinatários confiáveis.",
+                &[&names],
+            ))
+            .clicked()
+        })
+        .inner
+    })
+    .inner
 }
 
 type OverlayShared = std::sync::Arc<parking_lot::Mutex<OverlayState>>;
@@ -82,8 +134,13 @@ impl ApprovalsPage {
     fn send_decision(&mut self, cx: &Cx, id: String, decision: &'static str) {
         let id2 = id.clone();
         let task = cx.svc.call(move |c| async move {
-            c.decide_approval(&id2, serde_json::json!({ "decision": decision }))
-                .await
+            // "approved_trust" = aprovar e incluir os destinatários do pedido
+            // na lista de confiança (o servidor tira a oferta do próprio pedido)
+            let body = match decision {
+                APPROVE_TRUST => serde_json::json!({ "decision": "approved", "trust": true }),
+                d => serde_json::json!({ "decision": d }),
+            };
+            c.decide_approval(&id2, body).await
         });
         self.decide.push((id, task));
     }
@@ -235,6 +292,7 @@ impl ApprovalsPage {
                     requested_at: a.requested_at,
                     timeout_secs: a.timeout_secs,
                     args,
+                    trust: trust_names(a),
                 }
             })
             .collect();
@@ -334,6 +392,12 @@ impl ApprovalsPage {
 
                 // Botões de decisão.
                 ui.add_space(8.0);
+                if let Some(names) = trust_names(a) {
+                    if trust_button(ui, &names, !busy) {
+                        self.send_decision(cx, id.clone(), APPROVE_TRUST);
+                    }
+                    ui.add_space(4.0);
+                }
                 ui.horizontal(|ui| {
                     if busy {
                         ui::busy(ui, tr("enviando decisão…"));
@@ -934,6 +998,12 @@ fn overlay_card(
                 }
             }
             ui.add_space(8.0);
+            if let Some(names) = &c.trust {
+                if trust_button(ui, names, !c.busy) {
+                    clicks.push((c.id.clone(), APPROVE_TRUST));
+                }
+                ui.add_space(4.0);
+            }
             ui.horizontal(|ui| {
                 if c.busy {
                     ui::busy(ui, tr("enviando decisão…"));

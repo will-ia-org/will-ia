@@ -18,7 +18,8 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 use will_core::tools::{arg_opt_bool, arg_opt_str, arg_opt_u64, arg_str, truncate};
 use will_core::{
-    Module, ToolContext, ToolError, ToolOutput, ToolPolicy, ToolProvider, ToolSpec, WillTool,
+    Module, Recipient, ToolContext, ToolError, ToolOutput, ToolPolicy, ToolProvider, ToolSpec,
+    TrustChannel, WillTool,
 };
 use will_storage::google::GoogleAccount;
 
@@ -137,6 +138,23 @@ impl Kind {
             Kind::Forward => "gmail_forward",
             Kind::ReplyAll => "gmail_reply_all",
         }
+    }
+}
+
+impl Kind {
+    /// Ferramentas que apontam para destinatários (lista de confiança,
+    /// `docs/09`): compor/enviar, encaminhar, responder a todos e rascunhos.
+    fn has_recipients(&self) -> bool {
+        matches!(
+            self,
+            Kind::Send
+                | Kind::CreateDraft
+                | Kind::UpdateDraft
+                | Kind::SendDraft
+                | Kind::DeleteDraft
+                | Kind::Forward
+                | Kind::ReplyAll
+        )
     }
 }
 
@@ -425,6 +443,97 @@ impl WillTool for GmailTool {
             default_policy,
             family: FAMILY.to_string(),
         }
+    }
+
+    fn trust_channel(&self) -> Option<TrustChannel> {
+        self.kind.has_recipients().then_some(TrustChannel::Email)
+    }
+
+    fn guards_duplicates(&self) -> bool {
+        matches!(
+            self.kind,
+            Kind::Send | Kind::SendDraft | Kind::Forward | Kind::ReplyAll
+        )
+    }
+
+    async fn recipients(&self, args: &Value) -> Option<Vec<Recipient>> {
+        let m = &self.module;
+        // endereços crus de cada campo; qualquer um ilegível = indeterminado
+        let from_args = |keys: &[&str]| -> Vec<String> {
+            keys.iter()
+                .flat_map(|k| str_list(args, k).unwrap_or_default())
+                .collect()
+        };
+        let raw: Vec<String> = match self.kind {
+            Kind::Send | Kind::CreateDraft | Kind::UpdateDraft | Kind::Forward => {
+                from_args(&["to", "cc", "bcc"])
+            }
+            Kind::SendDraft | Kind::DeleteDraft => {
+                let acc = m
+                    .resolve_gmail_account(arg_opt_str(args, "account"))
+                    .await
+                    .ok()?;
+                let draft = m
+                    .client
+                    .get(
+                        &acc,
+                        &format!(
+                            "{BASE}/drafts/{}",
+                            crate::calendar::enc(arg_opt_str(args, "draft_id")?)
+                        ),
+                        &draft_meta_query(),
+                    )
+                    .await
+                    .ok()?;
+                let payload = draft.get("message")?.get("payload")?;
+                ["To", "Cc", "Bcc"]
+                    .iter()
+                    .filter_map(|h| header(payload, h))
+                    .flat_map(|v| parse_addresses(&v))
+                    .collect()
+            }
+            Kind::ReplyAll => {
+                let acc = m
+                    .resolve_gmail_account(arg_opt_str(args, "account"))
+                    .await
+                    .ok()?;
+                let orig = m
+                    .client
+                    .get(
+                        &acc,
+                        &format!(
+                            "{BASE}/messages/{}",
+                            crate::calendar::enc(arg_opt_str(args, "message_id")?)
+                        ),
+                        &reply_all_query(),
+                    )
+                    .await
+                    .ok()?;
+                let payload = orig.get("payload")?;
+                let h = |n: &str| header(payload, n).unwrap_or_default();
+                let (to, cc) = reply_all_recipients(
+                    &acc.email,
+                    &h("From"),
+                    header(payload, "Reply-To").as_deref(),
+                    &h("To"),
+                    &h("Cc"),
+                );
+                to.into_iter()
+                    .chain(cc)
+                    .chain(from_args(&["extra_to", "extra_cc"]))
+                    .collect()
+            }
+            _ => return None,
+        };
+        let mut out: Vec<Recipient> = Vec::new();
+        for r in &raw {
+            let key = will_core::trust::email_key(r)
+                .filter(|k| !will_core::trust::email_key_is_domain(k))?;
+            if !out.iter().any(|x| x.key == key) {
+                out.push(Recipient::new(key.clone(), key));
+            }
+        }
+        Some(out)
     }
 
     fn approval_summary(&self, args: &Value) -> String {
@@ -1517,6 +1626,17 @@ async fn forward(
     Ok(ToolOutput::json(&v))
 }
 
+/// Cabeçalhos da mensagem original que definem o "responder a todos".
+fn reply_all_query() -> Vec<(&'static str, String)> {
+    vec![
+        ("format", "metadata".to_string()),
+        ("metadataHeaders", "From".to_string()),
+        ("metadataHeaders", "Reply-To".to_string()),
+        ("metadataHeaders", "To".to_string()),
+        ("metadataHeaders", "Cc".to_string()),
+    ]
+}
+
 /// Destinatários de "responder a todos": Para = Reply-To ou From (se o remetente
 /// sou eu, Para = os Para originais); Cc = Para + Cc originais, menos eu e menos
 /// quem já está em Para. Tudo em minúsculas, sem duplicatas, na ordem original.
@@ -1570,13 +1690,7 @@ async fn reply_all(
     }
     let message_id = arg_str(args, "message_id")?;
     let body_text = arg_str(args, "body_text")?;
-    let q = vec![
-        ("format", "metadata".to_string()),
-        ("metadataHeaders", "From".to_string()),
-        ("metadataHeaders", "Reply-To".to_string()),
-        ("metadataHeaders", "To".to_string()),
-        ("metadataHeaders", "Cc".to_string()),
-    ];
+    let q = reply_all_query();
     let orig = m
         .client
         .get(

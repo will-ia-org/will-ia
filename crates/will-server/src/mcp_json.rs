@@ -25,7 +25,9 @@ pub fn render(settings: &Settings, mcp_url: &str, mcp_enabled: bool) -> Value {
     if mcp_enabled && !mcp_url.is_empty() {
         servers.insert(
             "will_ia".into(),
-            json!({"type": "http", "url": mcp_url, "headers": {"Authorization": "Bearer ${WILL_IA_MCP_TOKEN}"}}),
+            // `timeout` (ms): o `claude` espera a aprovação inteira em vez de
+            // desistir em 60 s (ver `McpSettings::client_timeout_ms`)
+            json!({"type": "http", "url": mcp_url, "headers": {"Authorization": "Bearer ${WILL_IA_MCP_TOKEN}"}, "timeout": settings.mcp.client_timeout_ms()}),
         );
     }
     for ext in settings

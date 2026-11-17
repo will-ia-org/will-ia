@@ -249,6 +249,11 @@ pub fn router(state: App) -> Router {
         .route("/mcp/tools", get(mcp::tools))
         .route("/mcp/tools/{name}/policy", put(mcp::set_policy))
         .route("/mcp/calls", get(mcp::calls))
+        .route(
+            "/mcp/trusted",
+            get(mcp::trusted_list).post(mcp::trusted_add),
+        )
+        .route("/mcp/trusted/remove", post(mcp::trusted_remove))
         .route("/approvals", get(mcp::approvals))
         .route("/approvals/history", get(mcp::approvals_history))
         .route("/approvals/{id}", post(mcp::decide))

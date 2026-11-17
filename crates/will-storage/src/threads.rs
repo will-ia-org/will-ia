@@ -137,13 +137,22 @@ impl Storage {
         Ok(())
     }
 
+    /// Troca o estado. A data de atividade (que ordena a lista de threads) só
+    /// avança quando há conversa: turno começando (`Running`) ou resposta
+    /// entregue (`Live`). Dormir por ociosidade, processo encerrado, erro ou
+    /// arquivamento não são mensagem e não movem a thread para o topo.
     pub async fn set_thread_status(&self, id: ThreadId, status: ThreadStatus) -> Result<()> {
-        sqlx::query("UPDATE threads SET status = ?, last_activity_at = ? WHERE id = ?")
-            .bind(status.as_str())
-            .bind(fmt(now()))
-            .bind(id.to_string())
-            .execute(&self.pool)
-            .await?;
+        let is_activity = matches!(status, ThreadStatus::Running | ThreadStatus::Live);
+        sqlx::query(
+            "UPDATE threads SET status = ?, \
+             last_activity_at = CASE WHEN ? THEN ? ELSE last_activity_at END WHERE id = ?",
+        )
+        .bind(status.as_str())
+        .bind(is_activity)
+        .bind(fmt(now()))
+        .bind(id.to_string())
+        .execute(&self.pool)
+        .await?;
         Ok(())
     }
 

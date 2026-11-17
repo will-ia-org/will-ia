@@ -10,6 +10,10 @@ use std::sync::Arc;
 #[serde(rename_all = "snake_case")]
 pub enum ToolPolicy {
     Auto,
+    /// Automática só quando **todos** os destinatários da chamada estão na
+    /// lista de confiança do canal; senão, confirma. Só vale para ferramenta
+    /// com [`WillTool::trust_channel`].
+    AutoListed,
     Confirm,
     Off,
 }
@@ -18,6 +22,7 @@ impl ToolPolicy {
     pub fn as_str(&self) -> &'static str {
         match self {
             ToolPolicy::Auto => "auto",
+            ToolPolicy::AutoListed => "auto_listed",
             ToolPolicy::Confirm => "confirm",
             ToolPolicy::Off => "off",
         }
@@ -25,6 +30,7 @@ impl ToolPolicy {
     pub fn parse(s: &str) -> Option<Self> {
         match s {
             "auto" => Some(ToolPolicy::Auto),
+            "auto_listed" => Some(ToolPolicy::AutoListed),
             "confirm" => Some(ToolPolicy::Confirm),
             "off" => Some(ToolPolicy::Off),
             _ => None,
@@ -106,6 +112,24 @@ pub trait WillTool: Send + Sync {
     /// Resumo legível para a tela de aprovação (gerado pelo serviço, nunca pelo agente).
     fn approval_summary(&self, args: &serde_json::Value) -> String {
         format!("{} {}", self.spec().name, truncate(&args.to_string(), 300))
+    }
+    /// Canal da lista de confiança, se a ferramenta tem destinatário (é o que
+    /// habilita a política [`ToolPolicy::AutoListed`] para ela).
+    fn trust_channel(&self) -> Option<crate::trust::TrustChannel> {
+        None
+    }
+    /// A ferramenta entrega algo a terceiros (mensagem, e-mail) e não deve
+    /// repetir: o servidor recusa uma chamada **idêntica** a outra em
+    /// andamento ou concluída há pouco (`settings.mcp.duplicate_window_secs`),
+    /// devolvendo o resultado da primeira.
+    fn guards_duplicates(&self) -> bool {
+        false
+    }
+    /// Para quem vai **esta** chamada, com a chave canônica do canal
+    /// (`crate::trust`). `None` = não deu para determinar (o servidor então
+    /// pede confirmação). Só é chamado sob [`ToolPolicy::AutoListed`].
+    async fn recipients(&self, _args: &serde_json::Value) -> Option<Vec<crate::trust::Recipient>> {
+        None
     }
     async fn call(
         &self,

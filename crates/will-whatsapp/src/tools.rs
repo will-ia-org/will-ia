@@ -6,8 +6,8 @@
 //! contas e as demais exigem `account`.
 
 use crate::backend::{
-    build_vcard, is_group_jid, jid_from_phone, mime_for_path, phone_digits, phone_from_jid,
-    MessageRef,
+    build_vcard, format_phone, is_group_jid, jid_from_phone, mime_for_path, phone_digits,
+    phone_from_jid, MessageRef,
 };
 use crate::module::{WaAccount, WhatsAppModule};
 use chrono::{Duration, Utc};
@@ -18,7 +18,8 @@ use std::time::Instant;
 use tracing::Instrument;
 use will_core::tools::{arg_opt_bool, arg_opt_i64, arg_opt_str, arg_str, truncate};
 use will_core::{
-    Module, ToolContext, ToolError, ToolOutput, ToolPolicy, ToolProvider, ToolSpec, WillTool,
+    Module, Recipient, ToolContext, ToolError, ToolOutput, ToolPolicy, ToolProvider, ToolSpec,
+    TrustChannel, WillTool,
 };
 
 pub const FAMILY: &str = "whatsapp";
@@ -288,6 +289,73 @@ impl ToolKind {
     }
 }
 
+/// De onde sai o destinatário de uma chamada (lista de confiança, `docs/09`).
+#[derive(Clone, Copy)]
+enum RecipientArg {
+    /// `chat_id` (JID ou nome) ou `phone`.
+    Chat,
+    /// `message_id`: o chat da mensagem no índice.
+    Message,
+    /// `contact` (JID, telefone ou nome).
+    Contact,
+}
+
+impl ToolKind {
+    /// Ferramentas que apontam para um chat/contato. As demais (listar chats,
+    /// listar contatos, buscar) não têm destinatário.
+    fn recipient_arg(&self) -> Option<RecipientArg> {
+        match self {
+            ToolKind::GetMessages
+            | ToolKind::GetGroup
+            | ToolKind::MarkRead
+            | ToolKind::SendMessage
+            | ToolKind::SendMedia
+            | ToolKind::SendContact
+            | ToolKind::SendVoice => Some(RecipientArg::Chat),
+            ToolKind::DownloadMedia
+            | ToolKind::React
+            | ToolKind::MessageStatus
+            | ToolKind::EditMessage
+            | ToolKind::DeleteMessage => Some(RecipientArg::Message),
+            ToolKind::ContactInfo => Some(RecipientArg::Contact),
+            ToolKind::ListChats | ToolKind::SearchMessages | ToolKind::ListContacts => None,
+        }
+    }
+}
+
+/// Destinatário canônico de um JID já resolvido: grupo pelo próprio JID;
+/// pessoa pelo telefone (do JID ou, se for LID, do índice de contatos).
+/// `None` quando o telefone não é conhecido.
+async fn recipient_of_jid(m: &WhatsAppModule, acc: &WaAccount, jid: &str) -> Option<Recipient> {
+    let label = m.chat_label(Some(&acc.id), jid);
+    let name = label
+        .as_ref()
+        .and_then(|l| l.name.clone())
+        .map(|n| n.trim().to_string())
+        .filter(|n| !n.is_empty());
+    if is_group_jid(jid) {
+        let key = will_core::trust::wa_key(jid)?;
+        return Some(Recipient::new(key, name.unwrap_or_else(|| jid.to_string())));
+    }
+    let phone = match phone_from_jid(jid) {
+        Some(p) => p,
+        None => match label.as_ref().and_then(|l| l.phone.clone()) {
+            Some(p) => p,
+            None => m
+                .storage()
+                .wa_contact_phones(&acc.id, &[jid.to_string()])
+                .await
+                .ok()?
+                .remove(jid)?,
+        },
+    };
+    let key = will_core::trust::wa_phone_key(&phone)?;
+    Some(Recipient::new(
+        key,
+        name.unwrap_or_else(|| format_phone(&phone)),
+    ))
+}
+
 /// Conta(s) sobre as quais uma chamada opera.
 enum Target {
     One(Arc<WaAccount>),
@@ -397,6 +465,59 @@ impl WaTool {
 impl WillTool for WaTool {
     fn spec(&self) -> ToolSpec {
         self.kind.spec()
+    }
+
+    fn trust_channel(&self) -> Option<TrustChannel> {
+        self.kind.recipient_arg().map(|_| TrustChannel::WhatsApp)
+    }
+
+    fn guards_duplicates(&self) -> bool {
+        matches!(
+            self.kind,
+            ToolKind::SendMessage
+                | ToolKind::SendMedia
+                | ToolKind::SendContact
+                | ToolKind::SendVoice
+        )
+    }
+
+    async fn recipients(&self, args: &Value) -> Option<Vec<Recipient>> {
+        let source = self.kind.recipient_arg()?;
+        let m = self.module().ok()?;
+        let Target::One(acc) = self.target(&m, args).ok()? else {
+            return None;
+        };
+        let text = |key: &str| {
+            arg_opt_str(args, key)
+                .map(str::trim)
+                .filter(|s| !s.is_empty())
+        };
+        let raw = match source {
+            RecipientArg::Message => {
+                let msg = m
+                    .storage()
+                    .wa_get_message(&acc.id, text("message_id")?)
+                    .await;
+                return recipient_of_jid(&m, &acc, &msg.ok()??.chat_jid)
+                    .await
+                    .map(|r| vec![r]);
+            }
+            RecipientArg::Chat => text("chat_id").or_else(|| text("phone"))?,
+            RecipientArg::Contact => text("contact")?,
+        };
+        // o mesmo caminho do envio: nome/telefone → JID do chat de verdade
+        let found = match resolve_chat_id(&m, &acc, raw).await {
+            Ok(jid) => recipient_of_jid(&m, &acc, &jid).await,
+            Err(_) => None,
+        };
+        // número ainda sem chat no índice: vale o próprio telefone
+        found
+            .or_else(|| {
+                let key = will_core::trust::wa_key(raw)?;
+                (!will_core::trust::wa_key_is_group(&key))
+                    .then(|| Recipient::new(key, format_phone(raw)))
+            })
+            .map(|r| vec![r])
     }
 
     fn approval_summary(&self, args: &Value) -> String {

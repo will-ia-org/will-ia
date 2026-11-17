@@ -36,6 +36,18 @@ pub struct ApprovalRequest {
     pub summary: String,
     pub args_redacted: serde_json::Value,
     pub timeout_secs: u64,
+    /// Só sob a política `auto_listed`: destinatários desta chamada que ainda
+    /// não estão na lista de confiança. Quem aprova pode confiar neles dali em
+    /// diante (o serviço os inclui na lista do canal).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub trust: Option<TrustOffer>,
+}
+
+/// Oferta de "aprovar e sempre confiar" de um pedido.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct TrustOffer {
+    pub channel: crate::trust::TrustChannel,
+    pub recipients: Vec<crate::trust::Recipient>,
 }
 
 /// Argumentos de texto **longos** de um pedido (mensagem, corpo de e-mail,
@@ -96,6 +108,7 @@ impl ApprovalManager {
         summary: String,
         args_redacted: serde_json::Value,
         timeout: Duration,
+        trust: Option<TrustOffer>,
     ) -> (ApprovalRequest, ApprovalDecision, String) {
         let id = ApprovalId::new();
         let request = ApprovalRequest {
@@ -106,6 +119,7 @@ impl ApprovalManager {
             summary,
             args_redacted,
             timeout_secs: timeout.as_secs(),
+            trust,
         };
         let (tx, rx) = oneshot::channel();
         self.inner.lock().insert(
@@ -118,6 +132,23 @@ impl ApprovalManager {
         self.bus.emit(Event::ApprovalRequested {
             approval: request.clone(),
         });
+        // Quem pediu desistiu no meio da espera (chamada cancelada pelo
+        // cliente): o pedido sai da fila e a tela some, como num tempo esgotado.
+        struct Abandon<'a> {
+            mgr: &'a ApprovalManager,
+            id: ApprovalId,
+        }
+        impl Drop for Abandon<'_> {
+            fn drop(&mut self) {
+                if self.mgr.inner.lock().remove(&self.id).is_some() {
+                    self.mgr.bus.emit(Event::ApprovalDecided {
+                        approval_id: self.id,
+                        decision: ApprovalDecision::Timeout,
+                    });
+                }
+            }
+        }
+        let abandon = Abandon { mgr: self, id };
 
         let outcome = match tokio::time::timeout(timeout, rx).await {
             Ok(Ok((d, via))) => (d, via),
@@ -125,6 +156,7 @@ impl ApprovalManager {
             Err(_) => (ApprovalDecision::Timeout, "timeout".to_string()),
         };
         self.inner.lock().remove(&id);
+        drop(abandon); // já saiu da fila: não emite de novo
         self.bus.emit(Event::ApprovalDecided {
             approval_id: id,
             decision: outcome.0,

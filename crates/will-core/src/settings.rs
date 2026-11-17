@@ -439,9 +439,25 @@ impl Default for TelegramSettings {
 pub struct McpSettings {
     pub enabled: bool,
     pub port: u16,
-    /// Política por ferramenta: auto | confirm | off. Ausente = padrão da ferramenta.
+    /// Política por ferramenta: auto | auto_listed | confirm | off. Ausente =
+    /// padrão da ferramenta.
     pub policies: BTreeMap<String, ToolPolicySetting>,
     pub approval_timeout_secs: u64,
+    /// Destinatários confiáveis por canal (política `auto_listed`).
+    pub trusted: crate::trust::TrustedRecipients,
+    /// Janela (s) em que um envio **idêntico** a outro já feito é recusado
+    /// como duplicado (o agente recebe o resultado do primeiro). 0 = desligado.
+    pub duplicate_window_secs: u64,
+}
+
+impl McpSettings {
+    /// Quanto o cliente MCP (o `claude`) deve esperar por uma chamada, em ms:
+    /// o tempo da aprovação mais folga para executar. Vai no `.mcp.json` como
+    /// `timeout` do servidor `will_ia`; sem isso o `claude` desiste em 60 s,
+    /// antes de o usuário aprovar, e o agente tenta de novo.
+    pub fn client_timeout_ms(&self) -> u64 {
+        (self.approval_timeout_secs.max(10) + 120) * 1000
+    }
 }
 impl Default for McpSettings {
     fn default() -> Self {
@@ -450,17 +466,15 @@ impl Default for McpSettings {
             port: 0,
             policies: BTreeMap::new(),
             approval_timeout_secs: 300,
+            trusted: Default::default(),
+            duplicate_window_secs: 600,
         }
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum ToolPolicySetting {
-    Auto,
-    Confirm,
-    Off,
-}
+/// Política persistida de uma ferramenta: o mesmo tipo usado em tempo de
+/// execução (`auto` | `auto_listed` | `confirm` | `off`).
+pub use crate::tools::ToolPolicy as ToolPolicySetting;
 
 /// Conta WhatsApp pareada (referência persistida; a sessão em si fica em
 /// `<data_dir>/whatsapp/<id>/store.db`).

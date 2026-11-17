@@ -294,6 +294,7 @@ mod approval_notice_tests {
 
     fn req(summary: &str, args: serde_json::Value) -> will_core::ApprovalRequest {
         will_core::ApprovalRequest {
+            trust: None,
             id: will_core::ApprovalId::new(),
             requested_at: chrono::Utc::now(),
             thread_id: None,

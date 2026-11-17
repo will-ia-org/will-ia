@@ -175,3 +175,52 @@ Entrada `will_ia` no `<kb>/.mcp.json` gerado, com `Authorization: Bearer ${WILL_
 
 - Cliente MCP de teste (`rmcp` client) contra o servidor: `initialize`, `tools/list` com toggles, `tools/call` com e sem bearer, destino fora da allowlist.
 - Teste de integração: `fake-claude` recebe `--mcp-config` e faz uma chamada real ao servidor.
+
+## Política "automático para listados" e destinatários confiáveis (desde 0.1.33)
+
+Quarto nível de política, além de `auto`, `confirm` e `off`: **`auto_listed`**. A chamada executa sem
+confirmação só quando **todos** os destinatários estão na lista de confiança do canal; em qualquer outro caso
+(alguém fora da lista, ou a ferramenta não soube dizer para quem vai) cai em confirmar.
+
+- **Quem aceita:** só ferramenta com destinatário, isto é, com `WillTool::trust_channel()` (`ToolListing.trust_channel`
+  na API; `PUT /api/mcp/tools/{name}/policy` recusa `auto_listed` nas demais).
+  - WhatsApp: tudo que aponta para um chat (`chat_id`/`phone`: ler mensagens, grupo, marcar lido, enviar
+    texto/mídia/voz/contato), para uma mensagem (`message_id`: baixar mídia, reagir, estado, editar, apagar) ou
+    para um contato (`contact`). Listar chats/contatos e buscar não têm destinatário.
+  - Gmail: enviar, criar/atualizar/enviar/apagar rascunho, encaminhar e responder a todos (Para + Cc + Cco; no
+    rascunho e no responder a todos os destinatários são lidos da mensagem). Leitura e `gmail_modify` não entram.
+- **Contrato:** `WillTool::recipients(args) -> Option<Vec<Recipient>>` devolve a chave **canônica** de cada
+  destinatário (`will_core::trust`): telefone só em dígitos e, no Brasil, sem o nono dígito (`wa_phone_key`);
+  grupo pelo JID `…@g.us` (item próprio: listar uma pessoa não libera os grupos dela); LID resolvido para o
+  telefone pelo índice; e-mail em minúsculas. O servidor MCP só compara chaves.
+- **Lista:** `settings.mcp.trusted` (`TrustedRecipients { whatsapp, email }`, entradas `{ key, label }`), uma por
+  **canal**. No e-mail vale endereço exato ou domínio inteiro (`@empresa.com`; subdomínio não herda).
+  Só muda por `GET/POST /api/mcp/trusted` e `POST /api/mcp/trusted/remove` (`{ channel, value, label }`, o servidor
+  normaliza); `PUT /api/settings` da seção `mcp` preserva a lista vigente. Nenhuma ferramenta do agente a altera.
+- **Aprovar e confiar:** quando `auto_listed` cai em confirmar com destinatários conhecidos, o pedido leva
+  `ApprovalRequest.trust` (`TrustOffer { channel, recipients }`, só os que faltam). `POST /api/approvals/{id}` com
+  `{ "decision": "approved", "trust": true }` aprova e inclui esses destinatários (a oferta sai do pedido pendente,
+  nunca do corpo). Só no app (página e pilha flutuante); o Telegram segue com Aprovar/Negar.
+- **Auditoria:** `mcp_calls.policy` (migration 0016) registra como cada chamada foi liberada: `auto`,
+  `auto_listed`, `confirm` ou `off`; aparece na coluna "Liberação" de Chamadas recentes.
+- **App:** Configurações › Servidor MCP › aba **Destinatários confiáveis** (WhatsApp: busca por nome nos
+  contatos/grupos ou número digitado; e-mail: endereço ou domínio) e a opção "automático p/ listados" no seletor
+  de política das ferramentas com destinatário.
+
+## Espera da aprovação, cancelamento e envio duplicado (desde 0.1.33)
+
+Caso real (17/11/2026): o `claude` desiste de uma chamada HTTP ao MCP em **60 s** quando o servidor não tem
+`timeout` próprio no `.mcp.json`. A aprovação demorou 66 s, o agente recebeu "The operation timed out.", o serviço
+enviou a mensagem assim que o usuário aprovou e o agente, sem saber, mandou de novo.
+
+- **Limite do cliente alinhado:** a entrada `will_ia` do `.mcp.json` leva `timeout` (ms) =
+  `McpSettings::client_timeout_ms()` = tempo de aprovação + 120 s. Quem esgota primeiro é sempre o serviço, que
+  responde "não aprovada (tempo esgotado)" e tira o pedido da tela.
+- **Cancelamento:** se o cliente cancela a chamada durante a espera (`RequestContext.ct`), o pedido sai da fila
+  (`ApprovalManager::request` emite `ApprovalDecided` com `Timeout` ao ser descartado) e nada é executado.
+- **Envio duplicado:** ferramentas com `WillTool::guards_duplicates()` (WhatsApp: mensagem, mídia, voz, contato;
+  Gmail: enviar, enviar rascunho, encaminhar, responder a todos) não repetem uma chamada **idêntica** (mesma
+  ferramenta e mesmos argumentos): em andamento → erro "aguardando aprovação, não repita"; concluída dentro de
+  `settings.mcp.duplicate_window_secs` (padrão 600; 0 desliga) → devolve, sem erro, o resultado da primeira com
+  o aviso de duplicidade. Falha ou negativa libera nova tentativa. Em `mcp_calls.policy` fica `duplicate`.
+

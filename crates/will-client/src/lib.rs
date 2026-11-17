@@ -589,6 +589,25 @@ impl Client {
         )
         .await
     }
+    /// Destinatários confiáveis por canal (política `auto_listed`).
+    pub async fn mcp_trusted(&self) -> ApiResult {
+        self.get("mcp/trusted").await
+    }
+    /// `channel`: `whatsapp` | `email`; `value` como digitado (o servidor normaliza).
+    pub async fn mcp_trusted_add(&self, channel: &str, value: &str, label: &str) -> ApiResult {
+        self.post(
+            "mcp/trusted",
+            Some(json!({ "channel": channel, "value": value, "label": label })),
+        )
+        .await
+    }
+    pub async fn mcp_trusted_remove(&self, channel: &str, key: &str) -> ApiResult {
+        self.post(
+            "mcp/trusted/remove",
+            Some(json!({ "channel": channel, "value": key })),
+        )
+        .await
+    }
     pub async fn mcp_calls(&self, query: &[(&str, String)]) -> ApiResult {
         self.get_q("mcp/calls", query).await
     }

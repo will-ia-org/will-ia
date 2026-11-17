@@ -4,7 +4,7 @@ use crate::app::AppState;
 use secrecy::SecretString;
 use std::sync::Arc;
 use std::time::Duration;
-use will_core::settings::{ClaudeTokenRef, ToolPolicySetting};
+use will_core::settings::ClaudeTokenRef;
 use will_core::{Module, ModuleStatus, ToolPolicy};
 use will_mcp::McpServerDeps;
 
@@ -318,23 +318,19 @@ fn policy_overrides(state: &AppState) -> std::collections::BTreeMap<String, Tool
         .mcp
         .policies
         .iter()
-        .map(|(k, v)| {
-            (
-                k.clone(),
-                match v {
-                    ToolPolicySetting::Auto => ToolPolicy::Auto,
-                    ToolPolicySetting::Confirm => ToolPolicy::Confirm,
-                    ToolPolicySetting::Off => ToolPolicy::Off,
-                },
-            )
-        })
+        .map(|(k, v)| (k.clone(), *v))
         .collect()
 }
 
 pub async fn start_mcp(state: &Arc<AppState>) {
-    let (enabled, port, timeout) = {
+    let (enabled, port, timeout, duplicate_window) = {
         let s = state.settings.read();
-        (s.mcp.enabled, s.mcp.port, s.mcp.approval_timeout_secs)
+        (
+            s.mcp.enabled,
+            s.mcp.port,
+            s.mcp.approval_timeout_secs,
+            s.mcp.duplicate_window_secs,
+        )
     };
     let mut overrides = state.storage.tool_policies().await.unwrap_or_default();
     overrides.extend(policy_overrides(state));
@@ -360,7 +356,11 @@ pub async fn start_mcp(state: &Arc<AppState>) {
         "iniciando servidor MCP"
     );
     let st = state.clone();
+    let st_trusted = state.clone();
     let deps = McpServerDeps {
+        trusted: Arc::new(move || st_trusted.settings.read().mcp.trusted.clone()),
+        duplicate_window: Duration::from_secs(duplicate_window),
+        recent_sends: Default::default(),
         registry: state.registry.clone(),
         tokens: state.tokens.clone(),
         approvals: state.approvals.clone(),
@@ -371,14 +371,15 @@ pub async fn start_mcp(state: &Arc<AppState>) {
             tokio::spawn(async move {
                 let _ = st
                     .storage
-                    .log_mcp_call(
-                        r.thread_id,
-                        &r.tool,
-                        &r.args_redacted,
-                        r.ok,
-                        r.error.as_deref(),
-                        r.duration_ms,
-                    )
+                    .log_mcp_call(will_storage::mcp::NewMcpCall {
+                        thread_id: r.thread_id,
+                        tool: &r.tool,
+                        args_redacted: &r.args_redacted,
+                        ok: r.ok,
+                        error: r.error.as_deref(),
+                        duration_ms: r.duration_ms,
+                        policy: r.policy,
+                    })
                     .await;
             });
         }),

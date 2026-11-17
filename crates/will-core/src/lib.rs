@@ -20,8 +20,9 @@ pub mod task;
 pub mod thread;
 pub mod tools;
 pub mod trigger;
+pub mod trust;
 
-pub use approvals::{ApprovalDecision, ApprovalManager, ApprovalRequest};
+pub use approvals::{ApprovalDecision, ApprovalManager, ApprovalRequest, TrustOffer};
 pub use auth::{Principal, Role};
 pub use bus::EventBus;
 pub use host::{BrainHost, BrainTask, ClaudeTokenInfo, SharedThreadHost, ThreadHost};
@@ -37,6 +38,7 @@ pub use thread::{
 };
 pub use tools::{ToolContext, ToolError, ToolOutput, ToolPolicy, ToolProvider, ToolSpec, WillTool};
 pub use trigger::{Trigger, TriggerEvent, TriggerFilter, TriggerRun, TriggerSource};
+pub use trust::{Recipient, TrustChannel, TrustedRecipients};
 
 /// Eventos difundidos pelo serviço (UI, canais e módulos assinam). Também é o
 /// formato do WS `/api/events`, por isso desserializa (o app é um cliente).

@@ -4,8 +4,8 @@ use axum::Json;
 use secrecy::SecretString;
 use serde_json::{json, Map, Value};
 use std::time::Duration;
-use will_core::settings::{ConfigValue, ExternalMcpServer, ToolPolicySetting};
-use will_core::{ApprovalDecision, ApprovalId, ThreadHost, ToolPolicy};
+use will_core::settings::{ConfigValue, ExternalMcpServer};
+use will_core::{ApprovalDecision, ApprovalId, Recipient, ThreadHost, ToolPolicy, TrustChannel};
 
 /// Token fixo para scripts fora das threads (o valor só sai pela API local da UI).
 pub async fn script_token(State(state): State<App>) -> ApiResult<Value> {
@@ -51,6 +51,18 @@ pub async fn set_policy(
         None | Some("") | Some("default") | Some("null") => None,
         Some(s) => Some(ToolPolicy::parse(s).ok_or_else(|| bad("política inválida"))?),
     };
+    if p == Some(ToolPolicy::AutoListed) {
+        // só faz sentido em ferramenta que sabe dizer para quem vai
+        let has_recipient = state
+            .registry
+            .find(&name)
+            .is_some_and(|(_, tool, _)| tool.trust_channel().is_some());
+        if !has_recipient {
+            return Err(bad(
+                "\"automático para listados\" só vale para ferramentas com destinatário",
+            ));
+        }
+    }
     state.registry.set_policy(&name, p);
     state.storage.set_tool_policy(&name, p).await?;
     tracing::info!(
@@ -61,16 +73,8 @@ pub async fn set_policy(
     {
         let mut s = state.settings.write();
         match p {
-            Some(ToolPolicy::Auto) => {
-                s.mcp.policies.insert(name.clone(), ToolPolicySetting::Auto);
-            }
-            Some(ToolPolicy::Confirm) => {
-                s.mcp
-                    .policies
-                    .insert(name.clone(), ToolPolicySetting::Confirm);
-            }
-            Some(ToolPolicy::Off) => {
-                s.mcp.policies.insert(name.clone(), ToolPolicySetting::Off);
+            Some(p) => {
+                s.mcp.policies.insert(name.clone(), p);
             }
             None => {
                 s.mcp.policies.remove(&name);
@@ -114,9 +118,86 @@ pub async fn approvals_history(
     Ok(Json(json!(out)))
 }
 
+// ----- destinatários confiáveis (política `auto_listed`, docs/09) -----
+
+fn trusted_json(state: &App) -> Value {
+    json!(state.settings().mcp.trusted)
+}
+
+pub async fn trusted_list(State(state): State<App>) -> ApiResult<Value> {
+    Ok(Json(trusted_json(&state)))
+}
+
+#[derive(serde::Deserialize)]
+pub struct TrustedBody {
+    /// `whatsapp` | `email`.
+    pub channel: String,
+    /// Como digitado: telefone, JID de grupo, e-mail ou `@dominio`.
+    pub value: String,
+    /// Nome para mostrar na lista (opcional).
+    #[serde(default)]
+    pub label: String,
+}
+
+fn trusted_target(b: &TrustedBody) -> Result<(TrustChannel, String), super::ApiError> {
+    let channel = TrustChannel::parse(&b.channel).ok_or_else(|| bad("canal inválido"))?;
+    let key = channel.key(&b.value).ok_or_else(|| {
+        bad(match channel {
+            TrustChannel::WhatsApp => {
+                "informe um telefone com DDI (ex.: 5511987654321) ou o JID de um grupo (…@g.us)"
+            }
+            TrustChannel::Email => {
+                "informe um e-mail (fulano@empresa.com) ou um domínio (@empresa.com)"
+            }
+        })
+    })?;
+    Ok((channel, key))
+}
+
+pub async fn trusted_add(
+    State(state): State<App>,
+    axum::extract::Extension(me): axum::extract::Extension<will_core::Principal>,
+    Json(b): Json<TrustedBody>,
+) -> ApiResult<Value> {
+    let (channel, key) = trusted_target(&b)?;
+    let changed = state
+        .settings
+        .write()
+        .mcp
+        .trusted
+        .add(channel, Recipient::new(key.clone(), b.label.trim()));
+    if changed {
+        state.save_settings().await.map_err(internal)?;
+        tracing::info!(channel = channel.as_str(), key = %key, user = %me.username, "destinatário confiável adicionado");
+    }
+    Ok(Json(trusted_json(&state)))
+}
+
+pub async fn trusted_remove(
+    State(state): State<App>,
+    axum::extract::Extension(me): axum::extract::Extension<will_core::Principal>,
+    Json(b): Json<TrustedBody>,
+) -> ApiResult<Value> {
+    let channel = TrustChannel::parse(&b.channel).ok_or_else(|| bad("canal inválido"))?;
+    // remove pela chave gravada (o app manda a chave) ou pelo valor digitado
+    let key = channel
+        .key(&b.value)
+        .unwrap_or_else(|| b.value.trim().to_string());
+    let removed = state.settings.write().mcp.trusted.remove(channel, &key);
+    if removed {
+        state.save_settings().await.map_err(internal)?;
+        tracing::info!(channel = channel.as_str(), key = %key, user = %me.username, "destinatário confiável removido");
+    }
+    Ok(Json(trusted_json(&state)))
+}
+
 #[derive(serde::Deserialize)]
 pub struct DecideBody {
     pub decision: String,
+    /// Com `approved`: inclui na lista de confiança os destinatários que o
+    /// pedido oferece (`ApprovalRequest.trust`), para as próximas irem sozinhas.
+    #[serde(default)]
+    pub trust: bool,
 }
 
 pub async fn decide(
@@ -130,13 +211,44 @@ pub async fn decide(
         "approved" | "approve" | "yes" => ApprovalDecision::Approved,
         _ => ApprovalDecision::Denied,
     };
-    let via = format!("ui:{}", me.author());
+    let trust = b.trust && d == ApprovalDecision::Approved;
+    // a oferta sai do pedido pendente (montado pelo serviço), nunca do corpo
+    let offer = if trust {
+        state
+            .approvals
+            .pending()
+            .into_iter()
+            .find(|r| r.id == id)
+            .and_then(|r| r.trust)
+    } else {
+        None
+    };
+    let via = if offer.is_some() {
+        format!("ui:{}+confiar", me.author())
+    } else {
+        format!("ui:{}", me.author())
+    };
     let ok = state.host().decide_approval(id, d, &via);
     if !ok {
         tracing::warn!(approval_id = %id, user = %me.username, "decisão recebida para pedido que não está mais pendente");
         return Err(bad("pedido não está mais pendente"));
     }
-    Ok(Json(json!({ "ok": true })))
+    let mut trusted = 0;
+    if let Some(offer) = offer {
+        {
+            let mut s = state.settings.write();
+            for r in offer.recipients {
+                if s.mcp.trusted.add(offer.channel, r) {
+                    trusted += 1;
+                }
+            }
+        }
+        if trusted > 0 {
+            state.save_settings().await.map_err(internal)?;
+            tracing::info!(approval_id = %id, channel = offer.channel.as_str(), added = trusted, user = %me.username, "destinatários confiáveis adicionados pela aprovação");
+        }
+    }
+    Ok(Json(json!({ "ok": true, "trusted": trusted })))
 }
 
 fn mask_external(e: &ExternalMcpServer) -> Value {

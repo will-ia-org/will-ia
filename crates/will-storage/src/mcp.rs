@@ -13,6 +13,8 @@ pub struct McpCallRecord {
     pub ok: bool,
     pub error: Option<String>,
     pub duration_ms: Option<i64>,
+    /// `auto` | `auto_listed` | `confirm` | `off` | `duplicate` (ausente em registros antigos).
+    pub policy: Option<String>,
 }
 
 #[derive(Debug, Clone, serde::Serialize)]
@@ -28,18 +30,32 @@ pub struct ApprovalRecord {
     pub decided_via: Option<String>,
 }
 
+/// Uma chamada de ferramenta a registrar em `mcp_calls`.
+#[derive(Debug, Clone, Copy)]
+pub struct NewMcpCall<'a> {
+    pub thread_id: Option<ThreadId>,
+    pub tool: &'a str,
+    pub args_redacted: &'a str,
+    pub ok: bool,
+    pub error: Option<&'a str>,
+    pub duration_ms: u64,
+    /// Como foi liberada: `auto` | `auto_listed` | `confirm` | `off` | `duplicate`.
+    pub policy: &'a str,
+}
+
 impl Storage {
-    pub async fn log_mcp_call(
-        &self,
-        thread_id: Option<ThreadId>,
-        tool: &str,
-        args_redacted: &str,
-        ok: bool,
-        error: Option<&str>,
-        duration_ms: u64,
-    ) -> Result<()> {
+    pub async fn log_mcp_call(&self, call: NewMcpCall<'_>) -> Result<()> {
+        let NewMcpCall {
+            thread_id,
+            tool,
+            args_redacted,
+            ok,
+            error,
+            duration_ms,
+            policy,
+        } = call;
         sqlx::query(
-            "INSERT INTO mcp_calls (at, thread_id, tool, args_redacted, ok, error, duration_ms) VALUES (?, ?, ?, ?, ?, ?, ?)",
+            "INSERT INTO mcp_calls (at, thread_id, tool, args_redacted, ok, error, duration_ms, policy) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
         )
         .bind(fmt(now()))
         .bind(thread_id.map(|t| t.to_string()))
@@ -48,6 +64,7 @@ impl Storage {
         .bind(ok as i64)
         .bind(error)
         .bind(duration_ms as i64)
+        .bind(policy)
         .execute(&self.pool)
         .await?;
         Ok(())
@@ -71,6 +88,7 @@ impl Storage {
                     ok: r.get::<i64, _>("ok") != 0,
                     error: r.get("error"),
                     duration_ms: r.get("duration_ms"),
+                    policy: r.get("policy"),
                 }
             })
             .collect())

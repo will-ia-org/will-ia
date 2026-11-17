@@ -1,7 +1,7 @@
 use parking_lot::RwLock;
 use std::collections::BTreeMap;
 use std::sync::Arc;
-use will_core::{ToolPolicy, ToolProvider, ToolSpec, WillTool};
+use will_core::{ToolPolicy, ToolProvider, ToolSpec, TrustChannel, WillTool};
 
 #[derive(Debug, Clone, serde::Serialize)]
 pub struct ToolListing {
@@ -14,6 +14,9 @@ pub struct ToolListing {
     pub overridden: bool,
     pub available: bool,
     pub input_schema: serde_json::Value,
+    /// Canal da lista de confiança: presente = a ferramenta tem destinatário
+    /// e aceita a política `auto_listed`.
+    pub trust_channel: Option<TrustChannel>,
 }
 
 /// Ferramentas de todos os módulos + políticas.
@@ -97,6 +100,7 @@ impl ToolRegistry {
                     overridden,
                     available,
                     input_schema: spec.input_schema.clone(),
+                    trust_channel: t.trust_channel(),
                 });
             }
         }

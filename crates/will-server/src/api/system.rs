@@ -159,6 +159,13 @@ pub async fn put_settings(
             }
         }
     }
+    // A lista de confiança só muda pela API própria (`/api/mcp/trusted`): salvar
+    // a seção inteira a partir de uma cópia antiga do app não pode desfazê-la.
+    if body.section == "mcp" {
+        if let Some(o) = value.as_object_mut() {
+            o.insert("trusted".into(), obj["mcp"]["trusted"].clone());
+        }
+    }
     obj.insert(body.section.clone(), value);
     let new: will_core::Settings =
         serde_json::from_value(v).map_err(|e| bad(format!("valor inválido: {e}")))?;

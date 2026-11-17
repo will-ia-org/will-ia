@@ -608,22 +608,49 @@ pub async fn wa_chats(State(state): State<App>, Query(q): Query<WaChatsQuery>) -
                         .unwrap_or_default();
                     for c in list {
                         if seen.insert(c.jid.clone()) {
-                            let phone = phones.get(&c.jid).cloned().or_else(|| {
-                                c.jid.strip_suffix("@s.whatsapp.net").map(|p| p.to_string())
-                            });
+                            // índice de contatos → JID de telefone → o que o
+                            // módulo aprendeu das mensagens (LID sem contato salvo)
+                            let phone = phones
+                                .get(&c.jid)
+                                .cloned()
+                                .or_else(|| {
+                                    c.jid.strip_suffix("@s.whatsapp.net").map(|p| p.to_string())
+                                })
+                                .or_else(|| {
+                                    m.chat_label(Some(&acc.id), &c.jid).and_then(|l| l.phone)
+                                });
                             chats.push(json!({ "account_id": c.account_id, "jid": c.jid, "name": c.name, "is_group": c.is_group, "last_message_at": c.last_message_at, "phone": phone }));
                         }
                     }
                 }
                 Some(n) => {
-                    for c in state
+                    // chats pelo nome, já com o telefone (o JID de uma
+                    // conversa costuma ser um LID, que não traz o número)
+                    let found = state
                         .storage
                         .wa_find_chat_by_name(&acc.id, n)
                         .await
-                        .unwrap_or_default()
-                    {
+                        .unwrap_or_default();
+                    let jids: Vec<String> = found.iter().map(|c| c.jid.clone()).collect();
+                    let phones = state
+                        .storage
+                        .wa_contact_phones(&acc.id, &jids)
+                        .await
+                        .unwrap_or_default();
+                    for c in found {
                         if seen.insert(c.jid.clone()) {
-                            chats.push(json!({ "account_id": c.account_id, "jid": c.jid, "name": c.name, "is_group": c.is_group, "last_message_at": c.last_message_at }));
+                            // índice de contatos → JID de telefone → o que o
+                            // módulo aprendeu das mensagens (LID sem contato salvo)
+                            let phone = phones
+                                .get(&c.jid)
+                                .cloned()
+                                .or_else(|| {
+                                    c.jid.strip_suffix("@s.whatsapp.net").map(|p| p.to_string())
+                                })
+                                .or_else(|| {
+                                    m.chat_label(Some(&acc.id), &c.jid).and_then(|l| l.phone)
+                                });
+                            chats.push(json!({ "account_id": c.account_id, "jid": c.jid, "name": c.name, "is_group": c.is_group, "last_message_at": c.last_message_at, "phone": phone }));
                         }
                     }
                     for c in state
