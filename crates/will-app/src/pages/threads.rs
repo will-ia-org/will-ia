@@ -347,6 +347,8 @@ pub struct ThreadsPage {
     rename_buf: Option<String>,
     confirm_delete: Option<(ThreadId, bool)>,
     confirm_reset: Option<ThreadId>,
+    /// Editor do prompt da thread aberto: thread e texto em edição.
+    prompt_edit: Option<(ThreadId, String)>,
     show_archived: bool,
     focus_input: bool,
     /// Ditado (botão "Falar", um clique abre e outro envia): gravador ativo e transcrição em voo.
@@ -1767,6 +1769,7 @@ impl ThreadsPage {
                 }
             }
         }
+        self.prompt_modal(ui.ctx(), cx);
         if let Some(id) = self.confirm_reset {
             let c = ui::Confirm { title: tr("Reset da thread").into(), body: tr("Mata o processo e esquece a sessão: a próxima mensagem começa uma conversa nova com o Claude.").into(), confirm_label: tr("Reset").into(), danger: true, tag: "reset-thread".into() };
             if let Some(ok) = ui::confirm_modal(ui.ctx(), &c) {
@@ -1775,6 +1778,84 @@ impl ThreadsPage {
                     self.action(cx, id, "Reset");
                 }
             }
+        }
+    }
+
+    /// Editor do prompt da thread (botão do cabeçalho).
+    fn prompt_modal(&mut self, ctx: &egui::Context, cx: &Cx) {
+        let Some((id, buf)) = &mut self.prompt_edit else {
+            return;
+        };
+        let id = *id;
+        let max = will_core::thread::THREAD_PROMPT_MAX_CHARS;
+        let mut save = false;
+        let mut cancel = false;
+        let m = egui::Modal::new(egui::Id::unique("thread-prompt")).show(ctx, |ui| {
+            let pal = ui::palette(ui.visuals().dark_mode);
+            ui.set_width(600.0);
+            ui.heading(tr("Prompt da thread"));
+            ui.add_space(4.0);
+            ui.label(
+                egui::RichText::new(tr(
+                    "Instruções de comportamento só desta thread. Elas são somadas ao prompt geral (Configurações → Motor) no prompt de sistema do Claude, cada parte na sua tag: <instrucoes_gerais> e <instrucoes_desta_thread>.",
+                ))
+                .size(12.0)
+                .color(pal.text_weak),
+            );
+            ui.add_space(8.0);
+            egui::ScrollArea::vertical()
+                .max_height(320.0)
+                .auto_shrink([false, true])
+                .show(ui, |ui| {
+                    ui::text_area(ui, buf, 12);
+                });
+            let chars = buf.trim().chars().count();
+            let over = chars > max;
+            ui.add_space(4.0);
+            ui.horizontal(|ui| {
+                let color = if over {
+                    Tone::Danger.color(ui.visuals().dark_mode)
+                } else {
+                    pal.text_weak
+                };
+                ui.label(
+                    egui::RichText::new(trf("{} de {} caracteres", &[&chars, &max]))
+                        .size(11.0)
+                        .color(color),
+                );
+            });
+            ui.label(
+                egui::RichText::new(tr(
+                    "Vale a partir da próxima mensagem. Se a thread estiver respondendo, o texto novo entra quando o turno terminar. Deixe em branco para remover.",
+                ))
+                .size(11.0)
+                .color(pal.text_weak),
+            );
+            ui.add_space(12.0);
+            ui.horizontal(|ui| {
+                if ui.button(tr("Cancelar")).clicked() {
+                    cancel = true;
+                }
+                if ui
+                    .add_enabled_ui(!over, |ui| ui::primary_button(ui, tr("Salvar")))
+                    .inner
+                    .clicked()
+                {
+                    save = true;
+                }
+            });
+        });
+        if save {
+            if let Some((_, text)) = self.prompt_edit.take() {
+                let sid = id.to_string();
+                self.action_task = Some((
+                    "Prompt da thread",
+                    cx.svc
+                        .call(move |c| async move { c.set_thread_prompt(&sid, &text).await }),
+                ));
+            }
+        } else if cancel || m.should_close() {
+            self.prompt_edit = None;
         }
     }
 
@@ -1806,7 +1887,7 @@ impl ThreadsPage {
                 None => {
                     // Título truncado: um nome longo não pode empurrar o "i" nem
                     // invadir os botões alinhados à direita.
-                    let w = (ui.available_width() - 490.0).max(160.0);
+                    let w = (ui.available_width() - 260.0).max(160.0);
                     let bg = self.background_tasks(&t.id);
                     if self.live.contains_key(&t.id) || t.pending > 0 || bg > 0 {
                         ui::pulse_dot(ui);
@@ -1841,25 +1922,72 @@ impl ThreadsPage {
                 }
             }
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                if ui.button(tr("apagar")).clicked() {
+                // Mesmos botões quadrados da barra de envio. Da direita para a
+                // esquerda: apagar · reset · reiniciar · renomear · prompt.
+                ui.spacing_mut().item_spacing.x = BAR_GAP;
+                let danger = Tone::Danger.color(ui.visuals().dark_mode);
+                let weak = pal.text_weak;
+                if bar_button(
+                    ui,
+                    crate::icons::DELETE,
+                    danger,
+                    None,
+                    true,
+                    tr("Apagar a thread"),
+                )
+                .clicked()
+                {
                     self.confirm_delete = Some((t.id, false));
                 }
-                if ui
-                    .button(tr("reset"))
-                    .on_hover_text(tr("mata o processo e esquece a sessão"))
-                    .clicked()
+                if bar_button(
+                    ui,
+                    crate::icons::RESTART_ALT,
+                    weak,
+                    None,
+                    true,
+                    tr("Reset: mata o processo e esquece a sessão (conversa nova)"),
+                )
+                .clicked()
                 {
                     self.confirm_reset = Some(t.id);
                 }
-                if ui
-                    .button(tr("reiniciar"))
-                    .on_hover_text(tr("mata o processo; volta com --resume"))
-                    .clicked()
+                if bar_button(
+                    ui,
+                    crate::icons::REPLAY,
+                    weak,
+                    None,
+                    true,
+                    tr("Reiniciar: mata o processo e volta na mesma conversa"),
+                )
+                .clicked()
                 {
                     self.action(cx, t.id, "Reiniciar");
                 }
-                if self.rename_buf.is_none() && ui.button(tr("renomear")).clicked() {
+                if self.rename_buf.is_none()
+                    && bar_button(
+                        ui,
+                        crate::icons::EDIT,
+                        weak,
+                        None,
+                        true,
+                        tr("Renomear a thread"),
+                    )
+                    .clicked()
+                {
                     self.rename_buf = Some(title_of(t));
+                }
+                // Prompt da thread: destacado quando ela tem um.
+                let has_prompt = t.prompt.as_deref().is_some_and(|p| !p.trim().is_empty());
+                let (color, tip) = if has_prompt {
+                    (pal.accent, tr("Prompt da thread (definido): ver ou editar"))
+                } else {
+                    (
+                        weak,
+                        tr("Prompt da thread: instruções somadas ao prompt geral"),
+                    )
+                };
+                if bar_button(ui, crate::icons::TUNE, color, None, true, tip).clicked() {
+                    self.prompt_edit = Some((t.id, t.prompt.clone().unwrap_or_default()));
                 }
             });
         });

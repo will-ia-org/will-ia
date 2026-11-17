@@ -76,6 +76,7 @@ Códigos: **401** `token de sessão ausente` / `token de sessão inválido` (tam
 | POST | `/api/threads/{id}/messages` | `{ text, attachments?: [caminho no servidor] }` → `{ turn_id, mid_turn }` (imediato). Cada anexo é copiado para `<kb>/inbox/ui/<data-hora>-<nome>` (já no inbox, como os vindos de `POST /api/uploads`, entra sem nova cópia) e vai ao prompt como nota de anexo; `text` pode ser vazio se houver anexos |
 | POST | `/api/threads/{id}/restart` | mantém sessão |
 | POST | `/api/threads/{id}/reset` | esquece sessão |
+| PUT | `/api/threads/{id}/prompt` | `{prompt}`: prompt próprio da thread, somado ao geral (vazio remove; máx. 8000 caracteres) |
 | POST | `/api/threads/{id}/interrupt` | |
 | PATCH | `/api/threads/{id}` | `{ title }` |
 | DELETE | `/api/threads/{id}?purge=true` | |

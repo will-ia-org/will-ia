@@ -9,9 +9,9 @@ pub mod pool;
 pub mod runner;
 pub mod token_test;
 
-pub use config::{EngineConfig, PermissionMode};
+pub use config::{compose_system_prompt, EngineConfig, PermissionMode};
 pub use pool::{EnginePool, RunnerStats};
-pub use runner::{RunnerCommand, SendRequest, ThreadEnv};
+pub use runner::{RunnerCommand, SendRequest, ThreadEnv, ThreadSpec};
 
 use will_core::{EngineDelta, ThreadId, TurnId, TurnResult};
 
@@ -23,6 +23,9 @@ pub enum EngineEvent {
         thread: ThreadId,
         session_id: String,
         resumed: bool,
+        /// Impressão digital do prompt de sistema, só quando a sessão é nova
+        /// (num `--resume` vale a que já está gravada).
+        prompt_hash: Option<String>,
     },
     /// Mensagem do usuário foi escrita no stdin.
     Sent {

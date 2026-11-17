@@ -43,6 +43,11 @@ pub const SETTINGS: MaterialIcon = m::ICON_SETTINGS;
 pub const LOGOUT: MaterialIcon = m::ICON_LOGOUT;
 pub const MIC_OFF: MaterialIcon = m::ICON_MIC_OFF;
 pub const ARROW_BACK: MaterialIcon = m::ICON_ARROW_BACK;
+// ações do cabeçalho da thread
+pub const TUNE: MaterialIcon = m::ICON_TUNE;
+pub const REPLAY: MaterialIcon = m::ICON_REPLAY;
+pub const RESTART_ALT: MaterialIcon = m::ICON_RESTART_ALT;
+pub const DELETE: MaterialIcon = m::ICON_DELETE;
 
 /// Todos os ícones nomeados (o teste garante que a fonte tem cada glifo).
 #[cfg(test)]
@@ -80,6 +85,10 @@ pub const ALL: &[(&str, MaterialIcon)] = &[
     ("LOGOUT", LOGOUT),
     ("MIC_OFF", MIC_OFF),
     ("ARROW_BACK", ARROW_BACK),
+    ("TUNE", TUNE),
+    ("REPLAY", REPLAY),
+    ("RESTART_ALT", RESTART_ALT),
+    ("DELETE", DELETE),
 ];
 
 #[cfg(test)]

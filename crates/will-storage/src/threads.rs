@@ -54,6 +54,15 @@ fn row_to_thread(r: &sqlx::sqlite::SqliteRow) -> Option<ThreadSummary> {
             .ok()
             .flatten()
             .filter(|s| !s.trim().is_empty()),
+        prompt: r
+            .try_get::<Option<String>, _>("prompt")
+            .ok()
+            .flatten()
+            .filter(|s| !s.trim().is_empty()),
+        session_prompt_hash: r
+            .try_get::<Option<String>, _>("session_prompt_hash")
+            .ok()
+            .flatten(),
     })
 }
 
@@ -90,6 +99,8 @@ impl Storage {
             pending: 0,
             session_expired: false,
             summary: None,
+            prompt: None,
+            session_prompt_hash: None,
         })
     }
 
@@ -131,6 +142,34 @@ impl Storage {
     pub async fn set_thread_session(&self, id: ThreadId, session_id: Option<&str>) -> Result<()> {
         sqlx::query("UPDATE threads SET claude_session_id = ? WHERE id = ?")
             .bind(session_id)
+            .bind(id.to_string())
+            .execute(&self.pool)
+            .await?;
+        Ok(())
+    }
+
+    /// Prompt próprio da thread (`None` ou vazio = remove; fica só o geral).
+    pub async fn set_thread_prompt(&self, id: ThreadId, prompt: Option<&str>) -> Result<()> {
+        let prompt = prompt.map(str::trim).filter(|p| !p.is_empty());
+        let done = sqlx::query("UPDATE threads SET prompt = ? WHERE id = ?")
+            .bind(prompt)
+            .bind(id.to_string())
+            .execute(&self.pool)
+            .await?;
+        if done.rows_affected() == 0 {
+            return Err(StorageError::NotFound);
+        }
+        Ok(())
+    }
+
+    /// Impressão digital do prompt de sistema com que a sessão nasceu.
+    pub async fn set_thread_session_prompt_hash(
+        &self,
+        id: ThreadId,
+        hash: Option<&str>,
+    ) -> Result<()> {
+        sqlx::query("UPDATE threads SET session_prompt_hash = ? WHERE id = ?")
+            .bind(hash)
             .bind(id.to_string())
             .execute(&self.pool)
             .await?;

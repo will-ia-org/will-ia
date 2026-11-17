@@ -283,6 +283,34 @@ pub async fn rename(
 }
 
 #[derive(serde::Deserialize)]
+pub struct PromptBody {
+    /// Texto vazio remove o prompt da thread (fica só o geral).
+    #[serde(default)]
+    pub prompt: String,
+}
+
+/// `PUT /api/threads/{id}/prompt` — prompt próprio da thread, somado ao geral
+/// no prompt de sistema do `claude`.
+pub async fn set_prompt(
+    State(state): State<App>,
+    Path(id): Path<String>,
+    Json(b): Json<PromptBody>,
+) -> ApiResult<Value> {
+    let t = tid(&id)?;
+    state
+        .storage
+        .get_thread(t)
+        .await
+        .map_err(|_| ApiError(StatusCode::NOT_FOUND, "thread não encontrada".into()))?;
+    state
+        .host()
+        .set_thread_prompt(t, &b.prompt)
+        .await
+        .map_err(bad)?;
+    Ok(Json(json!({ "ok": true })))
+}
+
+#[derive(serde::Deserialize)]
 pub struct DeleteQuery {
     pub purge: Option<bool>,
 }

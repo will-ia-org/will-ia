@@ -109,6 +109,11 @@ impl ThreadStatus {
     }
 }
 
+/// Tamanho máximo do prompt de uma thread (caracteres). O texto vai na linha
+/// de comando do `claude` junto com o prompt geral; o Windows limita a linha a
+/// cerca de 32 mil caracteres.
+pub const THREAD_PROMPT_MAX_CHARS: usize = 8000;
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ThreadSummary {
     pub id: ThreadId,
@@ -132,6 +137,14 @@ pub struct ThreadSummary {
     /// `engine.thread_summary`). `None` até o primeiro resumo.
     #[serde(default)]
     pub summary: Option<String>,
+    /// Prompt próprio da thread, somado ao prompt geral no prompt de sistema
+    /// do `claude`. `None` = só o geral.
+    #[serde(default)]
+    pub prompt: Option<String>,
+    /// Impressão digital do prompt de sistema com que a sessão salva nasceu
+    /// (uso interno do motor para saber se o texto mudou depois).
+    #[serde(default, skip_serializing)]
+    pub session_prompt_hash: Option<String>,
 }
 
 /// Bloco "Onde você está" injetado pelo serviço nas mensagens que ele mesmo
@@ -338,6 +351,8 @@ mod title_tests {
             pending: 0,
             session_expired: false,
             summary: None,
+            prompt: None,
+            session_prompt_hash: None,
         }
     }
 

@@ -460,6 +460,11 @@ impl Client {
     pub async fn reset_thread(&self, id: &str) -> ApiResult {
         self.post(&format!("threads/{id}/reset"), None).await
     }
+    /// Prompt próprio da thread (texto vazio remove).
+    pub async fn set_thread_prompt(&self, id: &str, prompt: &str) -> ApiResult {
+        self.put(&format!("threads/{id}/prompt"), json!({ "prompt": prompt }))
+            .await
+    }
     pub async fn interrupt_thread(&self, id: &str) -> ApiResult {
         self.post(&format!("threads/{id}/interrupt"), None).await
     }

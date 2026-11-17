@@ -79,13 +79,19 @@ impl Host {
         self.state.secrets.get(&r).await.ok().flatten()
     }
 
-    pub async fn thread_env_for(&self, t: &ThreadSummary) -> will_engine::ThreadEnv {
+    /// O que é próprio da thread na hora de subir o `claude`: env (bearer MCP,
+    /// canal), o prompt dela e a impressão digital do prompt da sessão salva.
+    pub async fn thread_spec_for(&self, t: &ThreadSummary) -> will_engine::ThreadSpec {
         let token = if self.state.settings.read().mcp.enabled {
             Some(self.state.tokens.issue(t.id, t.origin.clone()))
         } else {
             None
         };
-        crate::engine_cfg::thread_env(t.id, &t.origin, token)
+        will_engine::ThreadSpec {
+            env: crate::engine_cfg::thread_env(t.id, &t.origin, token),
+            prompt: t.prompt.clone().unwrap_or_default(),
+            born_prompt_hash: t.session_prompt_hash.clone(),
+        }
     }
 
     /// Encontra uma thread por id (prefixo) ou por título (contém, sem diferenciar
@@ -364,13 +370,13 @@ impl ThreadHost for Host {
                 Err(e) => tracing::warn!(error = %e, "não renomeou a thread pelo primeiro pedido"),
             }
         }
-        let env = self.thread_env_for(&t).await;
+        let spec = self.thread_spec_for(&t).await;
         self.state
             .engine
             .send(
                 thread,
                 t.claude_session_id.clone(),
-                env,
+                spec,
                 SendRequest {
                     turn_id,
                     text: text.to_string(),
@@ -730,6 +736,28 @@ impl Host {
         Ok(())
     }
 
+    /// Define (ou remove, com texto vazio) o prompt próprio da thread. Se o
+    /// processo dela está vivo, sai assim que ficar livre e volta com o texto novo.
+    pub async fn set_thread_prompt(&self, thread: ThreadId, prompt: &str) -> Result<(), String> {
+        let prompt = prompt.trim();
+        let chars = prompt.chars().count();
+        if chars > will_core::thread::THREAD_PROMPT_MAX_CHARS {
+            return Err(format!(
+                "prompt da thread muito longo: {chars} caracteres (máximo {})",
+                will_core::thread::THREAD_PROMPT_MAX_CHARS
+            ));
+        }
+        self.state
+            .storage
+            .set_thread_prompt(thread, Some(prompt))
+            .await
+            .map_err(|e| e.to_string())?;
+        self.state.engine.set_thread_prompt(thread, prompt);
+        tracing::info!(thread_id = %thread, chars, "prompt da thread alterado pelo usuário");
+        emit_thread_updated(&self.state, thread).await;
+        Ok(())
+    }
+
     /// Botão "Sincronizar" das configurações do Telegram: cria um tópico no
     /// fórum para cada thread do app (origem `ui`, não arquivada) e troca a
     /// origem dela para o tópico. Devolve `{ created, failed, skipped }`.
@@ -999,11 +1027,21 @@ async fn handle_engine_event(state: &Arc<AppState>, ev: EngineEvent) {
             thread,
             session_id,
             resumed,
+            prompt_hash,
         } => {
             if let Err(e) = storage.set_thread_session(thread, Some(&session_id)).await {
                 tracing::warn!(thread_id = %thread, error = %e, "sessão do claude não gravada");
             } else {
                 tracing::debug!(thread_id = %thread, %session_id, resumed, "sessão do claude gravada");
+            }
+            // Sessão nova: guarda com que prompt de sistema ela nasceu.
+            if let Some(hash) = prompt_hash {
+                if let Err(e) = storage
+                    .set_thread_session_prompt_hash(thread, Some(&hash))
+                    .await
+                {
+                    tracing::warn!(thread_id = %thread, error = %e, "impressão digital do prompt não gravada");
+                }
             }
             emit_thread_updated(state, thread).await;
         }

@@ -35,6 +35,8 @@ impl FakeHost {
             pending: 0,
             session_expired: false,
             summary: None,
+            prompt: None,
+            session_prompt_hash: None,
         };
         let id = t.id;
         self.threads.lock().push(t);

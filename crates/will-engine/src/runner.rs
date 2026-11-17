@@ -29,6 +29,18 @@ pub struct SendRequest {
 /// Variáveis específicas da thread (bearer MCP, WILL_IA_THREAD_ID…), mescladas ao env base no spawn.
 pub type ThreadEnv = std::collections::BTreeMap<String, String>;
 
+/// O que é próprio de uma thread na hora de subir o `claude`.
+#[derive(Debug, Clone, Default)]
+pub struct ThreadSpec {
+    pub env: ThreadEnv,
+    /// Prompt da thread, somado ao geral em `--append-system-prompt`
+    /// ([`crate::config::compose_system_prompt`]). Vazio = só o geral.
+    pub prompt: String,
+    /// Impressão digital do prompt com que a sessão salva nasceu (do banco).
+    /// Só é lida ao criar o runner; depois ele mesmo acompanha.
+    pub born_prompt_hash: Option<String>,
+}
+
 impl RunnerCommand {
     /// Converte um Reconfigure em ReconfigureSoft.
     pub fn soft(self) -> Self {
@@ -53,8 +65,12 @@ pub enum RunnerCommand {
     Reconfigure(Box<EngineConfig>),
     /// Nova configuração sem derrubar (vale no próximo spawn).
     ReconfigureSoft(Box<EngineConfig>),
-    /// Env específico da thread (aplicado no próximo spawn; não derruba).
-    SetThreadEnv(ThreadEnv),
+    /// Env e prompt da thread (aplicados no próximo spawn; não derruba).
+    SetThreadSpec(ThreadSpec),
+    /// Prompt da thread editado pelo usuário: derruba o processo assim que ele
+    /// ficar livre (na hora, se não houver turno) para o texto novo valer na
+    /// próxima mensagem. A sessão é mantida.
+    SetPrompt(String),
     Shutdown(oneshot::Sender<()>),
 }
 
@@ -137,6 +153,13 @@ pub struct Runner {
     raw_log: Option<std::fs::File>,
     resumed: bool,
     thread_env: ThreadEnv,
+    /// Prompt da thread (somado ao geral no spawn).
+    thread_prompt: String,
+    /// Impressão digital do prompt com que a sessão atual nasceu. `None` em
+    /// sessões anteriores a este controle.
+    born_prompt_hash: Option<String>,
+    /// Prompt editado no meio de um turno: derruba o processo ao fim dele.
+    retire_when_idle: bool,
     /// `interrupt` escrito no stdin e ainda sem `result`: o próximo `result`
     /// é do turno interrompido (marca `interrupted`, sem texto de diagnóstico).
     interrupt_sent: bool,
@@ -147,7 +170,7 @@ impl Runner {
         thread: ThreadId,
         cfg: EngineConfig,
         session_id: Option<String>,
-        thread_env: ThreadEnv,
+        spec: ThreadSpec,
         events: broadcast::Sender<EngineEvent>,
     ) -> RunnerHandle {
         let (tx, rx) = mpsc::unbounded_channel();
@@ -169,7 +192,10 @@ impl Runner {
             rx,
             raw_log: None,
             resumed: false,
-            thread_env,
+            thread_env: spec.env,
+            thread_prompt: spec.prompt,
+            born_prompt_hash: spec.born_prompt_hash,
+            retire_when_idle: false,
             interrupt_sent: false,
         };
         tokio::spawn(runner.run());
@@ -250,7 +276,13 @@ impl Runner {
                     }
                 }, if has_proc => {
                     match line {
-                        Ok(Some(l)) => self.handle_line(&l),
+                        Ok(Some(l)) => {
+                            self.handle_line(&l);
+                            // Prompt editado no meio do turno: o turno acabou, sai agora.
+                            if self.retire_when_idle && self.pending.is_empty() {
+                                self.retire_for_prompt().await;
+                            }
+                        }
                         Ok(None) | Err(_) => self.handle_exit().await,
                     }
                 }
@@ -395,11 +427,74 @@ impl Runner {
                     "reconfigure suave: vale no próximo spawn"
                 );
             }
-            RunnerCommand::SetThreadEnv(env) => {
-                self.thread_env = env;
+            RunnerCommand::SetThreadSpec(spec) => {
+                self.thread_env = spec.env;
+                self.thread_prompt = spec.prompt;
+            }
+            RunnerCommand::SetPrompt(prompt) => {
+                if prompt.trim() == self.thread_prompt.trim() {
+                    return;
+                }
+                self.thread_prompt = prompt;
+                if self.proc_.is_none() {
+                    tracing::debug!(thread_id = %self.thread, "prompt da thread alterado: vale no próximo spawn");
+                } else if self.pending.is_empty() {
+                    self.retire_for_prompt().await;
+                } else {
+                    tracing::info!(thread_id = %self.thread, pending = self.pending.len(), "prompt da thread alterado no meio de um turno: processo sai ao fim dele");
+                    self.retire_when_idle = true;
+                }
             }
             RunnerCommand::Shutdown(_) => {}
         }
+    }
+
+    /// Derruba o processo (mantendo a sessão) para o prompt novo entrar no
+    /// próximo spawn.
+    async fn retire_for_prompt(&mut self) {
+        self.retire_when_idle = false;
+        tracing::info!(thread_id = %self.thread, "prompt da thread alterado: processo encerrado (sessão mantida)");
+        self.kill_process("prompt da thread alterado").await;
+        self.emit(EngineEvent::Retired {
+            thread: self.thread,
+            reason: "prompt da thread alterado".into(),
+        });
+    }
+
+    /// Prompt de sistema deste spawn. Numa sessão nova, registra a impressão
+    /// digital; num `--resume`, compara com a registrada e, se o texto mudou,
+    /// pede ao `claude` que remonte o prompt em vez de reusar o gravado.
+    async fn spawn_prompt(&mut self) -> crate::config::SpawnPrompt {
+        let text = crate::config::compose_system_prompt(
+            &self.cfg.append_system_prompt,
+            &self.thread_prompt,
+        );
+        let hash = crate::config::prompt_hash(&text);
+        if self.session_id.is_none() {
+            self.born_prompt_hash = Some(hash);
+            return crate::config::SpawnPrompt {
+                text,
+                snapshot_off: false,
+            };
+        }
+        let changed = match &self.born_prompt_hash {
+            Some(born) => *born != hash,
+            // Sessão anterior a este controle: nasceu só com o prompt geral.
+            None => !self.thread_prompt.trim().is_empty(),
+        };
+        let mut snapshot_off = false;
+        if changed {
+            let version = will_platform::version_of(&self.cfg.claude_bin)
+                .await
+                .unwrap_or_default();
+            snapshot_off = crate::config::supports_snapshot_flag(&version);
+            if snapshot_off {
+                tracing::info!(thread_id = %self.thread, "prompt de sistema mudou desde o início da sessão: snapshot desligado");
+            } else {
+                tracing::warn!(thread_id = %self.thread, claude_version = %version, "prompt de sistema mudou, mas este claude não aceita --system-prompt-snapshot: o texto novo vale após a compactação ou numa sessão nova");
+            }
+        }
+        crate::config::SpawnPrompt { text, snapshot_off }
     }
 
     async fn write_stdin(&mut self, line: &str) -> Result<(), EngineError> {
@@ -422,8 +517,10 @@ impl Runner {
     /// Sobe o `claude -p`. `turn_id`: turno que motivou o spawn (só para o span).
     async fn spawn_process(&mut self, turn_id: Option<TurnId>) -> Result<(), EngineError> {
         let new_id = uuid::Uuid::new_v4().to_string();
-        let args = self.cfg.args(self.session_id.as_deref(), &new_id);
+        let prompt = self.spawn_prompt().await;
+        let args = self.cfg.args(self.session_id.as_deref(), &new_id, &prompt);
         self.resumed = self.session_id.is_some();
+        self.retire_when_idle = false;
         let span = tracing::info_span!(
             "engine_proc",
             thread_id = %self.thread,
@@ -607,6 +704,7 @@ impl Runner {
                     thread: self.thread,
                     session_id: self.session_id.clone().unwrap_or_default(),
                     resumed: self.resumed,
+                    prompt_hash: self.born_prompt_hash.clone().filter(|_| !self.resumed),
                 });
             }
             StreamLine::UserReplay { text } => {

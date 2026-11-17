@@ -2,7 +2,7 @@
 //! troca de configuração (token) sem downtime.
 
 use crate::config::EngineConfig;
-use crate::runner::{Runner, RunnerCommand, RunnerHandle, SendRequest, ThreadEnv};
+use crate::runner::{Runner, RunnerCommand, RunnerHandle, SendRequest, ThreadSpec};
 use crate::{EngineError, EngineEvent};
 use parking_lot::RwLock;
 use std::collections::HashMap;
@@ -58,10 +58,10 @@ impl EnginePool {
         &self,
         thread: ThreadId,
         session_id: Option<String>,
-        thread_env: ThreadEnv,
+        spec: ThreadSpec,
     ) -> RunnerHandle {
         if let Some(h) = self.runners.read().get(&thread) {
-            let _ = h.command(RunnerCommand::SetThreadEnv(thread_env));
+            let _ = h.command(RunnerCommand::SetThreadSpec(spec));
             return h.clone();
         }
         let cfg = self.cfg.read().clone();
@@ -71,25 +71,25 @@ impl EnginePool {
             runners = self.runners.read().len() + 1,
             "runner criado para a thread"
         );
-        let h = Runner::spawn(thread, cfg, session_id, thread_env, self.events.clone());
+        let h = Runner::spawn(thread, cfg, session_id, spec, self.events.clone());
         self.runners.write().insert(thread, h.clone());
         h
     }
 
     /// Entrega a mensagem na hora. `session_id` é o salvo no banco (para --resume);
-    /// `thread_env` são variáveis específicas da thread (bearer MCP etc.).
+    /// `spec` é o que é próprio da thread (env com o bearer MCP, prompt etc.).
     pub fn send(
         &self,
         thread: ThreadId,
         session_id: Option<String>,
-        thread_env: ThreadEnv,
+        spec: ThreadSpec,
         req: SendRequest,
     ) -> Result<(), EngineError> {
         let exists = self.runners.read().contains_key(&thread);
         if !exists {
             self.make_room_for(thread);
         }
-        let h = self.ensure(thread, session_id, thread_env);
+        let h = self.ensure(thread, session_id, spec);
         let turn_id = req.turn_id;
         h.send(req).inspect_err(|e| {
             tracing::error!(thread_id = %thread, %turn_id, error = %e, "runner não aceitou a mensagem")
@@ -106,6 +106,14 @@ impl EnginePool {
             None => {
                 tracing::debug!(thread_id = %thread, reason, "restart ignorado: thread sem runner")
             }
+        }
+    }
+
+    /// Prompt da thread editado: o runner (se existir) derruba o processo assim
+    /// que ficar livre; sem runner, o texto novo já vem do banco no próximo envio.
+    pub fn set_thread_prompt(&self, thread: ThreadId, prompt: &str) {
+        if let Some(h) = self.runners.read().get(&thread) {
+            let _ = h.command(RunnerCommand::SetPrompt(prompt.to_string()));
         }
     }
 

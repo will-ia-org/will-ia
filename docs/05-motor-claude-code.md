@@ -44,7 +44,8 @@ claude -p \
   --verbose \
   --replay-user-messages \
   [--include-partial-messages] \
-  --append-system-prompt "<orientações por canal, ver abaixo>" \
+  --append-system-prompt "<prompt geral + prompt da thread, ver abaixo>" \
+  [--system-prompt-snapshot off] \
   --session-id <uuid>   | --resume <claude_session_id> \
   --mcp-config <kb>/.mcp.json [--strict-mcp-config] \
   --permission-prompts none \
@@ -62,6 +63,38 @@ claude -p \
 | `--include-partial-messages` | liga `stream_event` token a token. Só quando a UI está exibindo a thread ao vivo (é ~90% do volume de linhas). |
 | `--permission-prompts none` | em headless não há quem responda prompts; ações fora do permitido são negadas em vez de travar. |
 | `--append-system-prompt` | orientações de formato por canal (Telegram: texto simples; Realtime: prosa falável) e aviso de **sessões paralelas na mesma pasta** (reler antes de editar). |
+
+### Prompt de sistema: geral + thread
+
+O `claude` aceita **um** `--append-system-prompt` (repetir a flag descarta os anteriores), então o serviço monta o texto antes de subir o processo (`will_engine::config::compose_system_prompt`):
+
+| Camada | Origem | Vale para |
+|---|---|---|
+| Prompt geral | `settings.engine.append_system_prompt` (Configurações → Motor) | todas as threads |
+| Prompt da thread | `threads.prompt` (botão de prompt no cabeçalho da thread; `PUT /api/threads/{id}/prompt`) | só aquela thread |
+
+Sem prompt de thread, o geral vai como está. Com prompt de thread, cada camada vai na sua tag, o geral primeiro:
+
+```text
+<instrucoes_gerais>
+…prompt geral…
+</instrucoes_gerais>
+
+<instrucoes_desta_thread>
+…prompt da thread…
+</instrucoes_desta_thread>
+```
+
+O prompt da thread tem teto de `THREAD_PROMPT_MAX_CHARS` (8000) caracteres, porque o texto vai na linha de comando.
+
+**Texto alterado depois que a conversa começou.** O `claude` grava o prompt de sistema na primeira mensagem da sessão e, num `--resume`, continua usando o gravado até a conversa ser compactada. Para o texto novo valer já:
+
+1. Ao criar uma sessão, o runner guarda a impressão digital do prompt (`prompt_hash`, SHA-256 curto) e o servidor a grava em `threads.session_prompt_hash`.
+2. A cada `--resume`, o runner compara a impressão digital atual com a gravada. Se mudou (prompt geral ou da thread), passa `--system-prompt-snapshot off`.
+3. A flag só existe a partir do `claude` 2.1.257; o runner confere `claude --version` antes (`supports_snapshot_flag`). Em versão mais antiga não passa a flag e registra um aviso: o texto novo vale após a compactação ou numa sessão nova.
+4. Sessões anteriores a este controle (`session_prompt_hash` nulo) só recebem a flag quando a thread ganha um prompt próprio.
+
+Editar o prompt de uma thread com processo vivo (`EnginePool::set_thread_prompt` → `RunnerCommand::SetPrompt`) encerra o processo assim que ele fica livre (na hora, se não há turno; ao fim do turno, se há), mantendo a sessão. A próxima mensagem sobe o processo já com o texto novo.
 
 Variáveis de ambiente do processo filho:
 
