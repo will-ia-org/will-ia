@@ -48,6 +48,9 @@ pub const TUNE: MaterialIcon = m::ICON_TUNE;
 pub const REPLAY: MaterialIcon = m::ICON_REPLAY;
 pub const RESTART_ALT: MaterialIcon = m::ICON_RESTART_ALT;
 pub const DELETE: MaterialIcon = m::ICON_DELETE;
+// player das gravações
+pub const PLAY: MaterialIcon = m::ICON_PLAY_ARROW;
+pub const PAUSE: MaterialIcon = m::ICON_PAUSE;
 
 /// Todos os ícones nomeados (o teste garante que a fonte tem cada glifo).
 #[cfg(test)]
@@ -89,6 +92,8 @@ pub const ALL: &[(&str, MaterialIcon)] = &[
     ("REPLAY", REPLAY),
     ("RESTART_ALT", RESTART_ALT),
     ("DELETE", DELETE),
+    ("PLAY", PLAY),
+    ("PAUSE", PAUSE),
 ];
 
 #[cfg(test)]

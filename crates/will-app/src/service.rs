@@ -37,6 +37,8 @@ pub enum UiCommand {
     HotkeyUp,
     /// Atalho global do ditado pressionado (liga, ou fecha e envia).
     DictationToggle,
+    /// Atalho da gravação de conversa: começa ou para.
+    RecordingToggle,
     /// Captura a janela principal em PNG (diagnóstico/desenvolvimento), opcionalmente
     /// navegando antes para a página indicada.
     Screenshot(std::path::PathBuf, Option<String>),

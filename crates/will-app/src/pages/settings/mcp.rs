@@ -76,6 +76,7 @@ fn family_label(f: &str) -> String {
         "calendar" => tr("Agenda").into(),
         "gmail" => tr("Gmail").into(),
         "core" => tr("Sistema").into(),
+        "recordings" => tr("Gravações").into(),
         other => other.to_string(),
     }
 }

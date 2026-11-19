@@ -9,6 +9,7 @@ pub mod files;
 pub mod integrations;
 pub mod kb;
 pub mod mcp;
+pub mod recordings;
 pub mod schedules;
 pub mod system;
 pub mod tasks;
@@ -327,6 +328,21 @@ pub fn router(state: App) -> Router {
             "/telegram/sync-threads",
             post(integrations::telegram_sync_threads),
         )
+        .route(
+            "/recordings",
+            get(recordings::list)
+                .post(recordings::upload)
+                .layer(axum::extract::DefaultBodyLimit::disable()),
+        )
+        .route(
+            "/recordings/{id}",
+            get(recordings::get_one)
+                .patch(recordings::set_labels)
+                .delete(recordings::delete_one),
+        )
+        .route("/recordings/{id}/audio", get(recordings::audio))
+        .route("/recordings/{id}/transcribe", post(recordings::transcribe))
+        .route("/recordings/{id}/ask", post(recordings::ask))
         .route("/voice/start", post(integrations::voice_start))
         .route("/voice/stop", post(integrations::voice_stop))
         .route("/voice/toggle", post(integrations::voice_toggle))

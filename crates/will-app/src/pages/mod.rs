@@ -7,6 +7,7 @@ pub mod connect;
 pub mod costs;
 pub mod dashboard;
 pub mod logs;
+pub mod recordings;
 pub mod schedules;
 pub mod settings;
 pub mod tasks;
@@ -123,6 +124,8 @@ pub enum Nav {
     Schedules,
     Browser,
     Approvals,
+    /// Gravações de conversa (microfone + saída do sistema).
+    Recordings,
     Logs,
     Costs,
     /// Contas do servidor (só administradores).
@@ -148,6 +151,7 @@ impl Nav {
             "schedules" | "triggers" => Nav::Schedules,
             "browser" => Nav::Browser,
             "approvals" => Nav::Approvals,
+            "recordings" => Nav::Recordings,
             "logs" => Nav::Logs,
             "costs" => Nav::Costs,
             "users" => Nav::Users,
@@ -223,6 +227,7 @@ pub struct Pages {
     pub browser: browser::BrowserPage,
     pub approvals: approvals::ApprovalsPage,
     pub logs: logs::LogsPage,
+    pub recordings: recordings::RecordingsPage,
     pub costs: costs::CostsPage,
     pub users: users::UsersPage,
     pub settings: settings::SettingsPages,
@@ -272,6 +277,14 @@ impl Pages {
             }
             Nav::Browser => self.browser.ui(ui, cx),
             Nav::Approvals => self.approvals.ui(ui, cx),
+            Nav::Recordings => {
+                self.recordings.ui(ui, cx);
+                // "Perguntar sobre esta conversa" abriu uma thread: vai até ela.
+                if let Some(id) = self.recordings.take_opened_thread() {
+                    self.threads.select(id);
+                    *cx.go = Some(Nav::Threads);
+                }
+            }
             Nav::Logs => self.logs.ui(ui, cx),
             Nav::Costs => self.costs.ui(ui, cx),
             Nav::Users => self.users.ui(ui, cx),

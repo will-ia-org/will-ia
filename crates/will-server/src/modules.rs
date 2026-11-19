@@ -450,6 +450,11 @@ fn register_core_tools(state: &Arc<AppState>) {
             mcp_url: state.mcp_url.clone(),
             enable_thread_tools: true,
         }));
+    state
+        .registry
+        .add_provider(Arc::new(crate::recordings_tools::RecordingsProvider {
+            state: Arc::downgrade(state),
+        }));
 }
 
 /// Reconstrói a EngineConfig. `restart_live`: derruba processos vivos (troca de token/KB/permissões).

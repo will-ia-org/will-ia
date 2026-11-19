@@ -390,6 +390,26 @@ impl VoicePage {
                 );
                 ui::field(
                     ui,
+                    tr("Atalho de gravar conversa"),
+                    Some(tr(
+                        "Começa a gravar a sua voz e o som do computador (WhatsApp, Meet, qualquer programa); pressionado de novo, para e pergunta com quem você falou. É global: funciona com outro programa em foco. Ex.: Ctrl+Alt+R. Vazio desliga. Não funciona em Wayland.",
+                    )),
+                    |ui| {
+                        ui::text_input(ui, &mut r.recording_hotkey, "Ctrl+Alt+R");
+                        // O texto é o mesmo nos três sistemas; aqui vão os
+                        // nomes impressos nas teclas deste computador.
+                        let keys = crate::hotkey::display(&r.recording_hotkey);
+                        if !keys.is_empty() {
+                            ui.label(
+                                egui::RichText::new(trf("Neste teclado: {}", &[&keys]))
+                                    .size(12.0)
+                                    .weak(),
+                            );
+                        }
+                    },
+                );
+                ui::field(
+                    ui,
                     tr("Sinais sonoros"),
                     Some(tr(
                         "Toca um bipe curto ao ligar e desligar a voz e em erro.",

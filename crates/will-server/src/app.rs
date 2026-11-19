@@ -252,6 +252,15 @@ pub async fn start(opts: RunOptions) -> anyhow::Result<ServerHandle> {
         host: RwLock::new(None),
         ui_hook: RwLock::new(None),
     });
+    // Gravações que estavam sendo transcritas quando o serviço parou.
+    if let Ok(n) = state.storage.reset_stuck_recordings().await {
+        if n > 0 {
+            tracing::info!(
+                n,
+                "gravações com transcrição interrompida voltaram a \"salva\""
+            );
+        }
+    }
     let host = Arc::new(Host::new(state.clone()));
     *state.host.write() = Some(host.clone());
 

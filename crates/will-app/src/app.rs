@@ -144,6 +144,7 @@ pub struct WillApp {
     theme_applied: Option<String>,
     hotkey_applied: Option<String>,
     dictation_hotkey_applied: Option<String>,
+    recording_hotkey_applied: Option<String>,
     /// Captura agendada (caminho, quadros restantes) para dar tempo à navegação.
     pending_screenshot: Option<(std::path::PathBuf, u8)>,
     /// Recarga das settings do snapshot depois de `SettingsChanged`.
@@ -210,6 +211,7 @@ impl WillApp {
             theme_applied: None,
             hotkey_applied: None,
             dictation_hotkey_applied: None,
+            recording_hotkey_applied: None,
             pending_screenshot: None,
             settings_task: None,
             telemetry_task: None,
@@ -311,6 +313,20 @@ impl WillApp {
             self.toasts.error(trf("Atalho de falar: {}", &[e]));
         }
         self.dictation_hotkey_applied = Some(hk);
+    }
+
+    /// Atalho global da gravação de conversa (não depende do módulo Voz: gravar
+    /// funciona sem ele; só a transcrição precisa da chave).
+    fn apply_recording_hotkey(&mut self) {
+        let hk = self.snap.settings.realtime.recording_hotkey.clone();
+        if self.recording_hotkey_applied.as_deref() == Some(hk.as_str()) {
+            return;
+        }
+        self.hotkeys.apply_recording(&hk);
+        if let Some(e) = &self.hotkeys.recording_error {
+            self.toasts.error(trf("Atalho de gravar: {}", &[e]));
+        }
+        self.recording_hotkey_applied = Some(hk);
     }
 
     fn show_window(&mut self, ctx: &egui::Context) {
@@ -482,6 +498,7 @@ impl WillApp {
                 }
             }
             UiCommand::DictationToggle => self.pages.threads.request_dictation_toggle(),
+            UiCommand::RecordingToggle => self.pages.recordings.request_toggle(),
             UiCommand::HotkeyUp => {
                 if self.voice.ptt_mode {
                     self.voice.set_ptt(&self.svc, false);
@@ -682,6 +699,7 @@ impl WillApp {
         }
         self.apply_hotkey();
         self.apply_dictation_hotkey();
+        self.apply_recording_hotkey();
     }
 
     fn nav_panel(&mut self, ui: &mut egui::Ui) {
@@ -786,6 +804,7 @@ impl WillApp {
                     (Nav::Tasks, tr("Tarefas").into()),
                     (Nav::Threads, tr("Threads").into()),
                     (Nav::Approvals, tr("Aprovações").into()),
+                    (Nav::Recordings, tr("Gravações").into()),
                     (Nav::Schedules, tr("Triggers").into()),
                     (Nav::Browser, tr("Browser CDP").into()),
                     (Nav::Logs, tr("Logs").into()),
@@ -896,6 +915,8 @@ impl eframe::App for WillApp {
                 go: &mut go,
             };
             self.pages.threads.dictation_tick(&ctx, &mut cx);
+            // Gravação de conversa: atalho, caixinha e pergunta ao parar.
+            self.pages.recordings.tick(&ctx, &mut cx);
             // Aprovações pendentes: pilha flutuante visível em qualquer tela.
             self.pages.approvals.overlay_tick(&ctx, &mut cx);
         }

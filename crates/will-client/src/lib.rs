@@ -794,6 +794,101 @@ impl Client {
         .await
     }
 
+    // ----- gravações de conversa (docs/32) -----
+
+    pub async fn recordings(&self) -> ApiResult {
+        self.get("recordings").await
+    }
+    /// `{recording, other_label, segments, text}`.
+    pub async fn recording(&self, id: &str) -> ApiResult {
+        self.get(&format!("recordings/{id}")).await
+    }
+    /// Sobe o WAV estéreo gravado pelo app (streaming do disco). `query`:
+    /// `started_at`, `with`, `subject`, `has_system`.
+    pub async fn upload_recording(
+        &self,
+        path: std::path::PathBuf,
+        query: Vec<(&'static str, String)>,
+    ) -> ApiResult {
+        use tokio::io::AsyncReadExt;
+        let file = tokio::fs::File::open(&path)
+            .await
+            .map_err(|e| format!("{}: {e}", path.display()))?;
+        let len = file
+            .metadata()
+            .await
+            .map_err(|e| format!("{}: {e}", path.display()))?
+            .len();
+        let stream = futures::stream::unfold(file, |mut f| async move {
+            let mut buf = vec![0u8; 1024 * 1024];
+            match f.read(&mut buf).await {
+                Ok(0) => None,
+                Ok(n) => {
+                    buf.truncate(n);
+                    Some((Ok::<_, std::io::Error>(bytes::Bytes::from(buf)), f))
+                }
+                Err(e) => Some((Err(e), f)),
+            }
+        });
+        let url = format!("{}{}", self.url("recordings"), query_string(&query));
+        Self::finish(
+            self.http
+                .post(url)
+                .bearer_auth(&self.token)
+                .header("content-type", "audio/wav")
+                .header("content-length", len)
+                .timeout(LONG_TRANSFER)
+                .body(reqwest::Body::wrap_stream(stream))
+                .send()
+                .await,
+        )
+        .await
+    }
+    /// O WAV de uma gravação (para tocar no app).
+    pub async fn recording_audio(&self, id: &str) -> Result<Vec<u8>, String> {
+        let resp = self
+            .http
+            .get(self.url(&format!("recordings/{id}/audio")))
+            .bearer_auth(&self.token)
+            .timeout(LONG_TRANSFER)
+            .send()
+            .await
+            .map_err(|e| transport_error(&e))?;
+        let status = resp.status();
+        let bytes = resp.bytes().await.map_err(|e| e.to_string())?;
+        if !status.is_success() {
+            let text = String::from_utf8_lossy(&bytes).to_string();
+            return Err(serde_json::from_str::<Value>(&text)
+                .ok()
+                .and_then(|v| v.get("error").and_then(|e| e.as_str()).map(str::to_string))
+                .unwrap_or_else(|| format!("HTTP {status}")));
+        }
+        Ok(bytes.to_vec())
+    }
+    pub async fn set_recording_labels(
+        &self,
+        id: &str,
+        with_whom: &str,
+        subject: &str,
+    ) -> ApiResult {
+        self.patch(
+            &format!("recordings/{id}"),
+            json!({ "with_whom": with_whom, "subject": subject }),
+        )
+        .await
+    }
+    pub async fn transcribe_recording(&self, id: &str) -> ApiResult {
+        self.post(&format!("recordings/{id}/transcribe"), None)
+            .await
+    }
+    /// Abre uma thread com a transcrição; devolve `{thread_id}`.
+    pub async fn ask_recording(&self, id: &str) -> ApiResult {
+        self.post(&format!("recordings/{id}/ask"), None).await
+    }
+    pub async fn delete_recording(&self, id: &str) -> ApiResult {
+        self.delete(&format!("recordings/{id}")).await
+    }
+
     // ----- tarefas (docs/31) -----
 
     /// `filter`: pending | running | overdue | upcoming | done | all.

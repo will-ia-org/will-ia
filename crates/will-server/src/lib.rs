@@ -13,6 +13,8 @@ pub mod logging;
 pub mod mcp_json;
 pub mod modules;
 pub mod orchestrator;
+pub mod recordings;
+pub mod recordings_tools;
 pub mod telemetry;
 pub mod tls;
 

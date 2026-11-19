@@ -25,21 +25,21 @@ const PLAYBACK_GUARD_MS: u64 = 350;
 const PREBUFFER_MS: u64 = 250;
 
 /// Reamostrador linear com posição fracionária persistente entre chamadas.
-struct Resampler {
+pub(super) struct Resampler {
     ratio: f64, // entrada/saída
     pos: f64,
     last: f32,
 }
 
 impl Resampler {
-    fn new(from: u32, to: u32) -> Self {
+    pub(super) fn new(from: u32, to: u32) -> Self {
         Self {
             ratio: from as f64 / to as f64,
             pos: 0.0,
             last: 0.0,
         }
     }
-    fn process(&mut self, input: &[f32], out: &mut Vec<f32>) {
+    pub(super) fn process(&mut self, input: &[f32], out: &mut Vec<f32>) {
         if input.is_empty() {
             return;
         }
@@ -114,7 +114,7 @@ pub struct DeviceLists {
 
 /// Host de áudio: no Linux prefere PulseAudio/PipeWire (lista fones Bluetooth,
 /// USB etc. com nomes legíveis); senão o padrão da plataforma.
-fn audio_host() -> cpal::Host {
+pub(super) fn audio_host() -> cpal::Host {
     cpal::default_host()
 }
 
@@ -140,7 +140,11 @@ pub fn list_devices() -> DeviceLists {
     }
 }
 
-fn find_device(host: &cpal::Host, name: Option<&str>, input: bool) -> Option<cpal::Device> {
+pub(super) fn find_device(
+    host: &cpal::Host,
+    name: Option<&str>,
+    input: bool,
+) -> Option<cpal::Device> {
     let name = name.map(str::trim).filter(|n| !n.is_empty());
     if let Some(n) = name {
         let devices = if input {

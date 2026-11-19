@@ -22,6 +22,7 @@ mod oauth_cb;
 mod pages;
 mod permissions;
 mod profiles;
+mod screens;
 mod service;
 mod speak_cache;
 mod ui;

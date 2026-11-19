@@ -1,6 +1,8 @@
 //! Controle de voz no app: sessão Realtime + áudio cpal + indicador flutuante.
 
 pub mod audio;
+pub mod call_recorder;
+pub mod clip_player;
 pub mod overlay;
 
 use crate::i18n::{tr, trf};

@@ -5,6 +5,7 @@ pub mod google;
 pub mod logs;
 pub mod mcp;
 pub mod migrate;
+pub mod recordings;
 pub mod schedules;
 pub mod secrets;
 pub mod settings;
