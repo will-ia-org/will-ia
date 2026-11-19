@@ -19,6 +19,7 @@ pub struct Screen {
 /// Converte um retângulo do AppKit (origem embaixo à esquerda do monitor
 /// principal, Y para cima) para o sistema das janelas (Y para baixo).
 /// `primary_height` é a altura do monitor principal.
+#[cfg(any(target_os = "macos", test))]
 pub fn flip(x: f64, y: f64, width: f64, height: f64, primary_height: f64) -> egui::Rect {
     egui::Rect::from_min_size(
         egui::pos2(x as f32, (primary_height - (y + height)) as f32),
