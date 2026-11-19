@@ -736,6 +736,17 @@ impl Host {
         Ok(())
     }
 
+    /// Marca a thread como lida (zera o badge de não lidas no app).
+    pub async fn mark_thread_read(&self, thread: ThreadId) -> Result<(), String> {
+        self.state
+            .storage
+            .mark_thread_read(thread)
+            .await
+            .map_err(|e| e.to_string())?;
+        emit_thread_updated(&self.state, thread).await;
+        Ok(())
+    }
+
     /// Define (ou remove, com texto vazio) o prompt próprio da thread. Se o
     /// processo dela está vivo, sai assim que ficar livre e volta com o texto novo.
     pub async fn set_thread_prompt(&self, thread: ThreadId, prompt: &str) -> Result<(), String> {

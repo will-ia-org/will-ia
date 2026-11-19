@@ -17,6 +17,7 @@ pub const ERROR: MaterialIcon = m::ICON_ERROR;
 pub const WARNING: MaterialIcon = m::ICON_WARNING;
 pub const INFO: MaterialIcon = m::ICON_INFO;
 pub const REFRESH: MaterialIcon = m::ICON_REFRESH;
+pub const DONE_ALL: MaterialIcon = m::ICON_DONE_ALL;
 pub const SEND: MaterialIcon = m::ICON_SEND;
 pub const MIC: MaterialIcon = m::ICON_MIC;
 pub const ATTACH: MaterialIcon = m::ICON_ATTACH_FILE;

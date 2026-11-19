@@ -77,6 +77,8 @@ Códigos: **401** `token de sessão ausente` / `token de sessão inválido` (tam
 | POST | `/api/threads/{id}/restart` | mantém sessão |
 | POST | `/api/threads/{id}/reset` | esquece sessão |
 | PUT | `/api/threads/{id}/prompt` | `{prompt}`: prompt próprio da thread, somado ao geral (vazio remove; máx. 8000 caracteres) |
+| POST | `/api/threads/{id}/read` | marca a thread como lida (zera `unread`) |
+| POST | `/api/threads/read-all` | marca todas as threads como lidas |
 | POST | `/api/threads/{id}/interrupt` | |
 | PATCH | `/api/threads/{id}` | `{ title }` |
 | DELETE | `/api/threads/{id}?purge=true` | |

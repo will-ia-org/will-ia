@@ -282,6 +282,26 @@ pub async fn rename(
     Ok(Json(json!({ "ok": true })))
 }
 
+/// `POST /api/threads/{id}/read` — o usuário abriu a thread: zera as não lidas.
+pub async fn mark_read(State(state): State<App>, Path(id): Path<String>) -> ApiResult<Value> {
+    state
+        .host()
+        .mark_thread_read(tid(&id)?)
+        .await
+        .map_err(super::internal)?;
+    Ok(Json(json!({ "ok": true })))
+}
+
+/// `POST /api/threads/read-all` — marca todas as threads como lidas.
+pub async fn mark_all_read(State(state): State<App>) -> ApiResult<Value> {
+    state
+        .storage
+        .mark_all_threads_read()
+        .await
+        .map_err(|e| super::internal(e.to_string()))?;
+    Ok(Json(json!({ "ok": true })))
+}
+
 #[derive(serde::Deserialize)]
 pub struct PromptBody {
     /// Texto vazio remove o prompt da thread (fica só o geral).

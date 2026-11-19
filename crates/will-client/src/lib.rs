@@ -465,6 +465,14 @@ impl Client {
         self.put(&format!("threads/{id}/prompt"), json!({ "prompt": prompt }))
             .await
     }
+    /// Marca a thread como lida (zera as não lidas).
+    pub async fn mark_thread_read(&self, id: &str) -> ApiResult {
+        self.post(&format!("threads/{id}/read"), None).await
+    }
+    /// Marca todas as threads como lidas.
+    pub async fn mark_all_threads_read(&self) -> ApiResult {
+        self.post("threads/read-all", None).await
+    }
     pub async fn interrupt_thread(&self, id: &str) -> ApiResult {
         self.post(&format!("threads/{id}/interrupt"), None).await
     }

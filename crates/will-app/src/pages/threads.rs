@@ -387,6 +387,31 @@ pub struct ThreadsPage {
     bottom_h: f32,
     md_cache: egui_commonmark::CommonMarkCache,
     remote: RemoteFiles,
+    /// Aviso ao servidor de que a thread aberta foi lida (um por vez).
+    read_task: Option<Task<Value>>,
+}
+
+/// Bolinha com a quantidade de respostas não lidas (lista de threads).
+fn unread_badge(ui: &mut egui::Ui, count: usize) {
+    let text = if count > 99 {
+        "99+".to_string()
+    } else {
+        count.to_string()
+    };
+    let font = ui::semibold(10.5);
+    let galley = ui
+        .painter()
+        .layout_no_wrap(text, font, egui::Color32::WHITE);
+    let h = 17.0;
+    let w = (galley.size().x + 10.0).max(h);
+    let (rect, _) = ui.allocate_exact_size(egui::vec2(w, h), egui::Sense::hover());
+    let blue = ui::palette(ui.visuals().dark_mode).accent;
+    ui.painter().rect_filled(rect, h / 2.0, blue);
+    ui.painter().galley(
+        rect.center() - galley.size() / 2.0,
+        galley,
+        egui::Color32::WHITE,
+    );
 }
 
 fn origin_label(t: &ThreadSummary) -> String {
@@ -852,6 +877,38 @@ impl ThreadsPage {
                 }
             }
         }
+    }
+
+    /// Threads com resposta ainda não lida, para o badge azul do menu.
+    pub fn unread_count(&self) -> usize {
+        self.threads
+            .iter()
+            .filter(|t| t.status != ThreadStatus::Archived && t.unread > 0)
+            .count()
+    }
+
+    /// A thread aberta está na tela com a janela em foco: tudo o que chegou
+    /// nela conta como lido. Zera o badge na hora e avisa o servidor.
+    fn mark_selected_read(&mut self, ctx: &egui::Context, cx: &Cx) {
+        if self.read_task.as_ref().is_some_and(|t| t.take().is_some()) {
+            self.read_task = None;
+        }
+        if self.read_task.is_some() || !ctx.input(|i| i.focused) {
+            return;
+        }
+        let Some(t) = self
+            .selected
+            .and_then(|id| self.threads.iter_mut().find(|t| t.id == id))
+            .filter(|t| t.unread > 0)
+        else {
+            return;
+        };
+        t.unread = 0;
+        let sid = t.id.to_string();
+        self.read_task = Some(
+            cx.svc
+                .call(move |c| async move { c.mark_thread_read(&sid).await }),
+        );
     }
 
     /// Threads processando agora (turno vivo, fila pendente ou status
@@ -1623,6 +1680,7 @@ impl ThreadsPage {
 
     pub fn ui(&mut self, ui: &mut egui::Ui, cx: &mut Cx) {
         self.poll(cx);
+        self.mark_selected_read(ui.ctx(), cx);
         let avail_h = ui.available_height();
         let pal = ui::palette(ui.visuals().dark_mode);
         ui.horizontal_top(|ui| {
@@ -1639,6 +1697,12 @@ impl ThreadsPage {
                     if ui::icon_button(ui, crate::icons::REFRESH, tr("Atualizar")).clicked() {
                         self.list.loaded_at = None;
                     }
+                    if self.unread_count() > 0 && ui::icon_button(ui, crate::icons::DONE_ALL, tr("Marcar todas como lidas")).clicked() {
+                        for t in &mut self.threads {
+                            t.unread = 0;
+                        }
+                        self.read_task = Some(cx.svc.call(|c| async move { c.mark_all_threads_read().await }));
+                    }
                 });
                 ui.checkbox(&mut self.show_archived, egui::RichText::new(tr("arquivadas")).small());
                 if let Some(e) = &self.list.error {
@@ -1646,7 +1710,8 @@ impl ThreadsPage {
                 }
                 egui::ScrollArea::vertical().id_salt("threads-list").auto_shrink([false, false]).max_height(avail_h - 70.0).show(ui, |ui| {
                     let mut sorted: Vec<&ThreadSummary> = self.threads.iter().filter(|t| self.show_archived || t.status != ThreadStatus::Archived).collect();
-                    sorted.sort_by_key(|t| std::cmp::Reverse(t.last_activity_at));
+                    // Não lidas primeiro (como no WhatsApp); dentro de cada grupo, a mais recente em cima.
+                    sorted.sort_by_key(|t| (t.unread == 0, std::cmp::Reverse(t.last_activity_at)));
                     if sorted.is_empty() {
                         ui.label(egui::RichText::new(tr("Nenhuma thread. Crie uma com “+ Nova” ou mande mensagem pelo Telegram/voz.")).weak());
                     }
@@ -1670,7 +1735,12 @@ impl ThreadsPage {
                                 if let Some(names) = self.trigger_map.get(&t.id.to_string()) {
                                     trigger_icon(ui, pal, names);
                                 }
-                                ui.add(egui::Label::new(egui::RichText::new(title_of(t)).font(ui::medium(13.0))).truncate());
+                                let title = if t.unread > 0 {
+                                    egui::RichText::new(title_of(t)).font(ui::semibold(13.0)).color(pal.text)
+                                } else {
+                                    egui::RichText::new(title_of(t)).font(ui::medium(13.0))
+                                };
+                                ui.add(egui::Label::new(title).truncate());
                             });
                             // resumo da conversa: até 3 linhas, itálico, truncado com "…"
                             if let Some(sm) = t.summary.as_deref().filter(|x| !x.trim().is_empty()) {
@@ -1680,8 +1750,14 @@ impl ThreadsPage {
                                     wrapped_label(ui, sm, egui::FontId::proportional(10.5), pal.text_weak, true, 3, w);
                                 });
                             }
-                            ui.with_layout(egui::Layout::right_to_left(egui::Align::Min), |ui| {
-                                ui.label(egui::RichText::new(time_ago(&t.last_activity_at)).size(10.5).color(pal.text_weak));
+                            // Altura fixa: um layout centralizado dentro de uma coluna ocuparia toda a altura livre.
+                            let row = egui::vec2(ui.available_width(), 17.0);
+                            ui.allocate_ui_with_layout(row, egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                                let color = if t.unread > 0 { pal.accent } else { pal.text_weak };
+                                ui.label(egui::RichText::new(time_ago(&t.last_activity_at)).size(10.5).color(color));
+                                if t.unread > 0 {
+                                    unread_badge(ui, t.unread);
+                                }
                             });
                         });
                         // Detalhes saem da linha e vão para o tooltip.
@@ -1689,6 +1765,10 @@ impl ThreadsPage {
                         if let Some(sm) = t.summary.as_deref().filter(|x| !x.trim().is_empty()) {
                             tip.push_str("\n\n");
                             tip.push_str(sm);
+                        }
+                        if t.unread > 0 {
+                            tip.push('\n');
+                            tip.push_str(&trf("{} resposta(s) não lida(s)", &[&t.unread]));
                         }
                         if t.pending > 0 {
                             tip.push('\n');

@@ -465,6 +465,7 @@ mod tests {
             summary: None,
             prompt: None,
             session_prompt_hash: None,
+            unread: 0,
         };
         let m = fired_message(&t, &ev(), "30/10 09:00", Some(&th));
         let onde = m.find("## Onde você está").unwrap();

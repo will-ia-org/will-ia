@@ -226,6 +226,8 @@ pub fn router(state: App) -> Router {
         .route("/threads/{id}/restart", post(threads::restart))
         .route("/threads/{id}/reset", post(threads::reset))
         .route("/threads/{id}/prompt", put(threads::set_prompt))
+        .route("/threads/read-all", post(threads::mark_all_read))
+        .route("/threads/{id}/read", post(threads::mark_read))
         .route("/threads/{id}/interrupt", post(threads::interrupt))
         .route("/turns/{id}/events", get(threads::turn_events))
         .route(

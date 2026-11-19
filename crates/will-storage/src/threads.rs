@@ -29,6 +29,18 @@ pub struct TurnEventRecord {
     pub payload: serde_json::Value,
 }
 
+/// Colunas de uma thread mais a contagem de respostas não lidas: turnos
+/// concluídos depois de `read_at`, fora os fundidos em outro, os interrompidos
+/// e os descartados (esses não trazem resposta nova).
+macro_rules! thread_select {
+    ($tail:literal) => {
+        concat!(
+            "SELECT t.*, (SELECT COUNT(*) FROM turns u WHERE u.thread_id = t.id AND u.finished_at IS NOT NULL AND (t.read_at IS NULL OR u.finished_at > t.read_at) AND (u.error_kind IS NULL OR u.error_kind NOT IN ('merged', 'interrupted', 'dropped'))) AS unread FROM threads t",
+            $tail
+        )
+    };
+}
+
 fn row_to_thread(r: &sqlx::sqlite::SqliteRow) -> Option<ThreadSummary> {
     let id: String = r.get("id");
     let origin_kind: String = r.get("origin");
@@ -63,6 +75,7 @@ fn row_to_thread(r: &sqlx::sqlite::SqliteRow) -> Option<ThreadSummary> {
             .try_get::<Option<String>, _>("session_prompt_hash")
             .ok()
             .flatten(),
+        unread: r.try_get::<i64, _>("unread").unwrap_or(0).max(0) as usize,
     })
 }
 
@@ -101,11 +114,12 @@ impl Storage {
             summary: None,
             prompt: None,
             session_prompt_hash: None,
+            unread: 0,
         })
     }
 
     pub async fn get_thread(&self, id: ThreadId) -> Result<ThreadSummary> {
-        let r = sqlx::query("SELECT * FROM threads WHERE id = ?")
+        let r = sqlx::query(thread_select!(" WHERE t.id = ?"))
             .bind(id.to_string())
             .fetch_optional(&self.pool)
             .await?
@@ -114,9 +128,7 @@ impl Storage {
     }
 
     pub async fn find_thread_by_origin(&self, origin: &Origin) -> Result<Option<ThreadSummary>> {
-        let r = sqlx::query(
-            "SELECT * FROM threads WHERE origin = ? AND origin_ref IS ? AND status != 'archived' ORDER BY created_at DESC LIMIT 1",
-        )
+        let r = sqlx::query(thread_select!(" WHERE t.origin = ? AND t.origin_ref IS ? AND t.status != 'archived' ORDER BY t.created_at DESC LIMIT 1"))
         .bind(origin.kind().as_str())
         .bind(origin.origin_ref())
         .fetch_optional(&self.pool)
@@ -126,17 +138,36 @@ impl Storage {
 
     pub async fn list_threads(&self, include_archived: bool) -> Result<Vec<ThreadSummary>> {
         let rows = if include_archived {
-            sqlx::query("SELECT * FROM threads ORDER BY last_activity_at DESC")
+            sqlx::query(thread_select!(" ORDER BY t.last_activity_at DESC"))
                 .fetch_all(&self.pool)
                 .await?
         } else {
-            sqlx::query(
-                "SELECT * FROM threads WHERE status != 'archived' ORDER BY last_activity_at DESC",
-            )
+            sqlx::query(thread_select!(
+                " WHERE t.status != 'archived' ORDER BY t.last_activity_at DESC"
+            ))
             .fetch_all(&self.pool)
             .await?
         };
         Ok(rows.iter().filter_map(row_to_thread).collect())
+    }
+
+    /// Marca a thread como lida até agora (zera as não lidas).
+    pub async fn mark_thread_read(&self, id: ThreadId) -> Result<()> {
+        sqlx::query("UPDATE threads SET read_at = ? WHERE id = ?")
+            .bind(fmt(now()))
+            .bind(id.to_string())
+            .execute(&self.pool)
+            .await?;
+        Ok(())
+    }
+
+    /// Marca todas as threads como lidas até agora.
+    pub async fn mark_all_threads_read(&self) -> Result<()> {
+        sqlx::query("UPDATE threads SET read_at = ?")
+            .bind(fmt(now()))
+            .execute(&self.pool)
+            .await?;
+        Ok(())
     }
 
     pub async fn set_thread_session(&self, id: ThreadId, session_id: Option<&str>) -> Result<()> {
@@ -466,5 +497,58 @@ impl Storage {
             .execute(&self.pool)
             .await?;
         Ok(r.rows_affected())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn result(text: &str) -> TurnResult {
+        TurnResult {
+            text: text.into(),
+            is_error: false,
+            cost_usd: None,
+            duration_ms: None,
+            model: None,
+            session_id: None,
+            usage: None,
+            interrupted: false,
+        }
+    }
+
+    #[tokio::test]
+    async fn unread_counts_finished_turns_since_last_read() {
+        let st = Storage::open_memory().await.unwrap();
+        let t = st.create_thread(&Origin::Ui, Some("a")).await.unwrap();
+        assert_eq!(st.get_thread(t.id).await.unwrap().unread, 0);
+
+        // turno em andamento não conta; concluído conta
+        let first = st.start_turn(t.id, "oi", &[]).await.unwrap();
+        assert_eq!(st.get_thread(t.id).await.unwrap().unread, 0);
+        st.finish_turn(first, &result("olá"), None).await.unwrap();
+        // fundido em outro, interrompido e descartado não trazem resposta nova
+        for kind in ["merged", "interrupted", "dropped"] {
+            let id = st.start_turn(t.id, "x", &[]).await.unwrap();
+            st.finish_turn(id, &result(""), Some(kind)).await.unwrap();
+        }
+        assert_eq!(st.get_thread(t.id).await.unwrap().unread, 1);
+        let listed = st.list_threads(false).await.unwrap();
+        assert_eq!(listed[0].unread, 1);
+
+        // ler zera; resposta nova depois volta a contar
+        tokio::time::sleep(std::time::Duration::from_millis(5)).await;
+        st.mark_thread_read(t.id).await.unwrap();
+        assert_eq!(st.get_thread(t.id).await.unwrap().unread, 0);
+        tokio::time::sleep(std::time::Duration::from_millis(5)).await;
+        let again = st.start_turn(t.id, "e aí", &[]).await.unwrap();
+        st.finish_turn(again, &result("pronto"), None)
+            .await
+            .unwrap();
+        assert_eq!(st.get_thread(t.id).await.unwrap().unread, 1);
+
+        tokio::time::sleep(std::time::Duration::from_millis(5)).await;
+        st.mark_all_threads_read().await.unwrap();
+        assert_eq!(st.get_thread(t.id).await.unwrap().unread, 0);
     }
 }

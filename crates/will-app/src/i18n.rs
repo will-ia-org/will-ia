@@ -289,6 +289,8 @@ pub static TABLE: &[(&str, &str)] = &[
     ("Fonte", "Source"),
     ("todas", "all"),
     ("Atualizar", "Refresh"),
+    ("Marcar todas como lidas", "Mark all as read"),
+    ("{} resposta(s) não lida(s)", "{} unread reply(ies)"),
     ("Resumo (todas as fontes)", "Summary (all sources)"),
     ("Resumo (fonte filtrada)", "Summary (filtered source)"),
     ("Hoje", "Today"),

@@ -141,6 +141,10 @@ pub struct ThreadSummary {
     /// do `claude`. `None` = só o geral.
     #[serde(default)]
     pub prompt: Option<String>,
+    /// Respostas concluídas que o usuário ainda não leu (desde a última vez
+    /// em que a thread foi marcada como lida).
+    #[serde(default)]
+    pub unread: usize,
     /// Impressão digital do prompt de sistema com que a sessão salva nasceu
     /// (uso interno do motor para saber se o texto mudou depois).
     #[serde(default, skip_serializing)]
@@ -353,6 +357,7 @@ mod title_tests {
             summary: None,
             prompt: None,
             session_prompt_hash: None,
+            unread: 0,
         }
     }
 

@@ -803,8 +803,8 @@ impl WillApp {
                 let mut items: Vec<(Nav, String)> = vec![
                     (Nav::Tasks, tr("Tarefas").into()),
                     (Nav::Threads, tr("Threads").into()),
-                    (Nav::Approvals, tr("Aprovações").into()),
                     (Nav::Recordings, tr("Gravações").into()),
+                    (Nav::Approvals, tr("Aprovações").into()),
                     (Nav::Schedules, tr("Triggers").into()),
                     (Nav::Browser, tr("Browser CDP").into()),
                     (Nav::Logs, tr("Logs").into()),
@@ -831,6 +831,7 @@ impl WillApp {
                 // recarregada em segundo plano mesmo com a página fechada.
                 self.pages.threads.poll_list(&self.svc);
                 let processing = self.pages.threads.processing_count();
+                let unread = self.pages.threads.unread_count();
                 ui.ctx().request_repaint_after(Duration::from_secs(60));
                 for (n, label) in items {
                     let resp = ui::nav_item(ui, self.nav == n, &label, None);
@@ -849,7 +850,10 @@ impl WillApp {
                         ui::nav_badges(
                             ui,
                             resp.rect,
-                            &[ui::NavBadge::solid(processing, Tone::Warning.color(dark))],
+                            &[
+                                ui::NavBadge::solid(processing, Tone::Warning.color(dark)),
+                                ui::NavBadge::solid(unread, pal.accent),
+                            ],
                         );
                     }
                     if n == Nav::Approvals {

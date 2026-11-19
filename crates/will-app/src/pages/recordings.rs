@@ -923,7 +923,32 @@ impl RecordingsPage {
                         )
                     };
                     // As suas falas ficam recuadas à direita, como num chat.
-                    let indent = if me { (width - bubble).max(0.0) } else { 0.0 };
+                    // O recuo vem da largura real do balão (medida pelo texto), para a
+                    // fala curta também encostar na borda direita.
+                    let indent = if me {
+                        let inner = bubble - 24.0;
+                        let body = egui::TextStyle::Body.resolve(ui.style());
+                        let text_w = ui
+                            .painter()
+                            .layout(text_of(s, "text").to_string(), body, pal.text, inner)
+                            .size()
+                            .x;
+                        let who_w = ui
+                            .painter()
+                            .layout_no_wrap(who.clone(), ui::medium(12.0), pal.text)
+                            .size()
+                            .x;
+                        let clock_w = ui
+                            .painter()
+                            .layout_no_wrap(clock(start), egui::FontId::proportional(11.0), pal.text)
+                            .size()
+                            .x;
+                        let head_w = who_w + ui.spacing().item_spacing.x + clock_w;
+                        let content = text_w.max(head_w).min(inner).ceil();
+                        (width - content - 24.0 - 2.0).max(0.0)
+                    } else {
+                        0.0
+                    };
                     ui.horizontal(|ui| {
                         ui.add_space(indent);
                         let resp = egui::Frame::new()
