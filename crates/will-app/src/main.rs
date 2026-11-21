@@ -9,6 +9,9 @@
 //! - `will-ia-app audio-devices`: diagnóstico de áudio.
 
 #![cfg_attr(all(windows, not(debug_assertions)), windows_subsystem = "windows")]
+// No navegador (docs/33) parte do código de desktop fica sem uso: captura e
+// reprodução pelo cpal, atalhos globais, localizar o binário do servidor.
+#![cfg_attr(target_arch = "wasm32", allow(dead_code, unused_imports))]
 
 mod app;
 #[cfg(not(target_arch = "wasm32"))]
