@@ -6,19 +6,31 @@ license.workspace = true
 
 [dependencies]
 will-core.workspace = true
-tokio.workspace = true
-tokio-tungstenite.workspace = true
 futures.workspace = true
-reqwest.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 bytes.workspace = true
 tracing.workspace = true
 parking_lot.workspace = true
 thiserror.workspace = true
+
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+tokio.workspace = true
+tokio-tungstenite.workspace = true
+reqwest.workspace = true
 rustls.workspace = true
 rustls-pemfile.workspace = true
 sha2.workspace = true
+
+# App web (`docs/33`): o `reqwest` usa o `fetch` do navegador e os WebSockets
+# são os do próprio navegador; sem TLS próprio nem acesso a disco.
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+tokio = { version = "1.54", default-features = false, features = ["sync"] }
+reqwest = { version = "0.13", default-features = false, features = ["json", "stream", "multipart"] }
+wasm-bindgen = "0.2"
+wasm-bindgen-futures = "0.4"
+js-sys = "0.3"
+web-sys = { version = "0.3", features = ["WebSocket", "MessageEvent", "CloseEvent", "Event", "BinaryType", "Window"] }
 
 [lints]
 workspace = true

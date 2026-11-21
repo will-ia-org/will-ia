@@ -856,10 +856,18 @@ fn args_list(ui: &mut egui::Ui, args: &Value) {
 /// Janela flutuante (sempre no topo, sem decoração, canto superior direito da
 /// tela) com um cartão por pedido pendente e os botões Aprovar / Negar.
 fn show_overlay(ctx: &egui::Context, shared: &OverlayShared, measured: f32) {
-    let monitor = ctx
-        .input(|i| i.viewport().monitor_size)
-        .unwrap_or(egui::vec2(1920.0, 1080.0));
-    let max_h = (monitor.y - 160.0).max(240.0);
+    // No navegador a pilha vive dentro da página: o limite é a área dela.
+    let monitor = if crate::platform::WEB {
+        ctx.content_rect().size()
+    } else {
+        ctx.input(|i| i.viewport().monitor_size)
+            .unwrap_or(egui::vec2(1920.0, 1080.0))
+    };
+    let max_h = if crate::platform::WEB {
+        (monitor.y - 48.0).max(200.0)
+    } else {
+        (monitor.y - 160.0).max(240.0)
+    };
     let h = if measured > 0.0 { measured } else { 260.0 }.clamp(120.0, max_h);
     let size = [OVERLAY_W, h];
     let builder = egui::ViewportBuilder::default()
@@ -874,10 +882,14 @@ fn show_overlay(ctx: &egui::Context, shared: &OverlayShared, measured: f32) {
         .with_active(false)
         .with_taskbar(false);
     let shared = shared.clone();
-    ctx.show_viewport_deferred(
-        egui::ViewportId::from_hash_of("approvals-overlay"),
+    ui::show_floating(
+        ctx,
+        "approvals-overlay",
         builder,
-        move |ui, _class| {
+        OVERLAY_W,
+        egui::Align2::RIGHT_TOP,
+        egui::vec2(-16.0, 16.0),
+        move |ui| {
             ui.ctx()
                 .request_repaint_after(std::time::Duration::from_millis(500));
             let dark = ui.visuals().dark_mode;
@@ -885,28 +897,42 @@ fn show_overlay(ctx: &egui::Context, shared: &OverlayShared, measured: f32) {
             let mut s = shared.lock();
             let mut clicks: Vec<(String, &'static str)> = Vec::new();
             let inner_w = OVERLAY_W - 2.0 * OVERLAY_PAD;
-            let out = egui::Frame::new().inner_margin(OVERLAY_PAD).show(ui, |ui| {
-                egui::ScrollArea::vertical()
-                    .id_salt("approvals-overlay-scroll")
-                    .max_height(max_h - 2.0 * OVERLAY_PAD)
-                    .auto_shrink([false, true])
-                    .show(ui, |ui| {
-                        ui.set_width(inner_w);
-                        let n = s.cards.len();
-                        if n > 1 {
-                            ui.label(
-                                RichText::new(trf("{} aprovações pendentes", &[&n]))
-                                    .small()
-                                    .color(Tone::Warning.color(dark)),
-                            );
-                        }
-                        for c in &s.cards {
-                            overlay_card(ui, p, dark, c, &mut clicks);
-                            ui.add_space(6.0);
-                        }
-                    })
-            });
-            s.height = out.inner.content_size.y + 2.0 * OVERLAY_PAD + 2.0;
+            let stack = |ui: &mut egui::Ui, clicks: &mut Vec<(String, &'static str)>| {
+                ui.set_width(inner_w);
+                let n = s.cards.len();
+                if n > 1 {
+                    ui.label(
+                        RichText::new(trf("{} aprovações pendentes", &[&n]))
+                            .small()
+                            .color(Tone::Warning.color(dark)),
+                    );
+                }
+                for c in &s.cards {
+                    overlay_card(ui, p, dark, c, clicks);
+                    ui.add_space(6.0);
+                }
+            };
+            // Na página web a pilha aparece inteira, sem rolagem; só rola se
+            // (medida no quadro anterior) não couber na altura da página.
+            let fits = crate::platform::WEB && s.height <= max_h;
+            let content_h = if fits {
+                egui::Frame::new()
+                    .inner_margin(OVERLAY_PAD)
+                    .show(ui, |ui| stack(ui, &mut clicks))
+                    .response
+                    .rect
+                    .height()
+            } else {
+                let out = egui::Frame::new().inner_margin(OVERLAY_PAD).show(ui, |ui| {
+                    egui::ScrollArea::vertical()
+                        .id_salt("approvals-overlay-scroll")
+                        .max_height(max_h - 2.0 * OVERLAY_PAD)
+                        .auto_shrink([false, true])
+                        .show(ui, |ui| stack(ui, &mut clicks))
+                });
+                out.inner.content_size.y + 2.0 * OVERLAY_PAD
+            };
+            s.height = content_h + 2.0;
             if !clicks.is_empty() {
                 s.clicks.extend(clicks);
                 drop(s);
@@ -976,9 +1002,17 @@ fn overlay_card(
                             .inner_margin(egui::Margin::symmetric(8, 6))
                             .show(ui, |ui| {
                                 ui.set_width(ui.available_width());
+                                // Na janelinha do desktop o texto longo rola numa
+                                // caixa baixa; na página web há espaço, então ele
+                                // aparece inteiro (até ~60% da altura da página).
+                                let max_h = if crate::platform::WEB {
+                                    (ui.ctx().content_rect().height() * 0.6).max(130.0)
+                                } else {
+                                    130.0
+                                };
                                 egui::ScrollArea::vertical()
                                     .id_salt(("ov-arg", &c.id, i))
-                                    .max_height(130.0)
+                                    .max_height(max_h)
                                     .auto_shrink([false, true])
                                     .show(ui, |ui| {
                                         ui.set_width(ui.available_width());

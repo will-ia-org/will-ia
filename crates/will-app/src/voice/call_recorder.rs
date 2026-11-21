@@ -18,7 +18,8 @@ use std::io::{Seek, SeekFrom, Write};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering};
 use std::sync::Arc;
-use std::time::{Duration, Instant};
+use std::time::Duration;
+use web_time::Instant;
 
 /// Taxa das duas faixas gravadas (a mesma que a transcrição usa).
 pub const REC_RATE: u32 = 16_000;

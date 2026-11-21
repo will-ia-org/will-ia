@@ -110,10 +110,14 @@ pub fn show(ctx: &egui::Context, shared: &Shared) {
         .with_always_on_top()
         .with_taskbar(false);
     let shared = shared.clone();
-    ctx.show_viewport_deferred(
-        egui::ViewportId::from_hash_of("voice-overlay"),
+    crate::ui::show_floating(
+        ctx,
+        "voice-overlay",
         builder,
-        move |ui, _class| {
+        SIZE[0],
+        egui::Align2::RIGHT_BOTTOM,
+        egui::vec2(-16.0, -16.0),
+        move |ui| {
             ui.ctx().request_repaint_after(Duration::from_millis(60));
             let s = shared.lock();
             let (label, color) = label_for(&s.state);
@@ -182,7 +186,7 @@ pub fn show(ctx: &egui::Context, shared: &Shared) {
 #[derive(Default)]
 pub struct DictationState {
     pub title: String,
-    pub started: Option<std::time::Instant>,
+    pub started: Option<web_time::Instant>,
     pub level: Option<Arc<std::sync::atomic::AtomicU32>>,
     pub transcribing: bool,
     pub send: bool,
@@ -209,10 +213,14 @@ pub fn show_dictation(ctx: &egui::Context, shared: &DictationShared) {
         .with_always_on_top()
         .with_taskbar(false);
     let shared = shared.clone();
-    ctx.show_viewport_deferred(
-        egui::ViewportId::from_hash_of("dictation-overlay"),
+    crate::ui::show_floating(
+        ctx,
+        "dictation-overlay",
         builder,
-        move |ui, _class| {
+        DICTATION_SIZE[0],
+        egui::Align2::RIGHT_BOTTOM,
+        egui::vec2(-16.0, -112.0),
+        move |ui| {
             ui.ctx().request_repaint_after(Duration::from_millis(60));
             let mut s = shared.lock();
             let t = ui.input(|i| i.time) as f32;
@@ -324,7 +332,7 @@ pub fn show_dictation(ctx: &egui::Context, shared: &DictationShared) {
 /// início/níveis/aviso; a caixinha devolve o clique em `stop`.
 #[derive(Default)]
 pub struct RecordingState {
-    pub started: Option<std::time::Instant>,
+    pub started: Option<web_time::Instant>,
     pub mic_level: f32,
     pub sys_level: f32,
     /// Por que a saída do sistema não está sendo gravada (só microfone).
@@ -378,10 +386,14 @@ pub fn show_recording(ctx: &egui::Context, shared: &RecordingShared) {
         .with_always_on_top()
         .with_taskbar(false);
     let shared = shared.clone();
-    ctx.show_viewport_deferred(
-        egui::ViewportId::from_hash_of("recording-overlay"),
+    crate::ui::show_floating(
+        ctx,
+        "recording-overlay",
         builder,
-        move |ui, _class| {
+        RECORDING_SIZE[0],
+        egui::Align2::RIGHT_BOTTOM,
+        egui::vec2(-16.0, -112.0),
+        move |ui| {
             ui.ctx().request_repaint_after(Duration::from_millis(60));
             let mut s = shared.lock();
             let t = ui.input(|i| i.time) as f32;

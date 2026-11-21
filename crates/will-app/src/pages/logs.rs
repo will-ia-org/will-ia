@@ -453,7 +453,7 @@ impl LogsPage {
             if ui.button(tr("Abrir pasta de logs")).clicked() {
                 if cx.snap.server_is_local {
                     let dir = cx.snap.logs_dir.clone();
-                    if let Err(e) = will_platform::open_path(&dir) {
+                    if let Err(e) = crate::platform::open_path(&dir) {
                         cx.toasts.error(e);
                     }
                 } else {

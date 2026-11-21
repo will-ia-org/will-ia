@@ -569,3 +569,37 @@ pub async fn restore(
         "manifest": m,
     })))
 }
+
+/// Há quem religue o servidor quando ele sai? O LaunchAgent do instalador
+/// (`KeepAlive`) e a unit do systemd (`Restart=always`) religam; aberto à mão,
+/// pelo autostart do desktop Linux ou pela chave Run do Windows, ninguém religa.
+pub fn supervised() -> bool {
+    // launchd põe o rótulo do job em `XPC_SERVICE_NAME`; systemd, um `INVOCATION_ID`.
+    std::env::var("XPC_SERVICE_NAME").is_ok_and(|v| v.starts_with("dev.will.will-ia"))
+        || std::env::var_os("INVOCATION_ID").is_some()
+}
+
+/// `POST /api/system/restart` (admin): encerra o servidor para o supervisor
+/// subi-lo de novo — é como as mudanças de rede (escuta, TLS, porta) passam a
+/// valer. Sem supervisor responde 409 em vez de derrubar o servidor de vez.
+pub async fn restart(State(state): State<App>) -> ApiResult<Value> {
+    if !supervised() {
+        return Err(ApiError(
+            axum::http::StatusCode::CONFLICT,
+            "este servidor não tem quem o religue (não foi iniciado pelo serviço do sistema); feche e abra o will-ia manualmente".into(),
+        ));
+    }
+    state.bus.log(
+        "warn",
+        "server",
+        "reinício pedido pela interface; o serviço volta em instantes".to_string(),
+    );
+    // encerra depois de responder; o LaunchAgent/systemd sobe de novo
+    let cancel = state.cancel.clone();
+    tokio::spawn(async move {
+        tokio::time::sleep(std::time::Duration::from_millis(800)).await;
+        tracing::warn!("reiniciando a pedido da interface");
+        cancel.cancel();
+    });
+    Ok(Json(json!({ "ok": true, "restart": true })))
+}

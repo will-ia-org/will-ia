@@ -1,13 +1,30 @@
 //! Controle de voz no app: sessão Realtime + áudio cpal + indicador flutuante.
 
 pub mod audio;
+#[cfg(target_arch = "wasm32")]
+pub mod audio_web;
 pub mod call_recorder;
 pub mod clip_player;
 pub mod overlay;
 
 use crate::i18n::{tr, trf};
-use crate::service::{Service, Task};
+use crate::service::{BgTask, Service, Task};
+#[cfg(not(target_arch = "wasm32"))]
 use audio::AudioPipeline;
+#[cfg(target_arch = "wasm32")]
+use audio_web::AudioPipeline;
+
+/// Gravador do ditado ("Falar"): cpal no desktop, Web Audio no navegador.
+#[cfg(not(target_arch = "wasm32"))]
+pub use audio::Recorder;
+#[cfg(target_arch = "wasm32")]
+pub use audio_web::Recorder;
+
+/// Player das gravações: cpal no desktop, Web Audio no navegador.
+#[cfg(target_arch = "wasm32")]
+pub use audio_web::ClipPlayer;
+#[cfg(not(target_arch = "wasm32"))]
+pub use clip_player::ClipPlayer;
 use overlay::Shared;
 use serde_json::Value;
 use std::sync::Arc;
@@ -35,7 +52,7 @@ pub struct VoiceController {
     level_smooth: f32,
     /// Mensagens de controle da sessão (`transcript`, `state`) vindas do `RealtimeManager`.
     ctrl_rx: Option<std::sync::mpsc::Receiver<Value>>,
-    ctrl_task: Option<tokio::task::JoinHandle<()>>,
+    ctrl_task: Option<BgTask>,
     last_stats: (u64, u64),
 }
 
@@ -71,13 +88,13 @@ impl VoiceController {
     }
 
     fn subscribe_controls(&mut self, svc: &Arc<Service>, m: &Arc<VoiceLink>) {
-        if let Some(t) = self.ctrl_task.take() {
+        if let Some(mut t) = self.ctrl_task.take() {
             t.abort();
         }
         let (tx, rx) = std::sync::mpsc::channel();
         let mut sub = m.subscribe_audio_out();
         let weak = Arc::downgrade(svc);
-        let task = svc.rt().spawn(async move {
+        let fut = async move {
             loop {
                 match sub.recv().await {
                     Ok(will_client::AudioOut::Control(v)) => {
@@ -93,7 +110,11 @@ impl VoiceController {
                     Err(_) => break,
                 }
             }
-        });
+        };
+        #[cfg(not(target_arch = "wasm32"))]
+        let task = BgTask::spawn_on(svc.rt(), fut);
+        #[cfg(target_arch = "wasm32")]
+        let task = BgTask::spawn(fut);
         self.ctrl_rx = Some(rx);
         self.ctrl_task = Some(task);
     }
@@ -159,7 +180,7 @@ impl VoiceController {
             return;
         }
         let out = self.output_device.clone();
-        std::thread::spawn(move || {
+        crate::platform::spawn_thread(move || {
             if let Err(e) = audio::play_cue(out.as_deref(), notes, 0.2) {
                 tracing::debug!(error = %e, "sinal sonoro falhou");
             }
@@ -173,7 +194,7 @@ impl VoiceController {
             self.cue(audio::CUE_OFF);
         }
         self.ptt_down = false;
-        if let Some(t) = self.ctrl_task.take() {
+        if let Some(mut t) = self.ctrl_task.take() {
             t.abort();
         }
         self.ctrl_rx = None;
@@ -190,7 +211,7 @@ impl VoiceController {
         let was_active = self.session_active || self.pipeline.is_some();
         self.pipeline = None;
         self.ptt_down = false;
-        if let Some(t) = self.ctrl_task.take() {
+        if let Some(mut t) = self.ctrl_task.take() {
             t.abort();
         }
         self.ctrl_rx = None;
@@ -306,6 +327,13 @@ impl VoiceController {
                 self.state = "stopped".into();
                 out = Some(r.map(|_| tr("Sessão de voz encerrada.").into()));
             }
+        }
+        // No navegador o microfone abre depois (pedido de permissão): o erro
+        // dele chega aqui, não no `start`.
+        #[cfg(target_arch = "wasm32")]
+        if let Some(e) = self.pipeline.as_ref().and_then(|p| p.take_error()) {
+            self.last_error = Some(e.clone());
+            out = Some(Err(e));
         }
         self.drain_controls();
         let stats = self.audio_stats();

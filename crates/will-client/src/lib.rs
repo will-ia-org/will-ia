@@ -5,8 +5,17 @@
 //! O app nunca fala com o `AppState` diretamente: tudo passa por aqui, em
 //! loopback ou remoto (`docs/26`, ADR-0019).
 
+#[cfg(not(target_arch = "wasm32"))]
 pub mod voice;
+#[cfg(target_arch = "wasm32")]
+#[path = "voice_web.rs"]
+pub mod voice;
+#[cfg(target_arch = "wasm32")]
+mod web;
+#[cfg(target_arch = "wasm32")]
+pub use web::{sleep, EventsHandle};
 
+#[cfg(not(target_arch = "wasm32"))]
 use futures::StreamExt;
 use serde_json::{json, Value};
 use std::sync::Arc;
@@ -39,13 +48,16 @@ pub struct Client {
     token: String,
     http: reqwest::Client,
     /// Config rustls para o WebSocket (mesma política do HTTP).
+    #[cfg(not(target_arch = "wasm32"))]
     ws_tls: Option<Arc<rustls::ClientConfig>>,
 }
 
 /// Verificador que aceita qualquer certificado (modo inseguro explícito).
+#[cfg(not(target_arch = "wasm32"))]
 #[derive(Debug)]
 struct NoVerify(rustls::crypto::CryptoProvider);
 
+#[cfg(not(target_arch = "wasm32"))]
 impl rustls::client::danger::ServerCertVerifier for NoVerify {
     fn verify_server_cert(
         &self,
@@ -88,6 +100,7 @@ impl rustls::client::danger::ServerCertVerifier for NoVerify {
     }
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 fn ws_tls_config(tls: &TlsOptions) -> Option<Arc<rustls::ClientConfig>> {
     let provider = rustls::crypto::ring::default_provider();
     if tls.insecure {
@@ -117,6 +130,7 @@ fn ws_tls_config(tls: &TlsOptions) -> Option<Arc<rustls::ClientConfig>> {
 }
 
 /// SHA-256 (hex) do primeiro certificado de um PEM, para conferir com `/api/health`.
+#[cfg(not(target_arch = "wasm32"))]
 pub fn pem_fingerprint(pem: &str) -> Option<String> {
     use sha2::Digest;
     let mut reader = std::io::Cursor::new(pem.as_bytes());
@@ -124,6 +138,12 @@ pub fn pem_fingerprint(pem: &str) -> Option<String> {
     let mut h = sha2::Sha256::new();
     h.update(cert.as_ref());
     Some(h.finalize().iter().map(|b| format!("{b:02x}")).collect())
+}
+
+/// No navegador quem valida o certificado é o próprio navegador.
+#[cfg(target_arch = "wasm32")]
+pub fn pem_fingerprint(_pem: &str) -> Option<String> {
+    None
 }
 
 /// Resultado padrão: corpo JSON ou mensagem de erro legível (campo `error`
@@ -147,7 +167,18 @@ impl Client {
         Self::with_tls(base, token, &TlsOptions::default())
     }
 
+    /// No navegador o TLS é do próprio navegador: `tls` é ignorado.
+    #[cfg(target_arch = "wasm32")]
+    pub fn with_tls(base: impl Into<String>, token: impl Into<String>, _tls: &TlsOptions) -> Self {
+        Self {
+            base: base.into().trim_end_matches('/').to_string(),
+            token: token.into(),
+            http: reqwest::Client::new(),
+        }
+    }
+
     /// Como [`new`](Self::new), com política de certificado para `https://`.
+    #[cfg(not(target_arch = "wasm32"))]
     pub fn with_tls(base: impl Into<String>, token: impl Into<String>, tls: &TlsOptions) -> Self {
         let mut b = reqwest::Client::builder()
             .no_proxy()
@@ -177,6 +208,7 @@ impl Client {
     }
 
     /// Abre um WebSocket na API respeitando a política TLS do cliente.
+    #[cfg(not(target_arch = "wasm32"))]
     pub async fn connect_ws(
         &self,
         url: &str,
@@ -216,6 +248,14 @@ impl Client {
 
     /// Verdadeiro quando o servidor é esta máquina (loopback): a UI pode
     /// oferecer "abrir pasta" e outras ações locais.
+    #[cfg(target_arch = "wasm32")]
+    pub fn is_local(&self) -> bool {
+        // Mesmo servido por `localhost`, a página não alcança o disco da máquina.
+        false
+    }
+
+    /// Verdadeiro quando o servidor é esta máquina (loopback).
+    #[cfg(not(target_arch = "wasm32"))]
     pub fn is_local(&self) -> bool {
         let host = self
             .base
@@ -518,6 +558,11 @@ impl Client {
     pub async fn kb_open(&self) -> ApiResult {
         self.post("kb/open", None).await
     }
+    /// Reinicia o servidor (admin): ele sai e o serviço do sistema o religa.
+    /// 409 quando não há quem religue.
+    pub async fn server_restart(&self) -> ApiResult {
+        self.post("system/restart", None).await
+    }
     pub async fn kb_mcp_json(&self) -> ApiResult {
         self.get("kb/mcp-json").await
     }
@@ -701,6 +746,15 @@ impl Client {
     }
     /// Baixa o `.zip` do backup direto para `dest` (streaming; com a base de
     /// conhecimento ele passa de GBs). Devolve os bytes gravados.
+    #[cfg(target_arch = "wasm32")]
+    pub async fn backup_to_file(
+        &self,
+        _dest: std::path::PathBuf,
+        _opts: BackupOptions,
+    ) -> Result<u64, String> {
+        Err(NO_DISK.into())
+    }
+    #[cfg(not(target_arch = "wasm32"))]
     pub async fn backup_to_file(
         &self,
         dest: std::path::PathBuf,
@@ -766,6 +820,11 @@ impl Client {
     }
     /// Sobe um `.zip` de backup (streaming do disco); o serviço valida, agenda e
     /// reinicia. `vault_key`: chave do cofre da máquina de origem (vazia = tenta a daqui).
+    #[cfg(target_arch = "wasm32")]
+    pub async fn restore_file(&self, _path: std::path::PathBuf, _vault_key: String) -> ApiResult {
+        Err(NO_DISK.into())
+    }
+    #[cfg(not(target_arch = "wasm32"))]
     pub async fn restore_file(&self, path: std::path::PathBuf, vault_key: String) -> ApiResult {
         use tokio::io::AsyncReadExt;
         let file = tokio::fs::File::open(&path)
@@ -813,6 +872,15 @@ impl Client {
     }
     /// Sobe o WAV estéreo gravado pelo app (streaming do disco). `query`:
     /// `started_at`, `with`, `subject`, `has_system`.
+    #[cfg(target_arch = "wasm32")]
+    pub async fn upload_recording(
+        &self,
+        _path: std::path::PathBuf,
+        _query: Vec<(&'static str, String)>,
+    ) -> ApiResult {
+        Err(NO_DISK.into())
+    }
+    #[cfg(not(target_arch = "wasm32"))]
     pub async fn upload_recording(
         &self,
         path: std::path::PathBuf,
@@ -1112,6 +1180,7 @@ impl Client {
         mut on: impl FnMut(VoiceRead) + Send,
     ) -> Result<u32, String> {
         use std::sync::atomic::Ordering;
+        #[cfg_attr(target_arch = "wasm32", allow(unused_mut))]
         let mut resp = self
             .http
             .post(self.url("voice/read"))
@@ -1139,11 +1208,24 @@ impl Client {
             .unwrap_or(24_000);
         on(VoiceRead::Rate(rate));
         let mut got = 0usize;
+        // No navegador a resposta é lida como fluxo (`fetch` não tem `chunk`).
+        #[cfg(target_arch = "wasm32")]
+        let mut body = {
+            use futures::StreamExt;
+            resp.bytes_stream().boxed_local()
+        };
         loop {
             if cancel.load(Ordering::Relaxed) {
                 return Err("cancelado".into());
             }
-            match resp.chunk().await {
+            #[cfg(target_arch = "wasm32")]
+            let next = {
+                use futures::StreamExt;
+                body.next().await.transpose()
+            };
+            #[cfg(not(target_arch = "wasm32"))]
+            let next = resp.chunk().await;
+            match next {
                 Ok(Some(b)) => {
                     got += b.len();
                     on(VoiceRead::Pcm(b));
@@ -1223,6 +1305,7 @@ impl Client {
     /// Mantém o WS `/api/events` aberto, reconectando com recuo (1 s → 10 s).
     /// Cada evento vai para `sink`; `wake` é chamado depois de cada entrega
     /// (o app usa para `request_repaint`). Termina quando `sink` falha.
+    #[cfg(not(target_arch = "wasm32"))]
     pub fn spawn_events(
         self: &Arc<Self>,
         rt: &tokio::runtime::Handle,
@@ -1321,6 +1404,22 @@ fn percent_encode(s: &str) -> String {
     out
 }
 
+/// O navegador não lê nem grava arquivos por caminho.
+#[cfg(target_arch = "wasm32")]
+const NO_DISK: &str = "indisponível no navegador (precisa de acesso a arquivos)";
+
+#[cfg(target_arch = "wasm32")]
+fn transport_error(e: &reqwest::Error) -> String {
+    if e.is_timeout() {
+        "tempo esgotado".to_string()
+    } else if e.is_request() {
+        "sem conexão com o servidor".to_string()
+    } else {
+        e.to_string()
+    }
+}
+
+#[cfg(not(target_arch = "wasm32"))]
 fn transport_error(e: &reqwest::Error) -> String {
     if e.is_connect() {
         "sem conexão com o servidor".to_string()

@@ -3,7 +3,8 @@
 
 use crate::i18n::{tr, trf};
 use egui::{Color32, RichText, Ui};
-use std::time::{Duration, Instant};
+use std::time::Duration;
+use web_time::Instant;
 
 /// Largura máxima do conteúdo das páginas de formulário (centralizado).
 pub const CONTENT_MAX_WIDTH: f32 = 1040.0;
@@ -1432,4 +1433,43 @@ pub fn heading_help(ui: &mut Ui, title: &str, description: Option<&str>, help: &
         ui.add(egui::Label::new(RichText::new(d).weak().size(13.0)).wrap());
     }
     ui.add_space(2.0);
+}
+
+/// Caixinha flutuante (voz, "Falar", gravação, aprovações). No desktop é uma
+/// janela própria do sistema, sempre no topo (`builder`). No navegador não há
+/// janelas do sistema, e o egui embutiria o viewport como uma janela genérica
+/// fora de lugar: lá ela vira um painel ancorado no canto `corner` da página,
+/// com a largura `width` e o deslocamento `offset`.
+pub fn show_floating(
+    ctx: &egui::Context,
+    id: &'static str,
+    builder: egui::ViewportBuilder,
+    width: f32,
+    corner: egui::Align2,
+    offset: egui::Vec2,
+    add: impl Fn(&mut Ui) + Send + Sync + 'static,
+) {
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        let _ = (width, corner, offset);
+        ctx.show_viewport_deferred(
+            egui::ViewportId::from_hash_of(id),
+            builder,
+            move |ui, _class| add(ui),
+        );
+    }
+    #[cfg(target_arch = "wasm32")]
+    {
+        let _ = builder;
+        egui::Area::new(egui::Id::unique(("floating", id)))
+            .order(egui::Order::Foreground)
+            .anchor(corner, offset)
+            .show(ctx, |ui| {
+                ui.set_width(width);
+                // Uma `Area` nasce com altura máxima de 400 pt; o conteúdo pode
+                // usar a página inteira (senão ele é cortado ou ganha rolagem).
+                ui.set_max_height((ctx.content_rect().height() - 2.0 * offset.y.abs()).max(120.0));
+                add(ui);
+            });
+    }
 }

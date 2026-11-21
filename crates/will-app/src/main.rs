@@ -11,16 +11,28 @@
 #![cfg_attr(all(windows, not(debug_assertions)), windows_subsystem = "windows")]
 
 mod app;
+#[cfg(not(target_arch = "wasm32"))]
 mod app_ipc;
 mod help;
+#[cfg(not(target_arch = "wasm32"))]
+mod hotkey;
+#[cfg(target_arch = "wasm32")]
+#[path = "web/hotkey.rs"]
 mod hotkey;
 mod i18n;
+#[cfg(not(target_arch = "wasm32"))]
 mod icon;
 mod icons;
+#[cfg(not(target_arch = "wasm32"))]
 mod logging;
+#[cfg(not(target_arch = "wasm32"))]
+mod oauth_cb;
+#[cfg(target_arch = "wasm32")]
+#[path = "web/oauth_cb.rs"]
 mod oauth_cb;
 mod pages;
 mod permissions;
+mod platform;
 mod profiles;
 mod screens;
 mod service;
@@ -29,8 +41,17 @@ mod ui;
 mod ui_prefs;
 mod voice;
 
+/// App web (`docs/33`): o navegador chama `main` ao carregar o WASM; a
+/// interface é desenhada no `<canvas id="will-ia">` da página.
+#[cfg(target_arch = "wasm32")]
+fn main() {
+    app::run_web();
+}
+
+#[cfg(not(target_arch = "wasm32"))]
 use clap::{Parser, Subcommand};
 
+#[cfg(not(target_arch = "wasm32"))]
 #[derive(Parser)]
 #[command(
     name = "will-ia-app",
@@ -57,6 +78,7 @@ struct Cli {
     profile: Option<String>,
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 #[derive(Subcommand)]
 enum Cmd {
     /// Pede ao app em execução que mostre a janela
@@ -71,6 +93,7 @@ enum Cmd {
     },
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 fn main() -> anyhow::Result<()> {
     let cli = Cli::parse();
     match cli.cmd {

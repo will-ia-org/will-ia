@@ -11,10 +11,64 @@ use crate::voice::VoiceController;
 use serde_json::Value;
 use std::sync::mpsc::Receiver;
 use std::sync::Arc;
-use std::time::{Duration, Instant};
+use std::time::Duration;
+use web_time::Instant;
 use will_client::ClientEvent;
 use will_core::{Event, Module, Principal, Settings};
 
+/// Arranque no navegador (`docs/33`): sem snapshot bloqueante. Com um token
+/// guardado o WS de eventos conecta e o app ressincroniza sozinho
+/// (`ClientEvent::Connected`); sem token abre a tela de entrada com o
+/// endereço do próprio servidor já preenchido.
+#[cfg(target_arch = "wasm32")]
+pub fn run_web() {
+    use eframe::wasm_bindgen::JsCast as _;
+    std::panic::set_hook(Box::new(|info| {
+        web_sys::console::error_1(&format!("will-ia: {info}").into());
+    }));
+    let (profile, prefill) = match crate::profiles::pick_web() {
+        Some(p) if !p.token.is_empty() => (p, None),
+        Some(p) => (Profile::none(), Some(p)),
+        None => (Profile::none(), None),
+    };
+    let Ok((svc, ev_rx, cmd_rx)) = Service::new(profile) else {
+        return;
+    };
+    let snap = if svc.has_profile() {
+        Snapshot {
+            api_url: svc.api().base_url().to_string(),
+            ..Default::default()
+        }
+    } else {
+        Snapshot::default()
+    };
+    wasm_bindgen_futures::spawn_local(async move {
+        let canvas = web_sys::window()
+            .and_then(|w| w.document())
+            .and_then(|d| d.get_element_by_id("will-ia"))
+            .and_then(|e| e.dyn_into::<web_sys::HtmlCanvasElement>().ok());
+        let Some(canvas) = canvas else {
+            web_sys::console::error_1(&"will-ia: <canvas id=\"will-ia\"> não encontrado".into());
+            return;
+        };
+        let result = eframe::WebRunner::new()
+            .start(
+                canvas,
+                eframe::WebOptions::default(),
+                Box::new(move |cc| {
+                    Ok(Box::new(WillApp::new(
+                        cc, svc, snap, ev_rx, cmd_rx, true, prefill,
+                    )))
+                }),
+            )
+            .await;
+        if let Err(e) = result {
+            web_sys::console::error_1(&e);
+        }
+    });
+}
+
+#[cfg(not(target_arch = "wasm32"))]
 pub fn run(profile: Option<Profile>, visible: bool) -> anyhow::Result<()> {
     // Perfil sem token (nunca entrou, ou saiu do perfil): nada responde nele,
     // então o app abre na tela de entrada com o formulário já preenchido.
@@ -67,6 +121,7 @@ pub fn run(profile: Option<Profile>, visible: bool) -> anyhow::Result<()> {
 
 /// Lê `/api/status`, `/api/settings` e `/api/approvals` de uma vez (bloqueante;
 /// só no arranque). Falhas viram snapshot vazio com `connected = false`.
+#[cfg(not(target_arch = "wasm32"))]
 fn initial_snapshot(svc: &Arc<Service>) -> Snapshot {
     let api = svc.api();
     let api2 = api.clone();
@@ -207,7 +262,11 @@ impl WillApp {
             voice,
             hotkeys,
             window_visible: visible,
-            last_status_refresh: Instant::now() - Duration::from_secs(60),
+            last_status_refresh: {
+                // No navegador o relógio começa em zero: subtrair pode estourar.
+                let now = Instant::now();
+                now.checked_sub(Duration::from_secs(60)).unwrap_or(now)
+            },
             theme_applied: None,
             hotkey_applied: None,
             dictation_hotkey_applied: None,
@@ -351,6 +410,7 @@ impl WillApp {
     /// admin; para os demais a chamada falha em silêncio e o app não envia nada).
     /// Também sobe o remetente na primeira vez (precisa do runtime do `Service`).
     fn refresh_telemetry(&mut self) {
+        #[cfg(not(target_arch = "wasm32"))]
         if let Some(h) = crate::logging::telemetry() {
             let h = h.clone();
             let dir = crate::logging::logs_dir();
@@ -412,7 +472,7 @@ impl WillApp {
                 // servidor nesta mesma máquina ele já notificou (tem desktop);
                 // só um servidor remoto precisa do app para isso.
                 if !self.window_visible && !self.snap.server_is_local {
-                    will_platform::notify(title, body);
+                    crate::platform::notify(title, body);
                 }
             }
             Event::CostRecorded {
@@ -620,7 +680,10 @@ impl WillApp {
             if let Some(r) = t.take() {
                 self.telemetry_task = None;
                 match r {
+                    #[cfg(not(target_arch = "wasm32"))]
                     Ok(v) => crate::logging::apply_client_config(&v),
+                    #[cfg(target_arch = "wasm32")]
+                    Ok(_) => {}
                     Err(e) => {
                         tracing::debug!(error = %e, "telemetria: config do servidor indisponível")
                     }

@@ -37,28 +37,28 @@ struct RemoteFiles {
 enum LiveItem {
     Say {
         text: String,
-        at: std::time::Instant,
+        at: web_time::Instant,
     },
     Tool {
         name: String,
         input: String,
         /// `(prévia, falhou)` quando o resultado chegou.
         result: Option<(String, bool)>,
-        at: std::time::Instant,
-        done_at: Option<std::time::Instant>,
+        at: web_time::Instant,
+        done_at: Option<web_time::Instant>,
     },
     Status {
         text: String,
-        at: std::time::Instant,
+        at: web_time::Instant,
     },
     Think {
         text: String,
-        at: std::time::Instant,
+        at: web_time::Instant,
     },
     /// Mensagem do usuário aceita no meio do turno (steering).
     User {
         text: String,
-        at: std::time::Instant,
+        at: web_time::Instant,
     },
 }
 
@@ -68,7 +68,7 @@ struct LiveTurn {
     items: Vec<LiveItem>,
     /// Texto em streaming ainda não fechado em bloco (`TextDelta`).
     text: String,
-    started: Option<std::time::Instant>,
+    started: Option<web_time::Instant>,
     /// Duração total quando o turno terminou (cartão vira faixa recolhida).
     finished_secs: Option<u64>,
 }
@@ -79,7 +79,7 @@ impl LiveTurn {
         if !self.text.trim().is_empty() {
             self.items.push(LiveItem::Say {
                 text: std::mem::take(&mut self.text),
-                at: std::time::Instant::now(),
+                at: web_time::Instant::now(),
             });
         } else {
             self.text.clear();
@@ -87,7 +87,7 @@ impl LiveTurn {
     }
 
     fn push(&mut self, d: &EngineDelta) {
-        let now = std::time::Instant::now();
+        let now = web_time::Instant::now();
         match d {
             EngineDelta::TextDelta { text } => self.text.push_str(text),
             // Bloco completo: substitui o streaming do mesmo trecho.
@@ -184,7 +184,7 @@ struct Echo {
     turn_id: Option<String>,
     /// Instante em que o servidor aceitou: uma lista carregada depois disso já
     /// contém o turno, então o eco pode sair mesmo sem casar o id.
-    acked_at: Option<std::time::Instant>,
+    acked_at: Option<web_time::Instant>,
     /// Falha no envio: o balão fica com aviso e botões "Reenviar"/"Descartar".
     error: Option<String>,
 }
@@ -202,7 +202,7 @@ fn turn_prompt_display(t: &Value) -> String {
 /// confirmação ainda — por um turno com o mesmo texto iniciado depois do envio
 /// (a lista pode ter sido recarregada por `TurnStarted` antes do POST voltar).
 /// Ecos com erro ficam até o usuário reenviar ou descartar.
-fn reconcile_echoes(echoes: &mut Vec<Echo>, turns: &[Value], loaded_at: std::time::Instant) {
+fn reconcile_echoes(echoes: &mut Vec<Echo>, turns: &[Value], loaded_at: web_time::Instant) {
     echoes.retain(|e| {
         if e.error.is_some() {
             return true;
@@ -352,7 +352,7 @@ pub struct ThreadsPage {
     show_archived: bool,
     focus_input: bool,
     /// Ditado (botão "Falar", um clique abre e outro envia): gravador ativo e transcrição em voo.
-    dictation: Option<crate::voice::audio::Recorder>,
+    dictation: Option<crate::voice::Recorder>,
     /// Thread em que o "Falar" foi pressionado: a transcrição vai para ELA,
     /// mesmo que o usuário abra outra thread enquanto o áudio é transcrito.
     dictation_for: Option<ThreadId>,
@@ -378,7 +378,7 @@ pub struct ThreadsPage {
     loading_events: HashMap<String, Task<Value>>,
     /// "Interromper" clicado e ainda sem o servidor fechar o turno (botão vira
     /// "interrompendo…"); expira sozinho em 20 s.
-    interrupting: HashMap<ThreadId, std::time::Instant>,
+    interrupting: HashMap<ThreadId, web_time::Instant>,
     /// Triggers por thread alvo (id → "nome (fonte)"), para o ícone de raio.
     triggers: Loader<Value>,
     trigger_map: HashMap<String, Vec<String>>,
@@ -964,7 +964,7 @@ impl ThreadsPage {
                 let l = self.live.entry(*thread_id).or_default();
                 l.turn_id = Some(turn_id.to_string());
                 if l.started.is_none() {
-                    l.started = Some(std::time::Instant::now());
+                    l.started = Some(web_time::Instant::now());
                 }
                 // O turno já está gravado: recarrega a lista para o balão do
                 // usuário aparecer antes da resposta (e não só no fim do turno).
@@ -990,13 +990,13 @@ impl ThreadsPage {
                 };
                 let l = self.live.entry(*thread_id).or_default();
                 if l.started.is_none() {
-                    l.started = Some(std::time::Instant::now());
+                    l.started = Some(web_time::Instant::now());
                 }
                 if *mid_turn {
                     l.flush_text();
                     l.items.push(LiveItem::User {
                         text: steer_text,
-                        at: std::time::Instant::now(),
+                        at: web_time::Instant::now(),
                     });
                 }
                 if self.selected == Some(*thread_id) {
@@ -1279,7 +1279,7 @@ impl ThreadsPage {
                             .get("turn_id")
                             .and_then(|x| x.as_str())
                             .map(str::to_string);
-                        e.acked_at = Some(std::time::Instant::now());
+                        e.acked_at = Some(web_time::Instant::now());
                     }
                     // A lista é recarregada para trocar o eco pelo turno real.
                     if self.selected == Some(tid) {
@@ -1409,14 +1409,14 @@ impl ThreadsPage {
     /// Abre o microfone para a thread `id` (ditado de um clique).
     fn start_dictation(&mut self, cx: &mut Cx, id: ThreadId, title: String) {
         let dev = cx.snap.settings.realtime.input_device.clone();
-        let rec = crate::voice::audio::Recorder::start(dev.as_deref());
+        let rec = crate::voice::Recorder::start(dev.as_deref());
         if let Some(e) = &rec.error {
             cx.toasts.error(e.clone());
             return;
         }
         *self.dictation_overlay.lock() = crate::voice::overlay::DictationState {
             title,
-            started: Some(std::time::Instant::now()),
+            started: Some(web_time::Instant::now()),
             level: Some(rec.level_handle()),
             ..Default::default()
         };
@@ -1568,11 +1568,9 @@ impl ThreadsPage {
         let local = cx.snap.server_is_local;
         if !local {
             // Remoto: os bytes sobem pela API; recusa antes de mexer no estado.
-            let too_big = files.iter().find(|p| {
-                std::fs::metadata(p)
-                    .map(|m| m.len() > UPLOAD_MAX_BYTES)
-                    .unwrap_or(false)
-            });
+            let too_big = files
+                .iter()
+                .find(|p| crate::platform::file_size(p).is_some_and(|n| n > UPLOAD_MAX_BYTES));
             if let Some(p) = too_big {
                 let name = p.file_name().and_then(|n| n.to_str()).unwrap_or("arquivo");
                 cx.toasts.error(trf(
@@ -1614,7 +1612,7 @@ impl ThreadsPage {
                         .and_then(|n| n.to_str())
                         .unwrap_or("arquivo")
                         .to_string();
-                    let bytes = tokio::fs::read(&p)
+                    let bytes = crate::platform::read(&p)
                         .await
                         .map_err(|e| format!("{}: {e}", p.display()))?;
                     let v = c.upload(&name, bytes).await?;
@@ -1669,7 +1667,7 @@ impl ThreadsPage {
                 .svc
                 .call(move |c| async move { c.reset_thread(&sid).await }),
             "Interromper" => {
-                self.interrupting.insert(id, std::time::Instant::now());
+                self.interrupting.insert(id, web_time::Instant::now());
                 cx.svc
                     .call(move |c| async move { c.interrupt_thread(&sid).await })
             }
@@ -2432,18 +2430,13 @@ impl ThreadsPage {
         }
 
         // arrastar-e-soltar: arquivos soltos na janela viram anexos pendentes
-        let (dropped, hovering) = ui.ctx().input(|i| {
-            (
-                i.raw
-                    .dropped_files
-                    .iter()
-                    .map(|f| f.path().to_path_buf())
-                    .collect::<Vec<_>>(),
-                !i.raw.hovered_files.is_empty(),
-            )
-        });
-        for p in dropped {
-            if p.is_file() && !self.pending_files.contains(&p) {
+        let (dropped, hovering) = ui
+            .ctx()
+            .input(|i| (i.raw.dropped_files.clone(), !i.raw.hovered_files.is_empty()));
+        // No navegador os arquivos do diálogo chegam depois (`take_picked`).
+        let dropped = crate::platform::dropped_paths(ui.ctx(), dropped);
+        for p in dropped.into_iter().chain(crate::platform::take_picked()) {
+            if !self.pending_files.contains(&p) {
                 self.pending_files.push(p);
             }
         }
@@ -2638,9 +2631,8 @@ impl ThreadsPage {
                             )
                             .clicked()
                             {
-                                if let Some(files) = rfd::FileDialog::new()
-                                    .set_title(tr("Anexar arquivos"))
-                                    .pick_files()
+                                if let Some(files) =
+                                    crate::platform::pick_files(ui.ctx(), tr("Anexar arquivos"))
                                 {
                                     for p in files {
                                         if !self.pending_files.contains(&p) {
@@ -2869,7 +2861,7 @@ fn echo_bubble(
                 .and_then(|n| n.to_str())
                 .unwrap_or("arquivo")
                 .to_string();
-            let size = std::fs::metadata(p).map(|m| m.len()).unwrap_or(0);
+            let size = crate::platform::file_size(p).unwrap_or(0);
             json!({
                 "name": name,
                 "mime": guess_mime(p),
@@ -3078,7 +3070,7 @@ fn attachment_view(
     };
     if clicked {
         if local {
-            if let Err(e) = will_platform::open_path(path) {
+            if let Err(e) = crate::platform::open_path(path) {
                 acx.toasts
                     .error(trf("não consegui abrir o arquivo: {}", &[&e]));
             }
@@ -3099,15 +3091,11 @@ fn attachment_view(
                     Some(b) => b.to_vec(),
                     None => c.file_bytes(&p).await?.1,
                 };
-                let dir = std::env::temp_dir().join("will-ia-app");
-                tokio::fs::create_dir_all(&dir)
-                    .await
-                    .map_err(|e| e.to_string())?;
+                let dir = crate::platform::temp_dir()?.join("will-ia-app");
+                crate::platform::create_dir_all(&dir).await?;
                 let dest = dir.join(&name);
-                tokio::fs::write(&dest, bytes)
-                    .await
-                    .map_err(|e| e.to_string())?;
-                will_platform::open_path(&dest)
+                crate::platform::write(&dest, bytes).await?;
+                crate::platform::open_path(&dest)
             }));
         }
     }
@@ -3507,8 +3495,8 @@ fn live_from_events(
     finished_secs: Option<u64>,
 ) -> LiveTurn {
     let now_dt = chrono::Utc::now();
-    let now = std::time::Instant::now();
-    let to_instant = |dt: chrono::DateTime<chrono::Utc>| -> std::time::Instant {
+    let now = web_time::Instant::now();
+    let to_instant = |dt: chrono::DateTime<chrono::Utc>| -> web_time::Instant {
         let back = (now_dt - dt).to_std().unwrap_or_default();
         now.checked_sub(back).unwrap_or(now)
     };
@@ -3610,7 +3598,7 @@ fn full_row_click(
 }
 
 /// Opacidade de entrada (0→1 em ~280 ms) a partir do instante em que o item chegou.
-fn enter_alpha(at: std::time::Instant) -> f32 {
+fn enter_alpha(at: web_time::Instant) -> f32 {
     (at.elapsed().as_secs_f32() / 0.28).clamp(0.0, 1.0)
 }
 
@@ -4087,7 +4075,7 @@ mod tests {
         e.turn_id = Some("t1".into());
         let mut echoes = vec![e, echo(2, "outra")];
         let turns = vec![turn("t1", "oi", chrono::Utc::now())];
-        reconcile_echoes(&mut echoes, &turns, std::time::Instant::now());
+        reconcile_echoes(&mut echoes, &turns, web_time::Instant::now());
         assert_eq!(echoes.len(), 1);
         assert_eq!(echoes[0].local_id, 2);
     }
@@ -4096,19 +4084,19 @@ mod tests {
     fn reconcile_drops_echo_when_list_is_newer_than_ack() {
         let mut e = echo(1, "oi");
         e.turn_id = Some("t-sumido".into());
-        e.acked_at = Some(std::time::Instant::now() - std::time::Duration::from_secs(1));
+        e.acked_at = Some(web_time::Instant::now() - std::time::Duration::from_secs(1));
         let mut echoes = vec![e];
-        reconcile_echoes(&mut echoes, &[], std::time::Instant::now());
+        reconcile_echoes(&mut echoes, &[], web_time::Instant::now());
         assert!(echoes.is_empty());
         // lista mais velha que a confirmação: o eco fica
         let mut e = echo(1, "oi");
         e.turn_id = Some("t-sumido".into());
-        e.acked_at = Some(std::time::Instant::now());
+        e.acked_at = Some(web_time::Instant::now());
         let mut echoes = vec![e];
         reconcile_echoes(
             &mut echoes,
             &[],
-            std::time::Instant::now() - std::time::Duration::from_secs(5),
+            web_time::Instant::now() - std::time::Duration::from_secs(5),
         );
         assert_eq!(echoes.len(), 1);
     }
@@ -4118,13 +4106,13 @@ mod tests {
         // o POST ainda não voltou, mas `TurnStarted` já recarregou a lista
         let mut echoes = vec![echo(1, "  manda ver  ")];
         let turns = vec![turn("t9", "manda ver", chrono::Utc::now())];
-        reconcile_echoes(&mut echoes, &turns, std::time::Instant::now());
+        reconcile_echoes(&mut echoes, &turns, web_time::Instant::now());
         assert!(echoes.is_empty());
         // mesmo texto, mas turno antigo: não é este envio
         let mut echoes = vec![echo(1, "manda ver")];
         let old = chrono::Utc::now() - chrono::Duration::minutes(10);
         let turns = vec![turn("t0", "manda ver", old)];
-        reconcile_echoes(&mut echoes, &turns, std::time::Instant::now());
+        reconcile_echoes(&mut echoes, &turns, web_time::Instant::now());
         assert_eq!(echoes.len(), 1);
     }
 
@@ -4135,7 +4123,7 @@ mod tests {
         e.turn_id = Some("t1".into());
         let mut echoes = vec![e];
         let turns = vec![turn("t1", "oi", chrono::Utc::now())];
-        reconcile_echoes(&mut echoes, &turns, std::time::Instant::now());
+        reconcile_echoes(&mut echoes, &turns, web_time::Instant::now());
         assert_eq!(echoes.len(), 1);
     }
 

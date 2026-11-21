@@ -264,18 +264,7 @@ impl BackupPage {
                     } else {
                         suggested.clone()
                     };
-                    let mut dlg = rfd::FileDialog::new()
-                        .set_title(tr("Salvar backup"))
-                        .set_file_name(&name)
-                        .add_filter("zip", &["zip"]);
-                    if let Some(home) = std::env::var_os("HOME")
-                        .or_else(|| std::env::var_os("USERPROFILE"))
-                        .map(PathBuf::from)
-                    {
-                        let dl = home.join("Downloads");
-                        dlg = dlg.set_directory(if dl.is_dir() { dl } else { home });
-                    }
-                    if let Some(dest) = dlg.save_file() {
+                    if let Some(dest) = crate::platform::save_zip(tr("Salvar backup"), &name) {
                         let opts = will_client::BackupOptions {
                             browser: self.include_browser,
                             whatsapp: self.include_whatsapp,
@@ -308,7 +297,7 @@ impl BackupPage {
                     );
                     if ui.small_button(tr("Mostrar na pasta")).clicked() {
                         if let Some(dir) = p.parent() {
-                            let _ = open::that(dir);
+                            let _ = crate::platform::open_path(dir);
                         }
                     }
                 });
@@ -387,11 +376,7 @@ impl BackupPage {
                     .add_enabled(!busy, egui::Button::new(tr("Restaurar de um arquivo…")))
                     .clicked()
                 {
-                    if let Some(p) = rfd::FileDialog::new()
-                        .set_title(tr("Escolher backup"))
-                        .add_filter("zip", &["zip"])
-                        .pick_file()
-                    {
+                    if let Some(p) = crate::platform::pick_zip(tr("Escolher backup")) {
                         self.confirm_restore = Some(p);
                     }
                 }

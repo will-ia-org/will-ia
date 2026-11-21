@@ -1,6 +1,6 @@
-//! API local (axum): autenticação por token de sessão e rotas. Não serve UI:
-//! a interface é o app desktop (`will-desktop`), que chama estes handlers
-//! diretamente; a API HTTP atende o modo headless, automação e a segunda instância.
+//! API local (axum): autenticação por token de sessão e rotas, usadas pelo app
+//! desktop, pelo app web (`web_ui`, servido em `/` pela mesma porta), pelo modo
+//! headless e por automações.
 
 pub mod auth;
 pub mod browser;
@@ -160,6 +160,7 @@ pub fn is_admin_path(method: &axum::http::Method, path: &str) -> bool {
         || p == "/browser/launch"
         || p == "/browser/close"
         || p == "/network/cert"
+        || p == "/system/restart"
         || p.starts_with("/telemetry/")
 }
 
@@ -170,14 +171,6 @@ async fn admin_gate(req: Request, next: Next) -> Response {
     } else {
         next.run(req).await
     }
-}
-
-async fn not_found() -> Response {
-    (
-        StatusCode::NOT_FOUND,
-        Json(serde_json::json!({ "error": "não encontrado; a UI é o app desktop (will-ia)" })),
-    )
-        .into_response()
 }
 
 pub fn router(state: App) -> Router {
@@ -192,6 +185,7 @@ pub fn router(state: App) -> Router {
         .route("/users/{id}/sessions", get(users::sessions))
         .route("/status", get(system::status))
         .route("/network/cert", get(system::network_cert))
+        .route("/system/restart", post(system::restart))
         .route(
             "/settings",
             get(system::get_settings).put(system::put_settings),
@@ -394,6 +388,8 @@ pub fn router(state: App) -> Router {
         .layer(axum::middleware::from_fn(crate::api_trace::api_span));
     Router::new()
         .nest("/api", api)
-        .fallback(not_found)
+        // Fora de `/api`: o app web embutido (`docs/33`), sem autenticação —
+        // a página é pública; quem autentica são as chamadas dela à API.
+        .fallback(crate::web_ui::serve)
         .with_state(state)
 }

@@ -1,0 +1,315 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+<meta charset="utf-8">
+<!-- App web do will-ia (docs/33): o mesmo app do desktop, desenhado num <canvas>. -->
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="will-ia">
+<meta name="theme-color" content="#11141a">
+<link rel="icon" type="image/png" href="icon-180.png">
+<link rel="apple-touch-icon" href="icon-180.png">
+<link rel="manifest" href="manifest.webmanifest">
+<title>will-ia</title>
+<style>
+  html, body { margin: 0; height: 100%; overflow: hidden; background: #11141a; overscroll-behavior: none; }
+  canvas { position: fixed; inset: 0; width: 100%; height: 100%; display: block; outline: none; touch-action: none; }
+  #boot { position: fixed; inset: 0; display: flex; align-items: center; justify-content: center;
+          color: #8e96a6; font: 15px -apple-system, system-ui, sans-serif; text-align: center; padding: 24px; }
+</style>
+</head>
+<body>
+<canvas id="will-ia"></canvas>
+<div id="boot">carregando o will-ia…</div>
+<script>
+// Áudio da voz no navegador (docs/33): microfone e alto-falante pela Web Audio,
+// em PCM16 mono 24 kHz, o mesmo formato do WS /api/voice/audio. O app (WASM)
+// chama estas funções por `window.willIaAudio` (crates/will-app/src/voice/audio_web.rs).
+(() => {
+  const RATE = 24000;
+  let ctx = null;        // AudioContext compartilhado (tocar e capturar)
+  let muted = false, level = 0, error = "";
+  let nextTime = 0;      // até quando há fala agendada no alto-falante
+  let playing = [];      // fontes agendadas (para calar na interrupção)
+
+  function context() {
+    if (!ctx) {
+      const AC = window.AudioContext || window.webkitAudioContext;
+      try { ctx = new AC({ sampleRate: RATE }); } catch (_) { ctx = new AC(); }
+    }
+    if (ctx.state === "suspended") ctx.resume().catch(() => {});
+    return ctx;
+  }
+  // iOS/Safari só liberam áudio a partir de um toque: destrava no primeiro gesto.
+  for (const ev of ["pointerdown", "touchend", "keydown"]) {
+    window.addEventListener(ev, () => { try { context(); } catch (_) {} }, { capture: true, passive: true });
+  }
+
+  // Reamostragem linear simples (quando o navegador não aceita 24 kHz no contexto).
+  function resample(input, from, to) {
+    if (from === to) return input;
+    const n = Math.floor(input.length * to / from);
+    const out = new Float32Array(n);
+    const step = from / to;
+    for (let i = 0; i < n; i++) {
+      const p = i * step, i0 = Math.floor(p), i1 = Math.min(i0 + 1, input.length - 1);
+      out[i] = input[i0] + (input[i1] - input[i0]) * (p - i0);
+    }
+    return out;
+  }
+
+  function micError(e) {
+    return (e && e.name === "NotAllowedError")
+      ? "microfone bloqueado: permita o acesso nas configurações do navegador"
+      : "microfone: " + (e && e.message ? e.message : e);
+  }
+
+  // Abre o microfone e entrega blocos Float32 na taxa `rate`. Devolve a função que fecha.
+  async function capture(rate, onFrame) {
+    if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+      throw new Error("o navegador só libera o microfone em HTTPS ou em localhost");
+    }
+    const c = context();
+    const media = await navigator.mediaDevices.getUserMedia({
+      audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true, channelCount: 1 },
+    });
+    const src = c.createMediaStreamSource(media);
+    const node = c.createScriptProcessor(2048, 1, 1);
+    const mute = c.createGain();
+    mute.gain.value = 0; // o processador precisa de um destino, mas sem eco
+    node.onaudioprocess = (e) => onFrame(resample(e.inputBuffer.getChannelData(0), c.sampleRate, rate));
+    src.connect(node);
+    node.connect(mute);
+    mute.connect(c.destination);
+    return () => {
+      node.onaudioprocess = null;
+      try { node.disconnect(); src.disconnect(); mute.disconnect(); } catch (_) {}
+      for (const t of media.getTracks()) t.stop();
+    };
+  }
+
+  function toPcm16(f) {
+    const pcm = new Int16Array(f.length);
+    for (let i = 0; i < f.length; i++) {
+      const s = Math.max(-1, Math.min(1, f[i]));
+      pcm[i] = s < 0 ? s * 0x8000 : s * 0x7fff;
+    }
+    return pcm;
+  }
+
+  function rms(f) {
+    let sum = 0;
+    for (let i = 0; i < f.length; i++) sum += f[i] * f[i];
+    return Math.sqrt(sum / Math.max(1, f.length));
+  }
+
+  let closeVoice = null, voiceOn = false;
+  // Player das gravações: { buf, src, offset, startedAt, playing }.
+  let clip = null;
+  // Ditado ("Falar"): grava em memória e devolve tudo ao parar.
+  let closeRec = null, recOn = false, recChunks = [], recLevel = 0, recError = "";
+
+  window.willIaAudio = {
+    // Sessão de voz: `onPcm(Uint8Array)` recebe PCM16 LE mono 24 kHz.
+    async start(onPcm) {
+      error = "";
+      voiceOn = true;
+      try {
+        const close = await capture(RATE, (f) => {
+          level = rms(f);
+          if (!muted) onPcm(new Uint8Array(toPcm16(f).buffer));
+        });
+        if (voiceOn) closeVoice = close; else close(); // parou antes de o microfone abrir
+      } catch (e) {
+        error = micError(e);
+      }
+    },
+    // Fala do assistente: PCM16 LE mono 24 kHz, tocada em sequência.
+    play(bytes) {
+      const c = context();
+      const pcm = new Int16Array(bytes.buffer, bytes.byteOffset, bytes.byteLength >> 1);
+      if (!pcm.length) return;
+      const buf = c.createBuffer(1, pcm.length, RATE);
+      const ch = buf.getChannelData(0);
+      for (let i = 0; i < pcm.length; i++) ch[i] = pcm[i] / 32768;
+      const src = c.createBufferSource();
+      src.buffer = buf;
+      src.connect(c.destination);
+      const at = Math.max(nextTime, c.currentTime + 0.06);
+      src.start(at);
+      nextTime = at + buf.duration;
+      playing.push(src);
+      src.onended = () => { playing = playing.filter((x) => x !== src); };
+    },
+    // Interrupção: cala o que estava agendado.
+    stopPlayback() {
+      for (const s of playing) { try { s.stop(); } catch (_) {} }
+      playing = [];
+      nextTime = 0;
+    },
+    setMuted(m) { muted = !!m; },
+    level() { return level; },
+    playing() { return !!ctx && nextTime > ctx.currentTime; },
+    // Erro da abertura do microfone (lido uma vez).
+    takeError() { const e = error; error = ""; return e; },
+    stop() {
+      voiceOn = false;
+      this.stopPlayback();
+      if (closeVoice) closeVoice();
+      closeVoice = null;
+      level = 0;
+    },
+
+    // ----- player das gravações: um clipe por vez, com pausa e salto -----
+    // `bytes` = PCM16 LE intercalado (`channels` canais, `rate` Hz).
+    clipLoad(bytes, channels, rate) {
+      this.clipClose();
+      const c = context();
+      const pcm = new Int16Array(bytes.buffer, bytes.byteOffset, bytes.byteLength >> 1);
+      const frames = Math.floor(pcm.length / channels);
+      if (!frames) return false;
+      const buf = c.createBuffer(channels, frames, rate);
+      for (let ch = 0; ch < channels; ch++) {
+        const data = buf.getChannelData(ch);
+        for (let i = 0; i < frames; i++) data[i] = pcm[i * channels + ch] / 32768;
+      }
+      clip = { buf, src: null, offset: 0, startedAt: 0, playing: false };
+      return true;
+    },
+    clipSetPlaying(on) {
+      if (!clip) return;
+      const c = context();
+      if (on && !clip.playing) {
+        if (clip.offset >= clip.buf.duration - 0.01) clip.offset = 0;
+        const src = c.createBufferSource();
+        src.buffer = clip.buf;
+        src.connect(c.destination);
+        src.start(0, clip.offset);
+        clip.startedAt = c.currentTime;
+        clip.src = src;
+        clip.playing = true;
+        const mine = clip;
+        src.onended = () => {
+          if (clip !== mine || mine.src !== src) return; // pausado, saltado ou trocado
+          mine.offset = mine.buf.duration;
+          mine.playing = false;
+          mine.src = null;
+        };
+      } else if (!on && clip.playing) {
+        clip.offset = Math.min(clip.buf.duration, clip.offset + (c.currentTime - clip.startedAt));
+        const src = clip.src;
+        clip.playing = false;
+        clip.src = null;
+        try { src.onended = null; src.stop(); } catch (_) {}
+      }
+    },
+    clipPlaying() { return !!clip && clip.playing; },
+    clipPos() {
+      if (!clip) return 0;
+      if (!clip.playing) return clip.offset;
+      return Math.min(clip.buf.duration, clip.offset + (ctx.currentTime - clip.startedAt));
+    },
+    clipSeek(secs) {
+      if (!clip) return;
+      const was = clip.playing;
+      this.clipSetPlaying(false);
+      clip.offset = Math.max(0, Math.min(clip.buf.duration, secs));
+      if (was) this.clipSetPlaying(true);
+    },
+    clipClose() {
+      if (clip) this.clipSetPlaying(false);
+      clip = null;
+    },
+
+    // ----- ditado: PCM16 LE mono 16 kHz acumulado até `recStop` -----
+    async recStart() {
+      recError = ""; recChunks = []; recLevel = 0; recOn = true;
+      try {
+        const close = await capture(16000, (f) => {
+          let peak = 0;
+          for (let i = 0; i < f.length; i++) peak = Math.max(peak, Math.abs(f[i]));
+          recLevel = Math.max(peak, recLevel * 0.8);
+          recChunks.push(toPcm16(f));
+        });
+        if (recOn) closeRec = close; else close();
+      } catch (e) {
+        recError = micError(e);
+      }
+    },
+    recLevel() { return recLevel; },
+    recError() { return recError; },
+    // Fecha o microfone e devolve o que foi gravado (Uint8Array de PCM16).
+    recStop() {
+      recOn = false;
+      if (closeRec) closeRec();
+      closeRec = null;
+      let n = 0;
+      for (const c of recChunks) n += c.length;
+      const all = new Int16Array(n);
+      let o = 0;
+      for (const c of recChunks) { all.set(c, o); o += c.length; }
+      recChunks = [];
+      recLevel = 0;
+      return new Uint8Array(all.buffer);
+    },
+  };
+})();
+</script>
+<script>
+// O teclado virtual digita num <input> oculto que o egui cria. Sem estes
+// atributos o iPad/iPhone mostra a barra de autocompletar/preenchimento
+// automático (senhas, contatos, sugestões) por cima do app a cada toque.
+(() => {
+  const quiet = (el) => {
+    if (!(el instanceof HTMLInputElement) && !(el instanceof HTMLTextAreaElement)) return;
+    el.setAttribute("autocomplete", "off");
+    el.setAttribute("autocorrect", "off");
+    el.setAttribute("spellcheck", "false");
+    el.setAttribute("data-1p-ignore", "");
+    el.setAttribute("data-lpignore", "true");
+  };
+  document.querySelectorAll("input, textarea").forEach(quiet);
+  new MutationObserver((changes) => {
+    for (const c of changes) {
+      for (const n of c.addedNodes) {
+        quiet(n);
+        if (n.querySelectorAll) n.querySelectorAll("input, textarea").forEach(quiet);
+      }
+    }
+  }).observe(document.documentElement, { childList: true, subtree: true });
+})();
+</script>
+<script>
+// Teclado do iPad/iPhone (o virtual, ou a barra de atalhos de um teclado
+// físico) cobre a parte de baixo da página sem redimensioná-la, e o campo de
+// mensagem fica escondido atrás dele. O <canvas> acompanha a área realmente
+// visível (`visualViewport`), e o app se redesenha nesse espaço.
+(() => {
+  const vv = window.visualViewport;
+  const canvas = document.getElementById("will-ia");
+  if (!vv || !canvas) return;
+  const fit = () => {
+    canvas.style.top = vv.offsetTop + "px";
+    canvas.style.left = vv.offsetLeft + "px";
+    canvas.style.width = vv.width + "px";
+    canvas.style.height = vv.height + "px";
+    canvas.style.bottom = "auto";
+    canvas.style.right = "auto";
+  };
+  vv.addEventListener("resize", fit);
+  vv.addEventListener("scroll", fit);
+  window.addEventListener("orientationchange", fit);
+  fit();
+})();
+</script>
+<script type="module">
+  import init from "./will-ia-app.js";
+  const boot = document.getElementById("boot");
+  init({ module_or_path: "./will-ia-app_bg.wasm" })
+    .then(() => boot.remove())
+    .catch((e) => { boot.textContent = "Não foi possível abrir o will-ia: " + e; });
+</script>
+</body>
+</html>

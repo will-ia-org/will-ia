@@ -48,24 +48,35 @@ pub enum UiCommand {
 }
 
 pub struct Service {
+    /// No navegador o runtime existe só para o tipo (`rt()`): nada roda nele;
+    /// as chamadas vão pelo laço de eventos da página (`call`).
     rt: tokio::runtime::Runtime,
     api: RwLock<Api>,
     profile: RwLock<Profile>,
     ctx: Mutex<Option<egui::Context>>,
     cmd_tx: Sender<UiCommand>,
     ev_tx: Sender<ClientEvent>,
-    events_task: Mutex<Option<tokio::task::JoinHandle<()>>>,
+    events_task: Mutex<Option<EventsTask>>,
 }
+
+/// Laço do WS de eventos em curso (no navegador, o do próprio navegador).
+#[cfg(not(target_arch = "wasm32"))]
+type EventsTask = tokio::task::JoinHandle<()>;
+#[cfg(target_arch = "wasm32")]
+type EventsTask = will_client::EventsHandle;
 
 impl Service {
     /// Cria o runtime e conecta no perfil (o WS de eventos tenta até conseguir).
     pub fn new(
         profile: Profile,
     ) -> anyhow::Result<(Arc<Self>, Receiver<ClientEvent>, Receiver<UiCommand>)> {
+        #[cfg(not(target_arch = "wasm32"))]
         let rt = tokio::runtime::Builder::new_multi_thread()
             .enable_all()
             .thread_name("will-app-rt")
             .build()?;
+        #[cfg(target_arch = "wasm32")]
+        let rt = tokio::runtime::Builder::new_current_thread().build()?;
         let api = Arc::new(client_for(&profile));
         let (cmd_tx, cmd_rx) = channel();
         let (ev_tx, ev_rx) = channel::<ClientEvent>();
@@ -96,7 +107,10 @@ impl Service {
             }
         });
         let api = self.api();
+        #[cfg(not(target_arch = "wasm32"))]
         let task = api.spawn_events(self.rt.handle(), self.ev_tx.clone(), wake);
+        #[cfg(target_arch = "wasm32")]
+        let task = api.spawn_events_local(self.ev_tx.clone(), wake);
         *self.events_task.lock() = Some(task);
     }
 
@@ -151,23 +165,39 @@ impl Service {
         self.rt.handle()
     }
 
-    #[allow(dead_code)]
-    pub fn spawn<F>(&self, fut: F)
-    where
-        F: Future<Output = ()> + Send + 'static,
-    {
-        self.rt.spawn(fut);
-    }
-
     /// Bloqueia a thread da GUI numa chamada ao servidor (só no arranque,
     /// para o snapshot inicial), com limite de tempo.
+    #[cfg(not(target_arch = "wasm32"))]
     pub fn block_on<T>(&self, fut: impl Future<Output = T>) -> Option<T> {
         self.rt
             .block_on(async move { tokio::time::timeout(Duration::from_secs(8), fut).await })
             .ok()
     }
 
+    /// Como o `call` do desktop, no laço de eventos do navegador (uma thread
+    /// só: o futuro não precisa ser `Send`).
+    #[cfg(target_arch = "wasm32")]
+    pub fn call<T, Fut>(self: &Arc<Self>, f: impl FnOnce(Api) -> Fut + 'static) -> Task<T>
+    where
+        T: 'static,
+        Fut: Future<Output = Result<T, String>> + 'static,
+    {
+        let task = Task::new();
+        let inner = task.inner.clone();
+        let state = self.api();
+        let weak = Arc::downgrade(self);
+        wasm_bindgen_futures::spawn_local(async move {
+            let r = f(state).await;
+            *inner.lock() = TaskState::Done(r);
+            if let Some(s) = weak.upgrade() {
+                s.repaint();
+            }
+        });
+        task
+    }
+
     /// Dispara uma chamada assíncrona ao servidor. O closure recebe o cliente da API.
+    #[cfg(not(target_arch = "wasm32"))]
     pub fn call<T, Fut>(self: &Arc<Self>, f: impl FnOnce(Api) -> Fut + Send + 'static) -> Task<T>
     where
         T: Send + 'static,
@@ -191,6 +221,54 @@ impl Service {
     pub fn shutdown(&self) {
         if let Some(t) = self.events_task.lock().take() {
             t.abort();
+        }
+    }
+}
+
+/// Tarefa de fundo que roda até terminar ou ser abortada: no desktop, no
+/// runtime tokio do [`Service`]; no navegador, no laço de eventos da página.
+pub struct BgTask {
+    #[cfg(not(target_arch = "wasm32"))]
+    handle: tokio::task::JoinHandle<()>,
+    #[cfg(target_arch = "wasm32")]
+    stop: Option<futures_channel_oneshot::Sender<()>>,
+}
+
+#[cfg(target_arch = "wasm32")]
+use tokio::sync::oneshot as futures_channel_oneshot;
+
+impl BgTask {
+    #[cfg(not(target_arch = "wasm32"))]
+    pub fn spawn_on<F>(rt: &tokio::runtime::Handle, fut: F) -> Self
+    where
+        F: Future<Output = ()> + Send + 'static,
+    {
+        Self {
+            handle: rt.spawn(fut),
+        }
+    }
+
+    #[cfg(target_arch = "wasm32")]
+    pub fn spawn<F>(fut: F) -> Self
+    where
+        F: Future<Output = ()> + 'static,
+    {
+        let (stop, stopped) = futures_channel_oneshot::channel::<()>();
+        wasm_bindgen_futures::spawn_local(async move {
+            tokio::select! {
+                _ = fut => {}
+                _ = stopped => {}
+            }
+        });
+        Self { stop: Some(stop) }
+    }
+
+    pub fn abort(&mut self) {
+        #[cfg(not(target_arch = "wasm32"))]
+        self.handle.abort();
+        #[cfg(target_arch = "wasm32")]
+        if let Some(tx) = self.stop.take() {
+            let _ = tx.send(());
         }
     }
 }
@@ -244,7 +322,7 @@ pub struct Loader<T> {
     pub data: Option<T>,
     pub error: Option<String>,
     task: Option<Task<T>>,
-    pub loaded_at: Option<std::time::Instant>,
+    pub loaded_at: Option<web_time::Instant>,
 }
 
 impl<T> Default for Loader<T> {
@@ -276,13 +354,13 @@ impl<T> Loader<T> {
             Some(Ok(v)) => {
                 self.data = Some(v);
                 self.error = None;
-                self.loaded_at = Some(std::time::Instant::now());
+                self.loaded_at = Some(web_time::Instant::now());
                 self.task = None;
                 true
             }
             Some(Err(e)) => {
                 self.error = Some(e);
-                self.loaded_at = Some(std::time::Instant::now());
+                self.loaded_at = Some(web_time::Instant::now());
                 self.task = None;
                 true
             }

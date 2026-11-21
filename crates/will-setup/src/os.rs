@@ -1052,10 +1052,18 @@ pub fn wait_health(data_dir: &Path, timeout: Duration) -> Result<u16, String> {
             .ok()
             .and_then(|s| s.trim().parse().ok())
             .unwrap_or(47300);
+        // Com TLS ligado (Configurações › Rede) a porta só fala https e o pedido
+        // em texto puro abaixo nunca recebe `"ok":true`: aí basta a porta aceitar
+        // conexão (o servidor só a abre depois de subir).
+        let https =
+            std::fs::read_to_string(data_dir.join("api-scheme")).is_ok_and(|s| s.trim() == "https");
         if let Ok(mut s) = std::net::TcpStream::connect_timeout(
             &std::net::SocketAddr::from(([127, 0, 0, 1], port)),
             Duration::from_millis(800),
         ) {
+            if https {
+                return Ok(port);
+            }
             let _ = s.set_read_timeout(Some(Duration::from_secs(2)));
             let req = format!(
                 "GET /api/health HTTP/1.1\r\nHost: 127.0.0.1:{port}\r\nConnection: close\r\n\r\n"

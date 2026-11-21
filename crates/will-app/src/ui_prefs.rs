@@ -1,9 +1,10 @@
 //! Preferências locais da interface (por máquina/usuário do app, não do
 //! servidor): `ui-prefs.json` na pasta de configuração do app, ao lado de
-//! `profiles.json`. Hoje guarda o estado do Gantt de Tarefas (largura da lista,
+//! `profiles.json` (no navegador, o armazenamento local da página). Hoje guarda o estado do Gantt de Tarefas (largura da lista,
 //! zoom, posição e o toggle de concluídas) para reabrir onde parou.
 
 use serde::{Deserialize, Serialize};
+#[cfg(not(target_arch = "wasm32"))]
 use std::path::PathBuf;
 
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
@@ -26,10 +27,12 @@ pub struct GanttPrefs {
     pub scope: String,
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 fn file() -> PathBuf {
     crate::profiles::config_dir().join("ui-prefs.json")
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 pub fn load() -> UiPrefs {
     std::fs::read_to_string(file())
         .ok()
@@ -37,11 +40,29 @@ pub fn load() -> UiPrefs {
         .unwrap_or_default()
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 pub fn save(p: &UiPrefs) -> Result<(), String> {
     let dir = crate::profiles::config_dir();
     std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
     let text = serde_json::to_string_pretty(p).map_err(|e| e.to_string())?;
     std::fs::write(file(), text).map_err(|e| e.to_string())
+}
+
+/// No navegador as preferências ficam no armazenamento local da página.
+#[cfg(target_arch = "wasm32")]
+const STORAGE_KEY: &str = "will-ia-app/ui-prefs";
+
+#[cfg(target_arch = "wasm32")]
+pub fn load() -> UiPrefs {
+    crate::platform::storage_get(STORAGE_KEY)
+        .and_then(|s| serde_json::from_str(&s).ok())
+        .unwrap_or_default()
+}
+
+#[cfg(target_arch = "wasm32")]
+pub fn save(p: &UiPrefs) -> Result<(), String> {
+    let text = serde_json::to_string(p).map_err(|e| e.to_string())?;
+    crate::platform::storage_set(STORAGE_KEY, &text)
 }
 
 /// Atualiza só o bloco do Gantt, preservando o resto do arquivo.

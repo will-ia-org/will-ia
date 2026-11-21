@@ -16,6 +16,7 @@ pub struct DashboardPage {
     status: Loader<Value>,
     /// Contas Google (só para o rótulo "N conta(s)" na grade de módulos).
     google_accounts: Loader<Value>,
+    restart: crate::pages::settings::network::RestartButton,
 }
 
 impl DashboardPage {
@@ -101,6 +102,10 @@ impl DashboardPage {
         self.status.poll();
         self.google_accounts.poll();
         self.permissions.ui(ui, cx);
+        if cx.snap.is_admin() {
+            ui.horizontal(|ui| self.restart.ui(ui, cx));
+            ui.add_space(4.0);
+        }
 
         let s = &cx.snap.settings;
         let kb_ok = cx.snap.modules.get(&Module::Engine).map(|m| !matches!(m, will_core::ModuleStatus::Degraded(d) if d.contains("base de conhecimento"))).unwrap_or(false) && s.kb.path.is_some();

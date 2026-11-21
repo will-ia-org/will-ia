@@ -15,7 +15,8 @@ use crate::ui::{self, Tone};
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicU8, Ordering};
 use std::sync::Arc;
-use std::time::{Duration, Instant};
+use std::time::Duration;
+use web_time::Instant;
 
 /// Suba quando a passagem ganhar um pedido novo (o app refaz só o que falta).
 pub const PASS_VERSION: u32 = 1;
@@ -116,7 +117,7 @@ impl Permissions {
 
     fn send_welcome(&mut self) {
         self.welcome_sent = true;
-        will_platform::notify(
+        crate::platform::notify(
             "will-ia instalado",
             "Notificações ativas. Aprovações e avisos chegam por aqui.",
         );

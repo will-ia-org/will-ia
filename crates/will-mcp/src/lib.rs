@@ -36,9 +36,30 @@ pub fn redact_args(v: &serde_json::Value) -> serde_json::Value {
         serde_json::Value::Array(a) => {
             serde_json::Value::Array(a.iter().map(redact_args).collect())
         }
+        // Corta por caractere: `&s[..2000]` estourava quando o byte 2000 caía
+        // no meio de um acento ou emoji e derrubava o servidor.
         serde_json::Value::String(s) if s.len() > 2000 => {
-            serde_json::Value::String(format!("{}…", &s[..2000]))
+            serde_json::Value::String(will_core::tools::truncate(s, 2000))
         }
         other => other.clone(),
+    }
+}
+
+#[cfg(test)]
+mod redact_tests {
+    use super::redact_args;
+
+    /// O corte em 2000 caía no meio de um caractere de vários bytes (acento,
+    /// emoji) e o servidor entrava em pânico ao redigir os argumentos.
+    #[test]
+    fn long_strings_are_cut_on_a_character_boundary() {
+        for ch in ["á", "✅", "🔵"] {
+            // 1999 bytes ASCII + caractere multibyte atravessando o byte 2000.
+            let s = format!("{}{}", "a".repeat(1999), ch.repeat(50));
+            let out = redact_args(&serde_json::json!({ "text": s }));
+            let cut = out["text"].as_str().unwrap();
+            assert!(cut.ends_with('…'));
+            assert_eq!(cut.chars().count(), 2000);
+        }
     }
 }

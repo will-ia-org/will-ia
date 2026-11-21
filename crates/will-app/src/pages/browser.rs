@@ -15,7 +15,8 @@ use crate::ui::{self, Tone};
 use egui::{Color32, FontId, RichText, TextFormat};
 use serde_json::Value;
 use std::collections::HashSet;
-use std::time::{Duration, Instant};
+use std::time::Duration;
+use web_time::Instant;
 use will_core::Event;
 
 /// Teto de mensagens CDP guardadas localmente.

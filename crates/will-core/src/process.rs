@@ -12,6 +12,7 @@
 const CREATE_NO_WINDOW: u32 = 0x0800_0000;
 
 /// Impede que o processo filho abra uma janela de console no Windows.
+#[cfg(not(target_arch = "wasm32"))]
 pub fn hide_console(cmd: &mut tokio::process::Command) -> &mut tokio::process::Command {
     #[cfg(windows)]
     {

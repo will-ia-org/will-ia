@@ -70,9 +70,35 @@ jobs:
           echo "version=$v" >> "$GITHUB_OUTPUT"
           echo "versão: $v"
 
+  # App web (docs/33): o will-ia-app compilado para WASM, gerado UMA vez e embutido
+  # no servidor de todas as plataformas (WILL_APP_WEB_DIR no build do will-ia).
+  web:
+    name: app web (WASM)
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-unknown-unknown
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: wasm32
+      - name: wasm-bindgen-cli (mesma versão do Cargo.lock)
+        shell: bash
+        run: |
+          v=$(grep -A1 '^name = "wasm-bindgen"$' Cargo.lock | sed -nE 's/^version = "([^"]+)"/\1/p')
+          cargo install wasm-bindgen-cli --version "$v" --locked
+      - name: Montar dist/app-web
+        run: tools/app-web/build.sh
+      - uses: actions/upload-artifact@v4
+        with:
+          name: app-web
+          path: dist/app-web/*
+          if-no-files-found: error
+
   build:
     name: build (${{ matrix.name }})
-    needs: version
+    needs: [version, web]
     strategy:
       fail-fast: false
       matrix:
@@ -109,8 +135,15 @@ jobs:
         if: runner.os == 'Linux'
         run: sudo apt-get update && sudo apt-get install -y --no-install-recommends libasound2-dev pkg-config
 
+      - uses: actions/download-artifact@v4
+        with:
+          name: app-web
+          path: app-web
+
       - name: Compilar (servidor + app)
         env:
+          # App web embutido no servidor (caminho ABSOLUTO: o build.rs roda em crates/will-server).
+          WILL_APP_WEB_DIR: ${{ github.workspace }}/app-web
           # Telemetria pré-configurada na distribuição (docs/29): JSON gerado por
           # `will-ia telemetry-defaults` e guardado no segredo do repositório.
           WILL_TELEMETRY_DEFAULTS_JSON: ${{ secrets.WILL_TELEMETRY_DEFAULTS_JSON }}
@@ -194,6 +227,8 @@ jobs:
         run: |
           set -euo pipefail
           mkdir -p release
+          # o pacote do app web já está dentro dos binários; não é arquivo da release
+          rm -rf artifacts/app-web
           # um diretório por job de build → tudo num diretório plano
           find artifacts -type f -exec cp {} release/ \;
           (cd release && sha256sum * > SHA256SUMS.txt && cat SHA256SUMS.txt)

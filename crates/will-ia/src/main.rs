@@ -149,7 +149,11 @@ fn real_main() -> anyhow::Result<()> {
                 Err(_) => println!("api token: (ainda não gerado; rode `will-ia`)"),
             }
             match std::fs::read_to_string(paths.data_dir.join("api-port")) {
-                Ok(p) => println!("api url:  http://127.0.0.1:{}", p.trim()),
+                Ok(p) => println!(
+                    "api url:  {}://127.0.0.1:{}",
+                    ipc::read_scheme(&paths),
+                    p.trim()
+                ),
                 Err(_) => println!("api url:  (servidor fora do ar)"),
             }
             if let Ok(t) =
@@ -226,7 +230,12 @@ fn serve(
         .thread_name("will-rt")
         .build()?;
     let handle = rt.block_on(will_server::run(opts))?;
-    ipc::write_port_file(&handle.state.paths, handle.addr.port());
+    let scheme = if handle.state.tls_fingerprint.read().is_some() {
+        "https"
+    } else {
+        "http"
+    };
+    ipc::write_port_file(&handle.state.paths, handle.addr.port(), scheme);
     // `POST /api/ui/show` e `/api/ui/screenshot` (segunda execução, automação):
     // delegam ao app.
     *handle.state.ui_hook.write() = Some(std::sync::Arc::new(|cmd: &str| {

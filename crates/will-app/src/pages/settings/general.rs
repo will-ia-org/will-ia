@@ -146,7 +146,7 @@ impl GeneralPage {
                                 cx.toasts.info(tr(
                                     "A pasta fica no servidor; abra-a por lá (o app está conectado a um servidor remoto).",
                                 ));
-                            } else if let Err(e) = will_platform::open_path(&cx.snap.data_dir) {
+                            } else if let Err(e) = crate::platform::open_path(&cx.snap.data_dir) {
                                 cx.toasts.error(e);
                             }
                         }
@@ -176,11 +176,17 @@ fn server_binary() -> Result<std::path::PathBuf, String> {
             }
         }
     }
-    will_platform::which("will-ia").ok_or_else(|| {
+    crate::platform::which("will-ia").ok_or_else(|| {
         tr("binário do servidor (will-ia) não encontrado ao lado do app nem no PATH").to_string()
     })
 }
 
+#[cfg(target_arch = "wasm32")]
+fn apply_autostart(_enable: bool) -> Result<(), String> {
+    Err(tr("indisponível no navegador").to_string())
+}
+
+#[cfg(not(target_arch = "wasm32"))]
 fn apply_autostart(enable: bool) -> Result<(), String> {
     let exe = server_binary()?;
     let exe_s = exe.to_string_lossy().to_string();
@@ -200,6 +206,14 @@ fn apply_autostart(enable: bool) -> Result<(), String> {
 
 /// `<data_dir>/install-manifest.json` existe = instalado pelo `will-ia-setup`,
 /// que registra o início com o sistema por conta própria.
+#[cfg(target_arch = "wasm32")]
+fn installer_managed() -> bool {
+    // No navegador não há disco para consultar (e `AppPaths::resolve` estoura
+    // sem sistema de arquivos); o início com o sistema é assunto do servidor.
+    true
+}
+
+#[cfg(not(target_arch = "wasm32"))]
 fn installer_managed() -> bool {
     will_core::AppPaths::resolve()
         .data_dir

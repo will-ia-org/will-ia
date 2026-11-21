@@ -82,16 +82,26 @@ pub struct ProfilesFile {
 }
 
 /// Pasta de configuração do app (`~/.config/will-ia-app`, `%APPDATA%\will-ia-app`…).
+#[cfg(not(target_arch = "wasm32"))]
 pub fn config_dir() -> PathBuf {
     directories::ProjectDirs::from("", "", "will-ia-app")
         .map(|d| d.config_dir().to_path_buf())
         .unwrap_or_else(|| std::env::temp_dir().join("will-ia-app"))
 }
 
+/// No navegador não há pasta: o caminho só serve de rótulo (o que o app
+/// guarda vai para o armazenamento local da página).
+#[cfg(target_arch = "wasm32")]
+pub fn config_dir() -> PathBuf {
+    PathBuf::from("navegador")
+}
+
+#[cfg(not(target_arch = "wasm32"))]
 fn file() -> PathBuf {
     config_dir().join("profiles.json")
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 pub fn load() -> ProfilesFile {
     std::fs::read_to_string(file())
         .ok()
@@ -99,6 +109,7 @@ pub fn load() -> ProfilesFile {
         .unwrap_or_default()
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 pub fn save(pf: &ProfilesFile) -> Result<(), String> {
     let dir = config_dir();
     std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
@@ -113,8 +124,55 @@ pub fn save(pf: &ProfilesFile) -> Result<(), String> {
     Ok(())
 }
 
+/// Chave dos perfis no armazenamento local do navegador.
+#[cfg(target_arch = "wasm32")]
+const STORAGE_KEY: &str = "will-ia-app/profiles";
+
+#[cfg(target_arch = "wasm32")]
+pub fn load() -> ProfilesFile {
+    crate::platform::storage_get(STORAGE_KEY)
+        .and_then(|s| serde_json::from_str(&s).ok())
+        .unwrap_or_default()
+}
+
+/// No navegador a senha **não** é guardada (só o token de sessão): o
+/// armazenamento local da página é menos protegido que um arquivo 0600.
+#[cfg(target_arch = "wasm32")]
+pub fn save(pf: &ProfilesFile) -> Result<(), String> {
+    let mut pf = pf.clone();
+    for p in &mut pf.profiles {
+        p.password = None;
+    }
+    let text = serde_json::to_string(&pf).map_err(|e| e.to_string())?;
+    crate::platform::storage_set(STORAGE_KEY, &text)
+}
+
 /// Servidor nesta máquina, se estiver no ar: lê `api-port` e o token que o
 /// `will-ia` grava no `data_dir` (respeita `WILL_IA_DATA_DIR` e modo portátil).
+/// "Esta máquina" no navegador: quem serve a página entrega o token local em
+/// `window.__WILL_IA_LOCAL_TOKEN__`, e **só** quando ela é aberta por
+/// `localhost` na própria máquina do servidor. De fora (iPad, outra máquina)
+/// a variável não existe e o caminho é entrar com usuário e senha.
+#[cfg(target_arch = "wasm32")]
+pub fn local_profile() -> Option<Profile> {
+    let window = web_sys::window()?;
+    let token = js_sys::Reflect::get(&window, &"__WILL_IA_LOCAL_TOKEN__".into())
+        .ok()?
+        .as_string()
+        .filter(|t| !t.trim().is_empty())?;
+    Some(Profile {
+        id: Profile::LOCAL_ID.into(),
+        name: "Esta máquina".into(),
+        url: crate::platform::web_origin()?,
+        token: token.trim().to_string(),
+        username: None,
+        password: None,
+        ca_pem: None,
+        insecure: false,
+    })
+}
+
+#[cfg(not(target_arch = "wasm32"))]
 pub fn local_profile() -> Option<Profile> {
     let paths = will_core::AppPaths::resolve();
     let port: u16 = std::fs::read_to_string(paths.data_dir.join("api-port"))
@@ -129,11 +187,49 @@ pub fn local_profile() -> Option<Profile> {
     if token.is_empty() {
         return None;
     }
+    // Com TLS ligado no servidor (`api-scheme`, gravado ao lado de `api-port`)
+    // a porta só fala https. O certificado costuma ser o autoassinado, e em
+    // loopback não há rede no meio para interceptar: aceita sem fixar.
+    let https = std::fs::read_to_string(paths.data_dir.join("api-scheme"))
+        .is_ok_and(|s| s.trim() == "https");
+    let scheme = if https { "https" } else { "http" };
     Some(Profile {
         id: Profile::LOCAL_ID.into(),
         name: "Esta máquina".into(),
-        url: format!("http://127.0.0.1:{port}"),
+        url: format!("{scheme}://127.0.0.1:{port}"),
         token,
+        username: None,
+        password: None,
+        ca_pem: None,
+        insecure: https,
+    })
+}
+
+/// Perfil de arranque do app web: o último usado **deste endereço** (a página
+/// só fala com o servidor que a serviu) ou, na primeira vez, um perfil sem
+/// token que abre o formulário de entrada já com o endereço preenchido.
+#[cfg(target_arch = "wasm32")]
+pub fn pick_web() -> Option<Profile> {
+    // Aberto na própria máquina do servidor: entra direto, como no desktop.
+    if let Some(p) = local_profile() {
+        return Some(p);
+    }
+    let origin = crate::platform::web_origin()?;
+    let pf = load();
+    let saved = pf.profiles.iter().filter(|p| p.url == origin);
+    let last = pf.last.as_deref();
+    if let Some(p) = saved
+        .clone()
+        .find(|p| Some(p.id.as_str()) == last)
+        .or_else(|| saved.clone().next())
+    {
+        return Some(p.clone());
+    }
+    Some(Profile {
+        id: "web".into(),
+        name: "will-ia".into(),
+        url: origin,
+        token: String::new(),
         username: None,
         password: None,
         ca_pem: None,
@@ -143,6 +239,7 @@ pub fn local_profile() -> Option<Profile> {
 
 /// Perfil a usar no arranque: explícito (`--url`), por nome (`--profile`),
 /// o último usado, ou "Esta máquina".
+#[cfg(not(target_arch = "wasm32"))]
 pub fn pick(url: Option<&str>, token: Option<&str>, name: Option<&str>) -> Option<Profile> {
     if let Some(u) = url {
         return Some(Profile {

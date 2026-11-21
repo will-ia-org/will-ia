@@ -1492,6 +1492,8 @@ dependencies = [
  "coreaudio-rs",
  "dasp_sample",
  "futures",
+ "futures-channel",
+ "futures-util",
  "jni",
  "js-sys",
  "libc",
@@ -1509,6 +1511,8 @@ dependencies = [
  "objc2-foundation 0.3.2",
  "portable-atomic",
  "pulseaudio",
+ "wasm-bindgen",
+ "wasm-bindgen-futures",
  "web-sys",
  "windows",
  "windows-core",
@@ -2556,7 +2560,7 @@ dependencies = [
 
 [[package]]
 name = "fake-claude"
-version = "0.1.37"
+version = "0.1.38"
 dependencies = [
  "serde_json",
  "tokio",
@@ -2947,9 +2951,11 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "899def5c37c4fd7b2664648c28120ecec138e4d395b459e5ca34f9cce2dd77fd"
 dependencies = [
  "cfg-if",
+ "js-sys",
  "libc",
  "r-efi 5.3.0",
  "wasip2",
+ "wasm-bindgen",
 ]
 
 [[package]]
@@ -9088,7 +9094,7 @@ checksum = "626c4bac6755d76ffc12cb01b2eac751db1996b9e0041de9aa02c8c211ddc82c"
 
 [[package]]
 name = "will-app"
-version = "0.1.37"
+version = "0.1.38"
 dependencies = [
  "ab_glyph",
  "anyhow",
@@ -9104,9 +9110,11 @@ dependencies = [
  "egui_extras",
  "egui_material_icons",
  "epaint_default_fonts",
+ "getrandom 0.3.4",
  "global-hotkey",
  "image",
  "jiff",
+ "js-sys",
  "objc2 0.6.5",
  "objc2-app-kit 0.3.2",
  "objc2-foundation 0.3.2",
@@ -9120,6 +9128,10 @@ dependencies = [
  "tracing",
  "tracing-appender",
  "tracing-subscriber",
+ "wasm-bindgen",
+ "wasm-bindgen-futures",
+ "web-sys",
+ "web-time",
  "will-client",
  "will-core",
  "will-platform",
@@ -9129,7 +9141,7 @@ dependencies = [
 
 [[package]]
 name = "will-browser"
-version = "0.1.37"
+version = "0.1.38"
 dependencies = [
  "axum",
  "chrono",
@@ -9151,10 +9163,11 @@ dependencies = [
 
 [[package]]
 name = "will-client"
-version = "0.1.37"
+version = "0.1.38"
 dependencies = [
  "bytes",
  "futures",
+ "js-sys",
  "parking_lot",
  "reqwest 0.13.5",
  "rustls",
@@ -9166,12 +9179,15 @@ dependencies = [
  "tokio",
  "tokio-tungstenite 0.30.0",
  "tracing",
+ "wasm-bindgen",
+ "wasm-bindgen-futures",
+ "web-sys",
  "will-core",
 ]
 
 [[package]]
 name = "will-core"
-version = "0.1.37"
+version = "0.1.38"
 dependencies = [
  "async-trait",
  "chrono",
@@ -9189,7 +9205,7 @@ dependencies = [
 
 [[package]]
 name = "will-engine"
-version = "0.1.37"
+version = "0.1.38"
 dependencies = [
  "async-trait",
  "chrono",
@@ -9214,7 +9230,7 @@ dependencies = [
 
 [[package]]
 name = "will-google"
-version = "0.1.37"
+version = "0.1.38"
 dependencies = [
  "async-trait",
  "base64 0.23.1",
@@ -9245,7 +9261,7 @@ dependencies = [
 
 [[package]]
 name = "will-ia"
-version = "0.1.37"
+version = "0.1.38"
 dependencies = [
  "anyhow",
  "chrono",
@@ -9266,7 +9282,7 @@ dependencies = [
 
 [[package]]
 name = "will-mcp"
-version = "0.1.37"
+version = "0.1.38"
 dependencies = [
  "async-trait",
  "axum",
@@ -9293,7 +9309,7 @@ dependencies = [
 
 [[package]]
 name = "will-platform"
-version = "0.1.37"
+version = "0.1.38"
 dependencies = [
  "block2 0.6.2",
  "cpal",
@@ -9314,7 +9330,7 @@ dependencies = [
 
 [[package]]
 name = "will-realtime"
-version = "0.1.37"
+version = "0.1.38"
 dependencies = [
  "async-trait",
  "base64 0.23.1",
@@ -9339,7 +9355,7 @@ dependencies = [
 
 [[package]]
 name = "will-scheduler"
-version = "0.1.37"
+version = "0.1.38"
 dependencies = [
  "async-trait",
  "chrono",
@@ -9360,7 +9376,7 @@ dependencies = [
 
 [[package]]
 name = "will-server"
-version = "0.1.37"
+version = "0.1.38"
 dependencies = [
  "anyhow",
  "argon2",
@@ -9416,7 +9432,7 @@ dependencies = [
 
 [[package]]
 name = "will-setup"
-version = "0.1.37"
+version = "0.1.38"
 dependencies = [
  "anyhow",
  "chrono",
@@ -9432,7 +9448,7 @@ dependencies = [
 
 [[package]]
 name = "will-storage"
-version = "0.1.37"
+version = "0.1.38"
 dependencies = [
  "async-trait",
  "base64 0.23.1",
@@ -9455,7 +9471,7 @@ dependencies = [
 
 [[package]]
 name = "will-tasks"
-version = "0.1.37"
+version = "0.1.38"
 dependencies = [
  "async-trait",
  "chrono",
@@ -9472,7 +9488,7 @@ dependencies = [
 
 [[package]]
 name = "will-telegram"
-version = "0.1.37"
+version = "0.1.38"
 dependencies = [
  "async-trait",
  "chrono",
@@ -9497,7 +9513,7 @@ dependencies = [
 
 [[package]]
 name = "will-telemetry"
-version = "0.1.37"
+version = "0.1.38"
 dependencies = [
  "chrono",
  "gethostname",
@@ -9518,7 +9534,7 @@ dependencies = [
 
 [[package]]
 name = "will-triggers"
-version = "0.1.37"
+version = "0.1.38"
 dependencies = [
  "async-trait",
  "chrono",
@@ -9534,7 +9550,7 @@ dependencies = [
 
 [[package]]
 name = "will-whatsapp"
-version = "0.1.37"
+version = "0.1.38"
 dependencies = [
  "async-trait",
  "base64 0.23.1",

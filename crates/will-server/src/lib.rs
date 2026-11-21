@@ -17,6 +17,7 @@ pub mod recordings;
 pub mod recordings_tools;
 pub mod telemetry;
 pub mod tls;
+pub mod web_ui;
 
 pub use app::{AppState, RunOptions, ServerHandle, UiHook};
 

@@ -32,6 +32,7 @@
 | 29 | [Telemetria](29-telemetria.md) | Logs, spans e métricas de uso por OTLP/HTTP (Protobuf) para o Axiom ou qualquer backend OpenTelemetry; modelo de rastreio (spans/campos), heartbeat, relatórios de falha, spool, privacidade |
 | 31 | [Tarefas](31-tarefas.md) | Painel Gantt de tarefas (início com hora, fim opcional, prioridade, estado pelo relógio), laço de avisos no Telegram, ferramentas `tasks_*`, API e UI |
 | 32 | [Gravações de conversa](32-gravacoes-de-conversa.md) | Microfone + saída do sistema em dois canais, atalho e caixinha flutuante, transcrição "Você" × outro lado, API e UI |
+| 33 | [App web](33-app-web.md) | O app de desktop compilado para WASM e servido pelo servidor em `/`; "Esta máquina" × login, acesso por rede/Tailscale, limites no navegador, como compilar |
 | 30 | [Triggers](30-triggers.md) | Gatilhos universais: fonte (WhatsApp, Gmail, tempo) + filtro (escopo + condições glob) → acorda uma thread com prompt + contexto; laços, disparo, API e UI |
 | 28 | [Google Drive](28-google-drive.md) | Arquivos da conta Google: listar/buscar, baixar/exportar, upload multipart/resumable, pastas, lixeira, compartilhamento; ferramentas `drive_*` |
 | — | [ADRs](adr/README.md) | Decisões arquiteturais |

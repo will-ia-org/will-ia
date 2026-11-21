@@ -194,6 +194,14 @@ impl ConnectPage {
         }
     }
 
+    /// No navegador a página só fala com o servidor que a serviu: a URL é
+    /// sempre o próprio endereço da página (outro endereço o navegador bloqueia).
+    #[cfg(target_arch = "wasm32")]
+    fn form_url(&self) -> Result<String, String> {
+        crate::platform::web_origin().ok_or_else(|| tr("endereço da página indisponível").into())
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
     fn form_url(&self) -> Result<String, String> {
         let url = self.url.trim().trim_end_matches('/').to_string();
         if !url.starts_with("http://") && !url.starts_with("https://") {
@@ -351,7 +359,17 @@ impl ConnectPage {
 
     /// Conectar num perfil escolhido na lista.
     fn connect_to(&mut self, cx: &mut Cx, p: Profile) {
-        if p.is_https() && !p.insecure && p.ca_pem.is_none() {
+        // No navegador o perfil sempre aponta para o endereço da página (um
+        // perfil salvo com outra URL não conectaria); o TLS é do navegador.
+        #[cfg(target_arch = "wasm32")]
+        let p = {
+            let mut p = p;
+            if let Some(o) = crate::platform::web_origin() {
+                p.url = o;
+            }
+            p
+        };
+        if !crate::platform::WEB && p.is_https() && !p.insecure && p.ca_pem.is_none() {
             cx.toasts.info(tr(
                 "https:// sem certificado fixado: a conexão só funciona se o sistema confiar no certificado do servidor. Cole o PEM em \"TLS (https)\" ou marque o modo inseguro.",
             ));
@@ -838,6 +856,15 @@ impl ConnectPage {
                     tr("URL do servidor"),
                     Some(tr("http://host:porta ou https://…")),
                     |ui| {
+                        #[cfg(target_arch = "wasm32")]
+                        {
+                            // Fixo: é o endereço desta página (ver `form_url`).
+                            if let Some(o) = crate::platform::web_origin() {
+                                self.url = o;
+                            }
+                            ui.label(egui::RichText::new(&self.url).weak());
+                        }
+                        #[cfg(not(target_arch = "wasm32"))]
                         ui::text_input(ui, &mut self.url, "http://192.168.0.10:47300");
                     },
                 );

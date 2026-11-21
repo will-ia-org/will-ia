@@ -12,7 +12,7 @@ use parking_lot::Mutex;
 use std::collections::VecDeque;
 use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering};
 use std::sync::Arc;
-use std::time::Instant;
+use web_time::Instant;
 use will_client::{AudioOut, VoiceLink};
 
 pub const TARGET_RATE: u32 = 24_000;
@@ -70,6 +70,7 @@ impl Resampler {
     }
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 pub struct AudioPipeline {
     _input: Option<cpal::Stream>,
     _output: Option<cpal::Stream>,
@@ -171,6 +172,7 @@ pub(super) fn find_device(
     }
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 impl AudioPipeline {
     /// Abre os dois streams e liga a saída ao `VoiceLink` (WS de áudio do servidor).
     pub fn start(
@@ -630,6 +632,7 @@ pub fn play_test_tone(output_name: Option<&str>) -> Result<String, String> {
     play_cue(output_name, CUE_TEST, 0.25)
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 impl Drop for AudioPipeline {
     fn drop(&mut self) {
         if let Some(t) = self.out_task.take() {

@@ -55,3 +55,17 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
       - run: cargo check -p will-ia -p will-app -p will-setup --all-targets
+
+  check-web:
+    # App web (docs/33): o will-ia-app tem de continuar compilando para o navegador.
+    name: check (app web, WASM)
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-unknown-unknown
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: wasm32
+      - run: cargo check --target wasm32-unknown-unknown -p will-app

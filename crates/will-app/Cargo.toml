@@ -13,20 +13,13 @@ path = "src/main.rs"
 [dependencies]
 will-core.workspace = true
 will-client.workspace = true
-will-platform.workspace = true
-will-telemetry.workspace = true
-tokio.workspace = true
-directories.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 anyhow.workspace = true
 tracing.workspace = true
-tracing-subscriber.workspace = true
-tracing-appender.workspace = true
 chrono.workspace = true
 bytes.workspace = true
 parking_lot.workspace = true
-clap.workspace = true
 eframe.workspace = true
 egui.workspace = true
 egui_extras.workspace = true
@@ -37,13 +30,38 @@ egui_material_icons = "0.9"
 # emoji-icon-font do egui (🗐 ✔ ↺ ⟳ …): o egui 0.37 só a carrega com `monochrome_emoji_fonts`;
 # o botão "copiar" do egui_commonmark usa 🗐.
 epaint_default_fonts = { version = "0.37", features = ["monochrome_emoji_fonts"] }
+qrcode.workspace = true
+image = { version = "0.25", default-features = false, features = ["png", "jpeg", "webp", "gif"] }
+# `Instant`/`SystemTime` que também funcionam no navegador (no desktop é o `std`).
+web-time = "1"
+
+# Só no desktop: sistema de arquivos, áudio nativo, atalho global, diálogos.
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+will-platform.workspace = true
+will-telemetry.workspace = true
+tokio.workspace = true
+directories.workspace = true
+tracing-subscriber.workspace = true
+tracing-appender.workspace = true
+clap.workspace = true
 cpal.workspace = true
 rfd.workspace = true
 open.workspace = true
 global-hotkey.workspace = true
 auto-launch = "0.5"
-qrcode.workspace = true
-image = { version = "0.25", default-features = false, features = ["png", "jpeg", "webp", "gif"] }
+
+# App web (`docs/33`): roda no navegador, dentro de um `<canvas>`.
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+tokio = { version = "1.54", default-features = false, features = ["sync", "rt", "macros"] }
+cpal = { version = "0.18", default-features = false, features = ["wasm-bindgen"] }
+wasm-bindgen = "0.2"
+wasm-bindgen-futures = "0.4"
+js-sys = "0.3"
+web-sys = { version = "0.3", features = ["Window", "Document", "Element", "HtmlCanvasElement", "Location", "Storage", "console"] }
+jiff = { version = "0.2", features = ["js"] }
+getrandom = { version = "0.3", features = ["wasm_js"] }
+# Escolher arquivos para anexar pelo diálogo do próprio navegador.
+rfd = { version = "0.17", default-features = false }
 
 [dev-dependencies]
 ab_glyph = "0.2"

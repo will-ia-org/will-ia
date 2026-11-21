@@ -10,7 +10,8 @@ use crate::ui::{self, Tone};
 use egui::RichText;
 use serde_json::{json, Value};
 use std::collections::HashSet;
-use std::time::{Duration, Instant};
+use std::time::Duration;
+use web_time::Instant;
 use will_core::{Event, ThreadSummary};
 
 /// Acima disso a mensagem do cartão é cortada, com "mais…" para expandir.

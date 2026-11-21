@@ -275,17 +275,15 @@ impl KbPage {
                             }
                             if ui.button(tr("Escolher…")).clicked() {
                                 if cx.snap.server_is_local {
-                                    let mut dlg = rfd::FileDialog::new()
-                                        .set_title(tr("Pasta da base de conhecimento"));
-                                    if let Some(p) = kb
+                                    let start = kb
                                         .path
                                         .as_ref()
                                         .map(std::path::PathBuf::from)
-                                        .filter(|p| p.is_dir())
-                                    {
-                                        dlg = dlg.set_directory(p);
-                                    }
-                                    if let Some(p) = dlg.pick_folder() {
+                                        .filter(|p| p.is_dir());
+                                    if let Some(p) = crate::platform::pick_folder(
+                                        tr("Pasta da base de conhecimento"),
+                                        start,
+                                    ) {
                                         path = p.display().to_string();
                                         kb.path = Some(path.clone());
                                     }

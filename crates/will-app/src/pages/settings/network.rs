@@ -13,6 +13,55 @@ use serde_json::Value;
 pub struct NetworkPage {
     /// `GET /api/network/cert`: caminho, PEM e impressão digital do certificado em uso.
     cert: Loader<Value>,
+    restart: RestartButton,
+}
+
+/// Botão "Reiniciar servidor" (com confirmação): `POST /api/system/restart`.
+/// O servidor sai e o serviço do sistema o religa; o app reconecta sozinho.
+#[derive(Default)]
+pub struct RestartButton {
+    confirm: bool,
+    task: Option<crate::service::Task<Value>>,
+}
+
+impl RestartButton {
+    pub fn ui(&mut self, ui: &mut egui::Ui, cx: &mut Cx) {
+        if let Some(r) = self.task.as_ref().and_then(|t| t.take()) {
+            self.task = None;
+            match r {
+                Ok(_) => cx.toasts.info(tr(
+                    "Servidor reiniciando; a conexão volta sozinha em alguns segundos.",
+                )),
+                Err(e) => cx.toasts.error(e),
+            }
+        }
+        let busy = self.task.is_some();
+        if ui
+            .add_enabled(!busy, egui::Button::new(tr("Reiniciar servidor")))
+            .on_hover_text(tr(
+                "Encerra o servidor e o serviço do sistema sobe de novo. Turnos em andamento são interrompidos.",
+            ))
+            .clicked()
+        {
+            self.confirm = true;
+        }
+        if self.confirm {
+            let c = ui::Confirm {
+                title: tr("Reiniciar o servidor").into(),
+                body: tr("O servidor sai e volta em alguns segundos. Turnos em andamento são interrompidos e todos os apps conectados reconectam sozinhos.")
+                    .into(),
+                confirm_label: tr("Reiniciar").into(),
+                danger: true,
+                tag: "restart-server".into(),
+            };
+            if let Some(ok) = ui::confirm_modal(ui.ctx(), &c) {
+                self.confirm = false;
+                if ok {
+                    self.task = Some(cx.svc.call(|c| async move { c.server_restart().await }));
+                }
+            }
+        }
+    }
 }
 
 /// `127.0.0.1`, `localhost` ou `::1`: só esta máquina.
@@ -129,6 +178,15 @@ impl NetworkPage {
                 );
             });
             st.save_bar(ui, cx.svc, "network");
+            ui.add_space(8.0);
+            ui.horizontal(|ui| {
+                self.restart.ui(ui, cx);
+                ui.label(
+                    egui::RichText::new(tr("Salve antes; o reinício aplica o que estiver salvo."))
+                        .small()
+                        .weak(),
+                );
+            });
         }
         if tab == "cert" {
             ui::section(ui, tr("Certificado em uso"), |ui| {

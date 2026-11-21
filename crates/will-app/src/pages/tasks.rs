@@ -694,7 +694,7 @@ pub struct TasksPage {
     /// Preferências locais (largura, zoom, posição, concluídas) carregadas?
     prefs_loaded: bool,
     last_saved: Option<crate::ui_prefs::GanttPrefs>,
-    dirty_since: Option<std::time::Instant>,
+    dirty_since: Option<web_time::Instant>,
     md_cache: egui_commonmark::CommonMarkCache,
 }
 
@@ -2102,7 +2102,7 @@ impl TasksPage {
             self.dirty_since = None;
             return;
         }
-        let since = *self.dirty_since.get_or_insert_with(std::time::Instant::now);
+        let since = *self.dirty_since.get_or_insert_with(web_time::Instant::now);
         if since.elapsed() >= Duration::from_millis(800) {
             if let Err(e) = crate::ui_prefs::save_gantt(&cur) {
                 tracing::warn!(error = %e, "preferências do Gantt não salvas");

@@ -12,8 +12,9 @@ use crate::i18n::{tr, trf};
 use crate::service::{Loader, Task, UiCommand};
 use crate::ui::{self, Tone};
 use crate::voice::call_recorder::{CallRecorder, Finished};
-use crate::voice::clip_player::{Clip, ClipPlayer};
+use crate::voice::clip_player::Clip;
 use crate::voice::overlay::{self, RecordingShared};
+use crate::voice::ClipPlayer;
 use serde_json::Value;
 use std::path::PathBuf;
 use std::time::Duration;
@@ -122,6 +123,12 @@ impl RecordingsPage {
             cx.toasts.info(tr(
                 "Termine de salvar a gravação anterior antes de começar outra.",
             ));
+            return;
+        }
+        if crate::platform::WEB {
+            // Gravar precisa do áudio do sistema e de arquivo local.
+            cx.toasts
+                .info(tr("Gravar conversa só funciona no app de desktop."));
             return;
         }
         let now = chrono::Local::now();
@@ -545,7 +552,7 @@ impl RecordingsPage {
             .filter(|p| p.is_file());
         let task = cx.svc.call(move |c| async move {
             match local {
-                Some(p) => tokio::fs::read(&p).await.map_err(|e| e.to_string()),
+                Some(p) => crate::platform::read(&p).await,
                 None => c.recording_audio(&rid).await,
             }
         });
@@ -846,7 +853,7 @@ impl RecordingsPage {
                 }
                 if cx.snap.server_is_local && ui.button(tr("Abrir pasta")).clicked() {
                     let path = PathBuf::from(text_of(r, "folder_path"));
-                    if let Err(e) = will_platform::open_path(&path) {
+                    if let Err(e) = crate::platform::open_path(&path) {
                         cx.toasts.error(e);
                     }
                 }
